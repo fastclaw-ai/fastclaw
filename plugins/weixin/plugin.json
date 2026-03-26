@@ -1,0 +1,21 @@
+{
+  "id": "weixin",
+  "name": "WeChat Channel (ilink)",
+  "version": "1.0.0",
+  "description": "WeChat channel for FastClaw via ilink bot API. Supports text messages, voice transcription, and quoted replies.",
+  "type": "channel",
+  "command": "node plugin.mjs",
+  "capabilities": ["channel"],
+  "config": {
+    "accountsDir": {
+      "type": "string",
+      "required": false,
+      "default": ""
+    },
+    "baseUrl": {
+      "type": "string",
+      "required": false,
+      "default": "https://ilinkai.weixin.qq.com"
+    }
+  }
+}
