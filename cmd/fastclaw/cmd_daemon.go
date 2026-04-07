@@ -30,14 +30,16 @@ func daemonCmd() *cobra.Command {
 
 func daemonStartCmd() *cobra.Command {
 	var port int
+	var addr string
 	cmd := &cobra.Command{
 		Use:   "start",
 		Short: "Start the gateway as a background daemon",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return daemon.Start(port)
+			return daemon.Start(addr, port)
 		},
 	}
 	cmd.Flags().IntVar(&port, "port", 18953, "port for gateway")
+	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1", "listen address for gateway web UI/API")
 	return cmd
 }
 
@@ -53,6 +55,7 @@ func daemonStopCmd() *cobra.Command {
 
 func daemonRestartCmd() *cobra.Command {
 	var port int
+	var addr string
 	cmd := &cobra.Command{
 		Use:   "restart",
 		Short: "Restart the daemon",
@@ -60,10 +63,11 @@ func daemonRestartCmd() *cobra.Command {
 			// Stop (ignore error if not running)
 			_ = daemon.Stop()
 			time.Sleep(500 * time.Millisecond)
-			return daemon.Start(port)
+			return daemon.Start(addr, port)
 		},
 	}
 	cmd.Flags().IntVar(&port, "port", 18953, "port for gateway")
+	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1", "listen address for gateway web UI/API")
 	return cmd
 }
 
@@ -149,13 +153,15 @@ func daemonUninstallCmd() *cobra.Command {
 // daemonRunCmd is the internal command used by 'daemon start' to run the auto-restart loop.
 func daemonRunCmd() *cobra.Command {
 	var port int
+	var addr string
 	cmd := &cobra.Command{
 		Use:    "__run",
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return daemon.RunLoop(port)
+			return daemon.RunLoop(addr, port)
 		},
 	}
 	cmd.Flags().IntVar(&port, "port", 18953, "port for gateway")
+	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1", "listen address for gateway web UI/API")
 	return cmd
 }

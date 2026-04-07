@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,6 +36,7 @@ type AgentProvider interface {
 type Server struct {
 	port          int
 	bind          string // "loopback" or "all"
+	listenAddr    string
 	gatewayCfg    *config.GatewayCfg
 	onConfig      func(*config.Config) // called after config is saved
 	agentProvider AgentProvider
@@ -72,6 +74,10 @@ func (s *Server) SetTaskQueue(tq *taskqueue.Queue) {
 // SetAPIServer sets the OpenAI-compatible API server for /v1/* and /ws routes.
 func (s *Server) SetAPIServer(apiSrv *api.Server) {
 	s.apiServer = apiSrv
+}
+
+func (s *Server) SetListenAddr(addr string) {
+	s.listenAddr = strings.TrimSpace(addr)
 }
 
 // Run starts the HTTP server and blocks until the context is canceled
@@ -132,7 +138,9 @@ func (s *Server) Run(ctx context.Context) error {
 
 	// Determine bind address
 	var addr string
-	if s.bind == "all" {
+	if s.listenAddr != "" {
+		addr = net.JoinHostPort(s.listenAddr, strconv.Itoa(s.port))
+	} else if s.bind == "all" {
 		addr = fmt.Sprintf("0.0.0.0:%d", s.port)
 	} else {
 		addr = fmt.Sprintf("127.0.0.1:%d", s.port)

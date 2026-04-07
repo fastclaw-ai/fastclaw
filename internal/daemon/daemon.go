@@ -60,7 +60,7 @@ func GetStatus() (*Status, error) {
 }
 
 // Start launches the gateway as a background daemon with auto-restart.
-func Start(port int) error {
+func Start(addr string, port int) error {
 	st, _ := GetStatus()
 	if st != nil && st.Running {
 		return fmt.Errorf("daemon already running (PID %d)", st.PID)
@@ -89,7 +89,7 @@ func Start(port int) error {
 	}
 
 	// Launch the daemon wrapper process
-	args := []string{"daemon", "__run", "--port", strconv.Itoa(port)}
+	args := []string{"daemon", "__run", "--port", strconv.Itoa(port), "--addr", addr}
 	cmd := exec.Command(bin, args...)
 	cmd.Stdout = lf
 	cmd.Stderr = lf
@@ -115,7 +115,7 @@ func Start(port int) error {
 
 // RunLoop is the daemon wrapper that auto-restarts the gateway on crash.
 // This is called internally by 'daemon __run'.
-func RunLoop(port int) error {
+func RunLoop(addr string, port int) error {
 	pidFile, logFile, _, err := Paths()
 	if err != nil {
 		return err
@@ -143,9 +143,9 @@ func RunLoop(port int) error {
 	for {
 		startTime := time.Now()
 
-		fmt.Fprintf(os.Stderr, "[daemon] starting gateway (port %d) at %s\n", port, startTime.Format(time.RFC3339))
+		fmt.Fprintf(os.Stderr, "[daemon] starting gateway (addr %s, port %d) at %s\n", addr, port, startTime.Format(time.RFC3339))
 
-		cmd := exec.Command(bin, "gateway", "--port", strconv.Itoa(port))
+		cmd := exec.Command(bin, "gateway", "--port", strconv.Itoa(port), "--addr", addr)
 		// Inherit stdout/stderr (already redirected to log file)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
