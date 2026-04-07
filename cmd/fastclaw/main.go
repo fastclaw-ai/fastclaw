@@ -26,7 +26,7 @@ func main() {
 		Short: "FastClaw - Lightweight AI Agent Framework",
 		// No args = default to gateway (so double-click on Windows works)
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runGateway(18953)
+			return runGateway("127.0.0.1", 18953)
 		},
 	}
 
@@ -52,18 +52,20 @@ func main() {
 
 func gatewayCmd() *cobra.Command {
 	var port int
+	var addr string
 	cmd := &cobra.Command{
 		Use:   "gateway",
 		Short: "Start the FastClaw gateway (loads all agents)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runGateway(port)
+			return runGateway(addr, port)
 		},
 	}
 	cmd.Flags().IntVar(&port, "port", 18953, "port for setup wizard / web UI")
+	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1", "listen address for setup wizard / web UI / API")
 	return cmd
 }
 
-func runGateway(port int) error {
+func runGateway(addr string, port int) error {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	})))
@@ -73,7 +75,7 @@ func runGateway(port int) error {
 	if err != nil {
 		// Config doesn't exist — run setup wizard
 		slog.Info("no config found, starting setup wizard", "url", fmt.Sprintf("http://localhost:%d", port))
-		return runSetupWizard(port)
+		return runSetupWizard(addr, port)
 	}
 
 	slog.Info("starting gateway")
@@ -99,6 +101,7 @@ func runGateway(port int) error {
 	webSrv.SetAgentProvider(&agentProviderAdapter{mgr: gw.AgentManager()})
 	webSrv.SetTaskQueue(gw.TaskQueue())
 	webSrv.SetGatewayConfig(gwCfg)
+	webSrv.SetListenAddr(addr)
 
 	// Set up OpenAI-compatible API and WebSocket gateway
 	gatewayToken := cfg.Gateway.Auth.Token
@@ -115,6 +118,7 @@ func runGateway(port int) error {
 	}
 	slog.Info("gateway API enabled",
 		"port", port,
+		"addr", addr,
 		"bind", bindMode,
 		"auth", authMode,
 		"chatCompletions", gwCfg.HTTP.Endpoints.ChatCompletions.Enabled,
@@ -189,7 +193,7 @@ func writeFastClawGatewayConfig(port int, token string) {
 	}
 }
 
-func runSetupWizard(port int) error {
+func runSetupWizard(addr string, port int) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -200,6 +204,7 @@ func runSetupWizard(port int) error {
 			cancel()
 		}()
 	})
+	srv.SetListenAddr(addr)
 
 	// Open browser
 	url := fmt.Sprintf("http://localhost:%d", port)
@@ -211,7 +216,7 @@ func runSetupWizard(port int) error {
 
 	// Config was saved, now start the gateway
 	slog.Info("restarting as gateway")
-	return runGateway(port)
+	return runGateway(addr, port)
 }
 
 func openBrowser(url string) {
@@ -228,4 +233,3 @@ func openBrowser(url string) {
 	}
 	cmd.Run()
 }
-

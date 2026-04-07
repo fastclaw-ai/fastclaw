@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
-import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -115,7 +114,6 @@ function ConfettiEffect() {
 }
 
 export default function OnboardPage() {
-  const router = useRouter();
   const [step, setStep] = useState(0);
   const [config, setConfig] = useState<OnboardConfig>({
     provider: "openrouter",
@@ -200,14 +198,19 @@ export default function OnboardPage() {
       setTimeout(() => setShowConfetti(false), 4000);
       setTimeout(() => {
         const port = config.port || window.location.port;
-        window.location.href = `http://localhost:${port}/chat/`;
+        const target = new URL(window.location.href);
+        target.pathname = "/chat/";
+        target.search = "";
+        target.hash = "";
+        target.port = String(port);
+        window.location.href = target.toString();
       }, 3000);
     } catch {
       setLaunched(true);
       setShowConfetti(true);
       setTimeout(() => setShowConfetti(false), 4000);
     }
-  }, [config, router]);
+  }, [config]);
 
   const canProceed = useCallback(() => {
     switch (step) {
