@@ -55,10 +55,17 @@ func loadUserSpace(userID string, mb *bus.MessageBus, st store.Store) (*UserSpac
 
 	// Tag each agent with the owning user ID so hooks (e.g. mem0) can
 	// namespace per-user data, and register web-search tools if configured.
+	exaKey := cfg.ExaSearch.APIKey
+	if exaKey == "" {
+		exaKey = os.Getenv("EXA_API_KEY")
+	}
 	for _, ag := range agentMgr.All() {
 		ag.SetOwnerUserID(userID)
 		if cfg.WebSearch.APIKey != "" {
 			ag.RegisterWebSearchTool(cfg.WebSearch.APIKey)
+		}
+		if exaKey != "" {
+			ag.RegisterExaSearchTool(exaKey)
 		}
 	}
 

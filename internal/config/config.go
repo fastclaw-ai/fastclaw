@@ -74,6 +74,11 @@ type WebSearchCfg struct {
 	APIKey   string `json:"apiKey,omitempty"`
 }
 
+// ExaSearchCfg configures the Exa AI-powered search tool.
+type ExaSearchCfg struct {
+	APIKey string `json:"apiKey,omitempty"`
+}
+
 // HooksCfg configures the webhook ingress server.
 type HooksCfg struct {
 	Enabled bool   `json:"enabled,omitempty"`
@@ -196,6 +201,7 @@ type Config struct {
 	Storage    StorageCfg                 `json:"storage,omitempty"`
 	Sandbox    SandboxCfg                 `json:"sandbox,omitempty"`
 	WebSearch  WebSearchCfg               `json:"webSearch,omitempty"`
+	ExaSearch  ExaSearchCfg               `json:"exaSearch,omitempty"`
 	Hooks      HooksCfg                   `json:"hooks,omitempty"`
 	Plugins    PluginsCfg                 `json:"plugins,omitempty"`
 	Gateway    GatewayCfg                 `json:"gateway,omitempty"`

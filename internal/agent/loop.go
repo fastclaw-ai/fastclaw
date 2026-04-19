@@ -295,6 +295,11 @@ func (a *Agent) RegisterWebSearchTool(apiKey string) {
 	tools.RegisterWebSearch(a.registry, apiKey)
 }
 
+// RegisterExaSearchTool registers the exa_search tool with the given Exa API key.
+func (a *Agent) RegisterExaSearchTool(apiKey string) {
+	tools.RegisterExaSearch(a.registry, apiKey)
+}
+
 // Sessions returns the session manager for this agent.
 func (a *Agent) Sessions() *session.Manager {
 	return a.sessions

@@ -180,6 +180,19 @@ func New(cfg *config.Config) (*Gateway, error) {
 		slog.Info("web search registered", "provider", cfg.WebSearch.Provider)
 	}
 
+	// Register Exa search tool for all agents if configured. Falls back to
+	// EXA_API_KEY env var when the config field is empty.
+	exaKey := cfg.ExaSearch.APIKey
+	if exaKey == "" {
+		exaKey = os.Getenv("EXA_API_KEY")
+	}
+	if exaKey != "" {
+		for _, ag := range agentMgr.All() {
+			ag.RegisterExaSearchTool(exaKey)
+		}
+		slog.Info("exa search registered")
+	}
+
 	// Register sub-agent spawner for all agents
 	spawner := &gatewaySubAgentSpawner{agents: agentMgr}
 	for _, ag := range agentMgr.All() {
