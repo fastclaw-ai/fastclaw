@@ -16,9 +16,15 @@ type AgentHandler interface {
 	HandleMessage(ctx context.Context, agentID string, msg bus.InboundMessage) (string, error)
 }
 
+// UserLookup resolves a bearer token to a user ID (cloud mode).
+type UserLookup interface {
+	LookupByToken(token string) (string, bool)
+}
+
 // WebhookRequest is the body of a webhook POST request.
 type WebhookRequest struct {
 	AgentID string `json:"agentId"`
+	UserID  string `json:"userId,omitempty"` // fastclaw user to route to (cloud mode)
 	Message string `json:"message"`
 	Channel string `json:"channel"`
 	ChatID  string `json:"chatId"`
@@ -33,20 +39,22 @@ type WebhookResponse struct {
 
 // Server is the webhook HTTP server.
 type Server struct {
-	token   string
-	path    string
-	handler AgentHandler
+	token      string
+	path       string
+	handler    AgentHandler
+	userLookup UserLookup // optional (nil in local mode)
 }
 
-// NewServer creates a new webhook server.
-func NewServer(token, path string, handler AgentHandler) *Server {
+// NewServer creates a new webhook server. userLookup may be nil in local mode.
+func NewServer(token, path string, handler AgentHandler, userLookup UserLookup) *Server {
 	if path == "" {
 		path = "/hooks"
 	}
 	return &Server{
-		token:   token,
-		path:    path,
-		handler: handler,
+		token:      token,
+		path:       path,
+		handler:    handler,
+		userLookup: userLookup,
 	}
 }
 
@@ -63,11 +71,21 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate bearer token
+	// Validate bearer token and optionally resolve to a user ID.
+	var ownerUserID string
 	auth := r.Header.Get("Authorization")
+	token := strings.TrimPrefix(auth, "Bearer ")
 	if s.token != "" {
-		expected := "Bearer " + s.token
-		if !strings.EqualFold(auth, expected) {
+		if token == s.token {
+			// Admin / local-mode token matches.
+		} else if s.userLookup != nil {
+			if uid, ok := s.userLookup.LookupByToken(token); ok {
+				ownerUserID = uid
+			} else {
+				writeJSON(w, http.StatusUnauthorized, WebhookResponse{Error: "unauthorized"})
+				return
+			}
+		} else {
 			writeJSON(w, http.StatusUnauthorized, WebhookResponse{Error: "unauthorized"})
 			return
 		}
@@ -97,12 +115,18 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		chatID = "webhook-default"
 	}
 
+	// Prefer explicit userId in request body, then token-derived.
+	if req.UserID != "" {
+		ownerUserID = req.UserID
+	}
+
 	msg := bus.InboundMessage{
-		Channel:  channel,
-		ChatID:   chatID,
-		UserID:   "webhook",
-		Text:     req.Message,
-		PeerKind: "dm",
+		Channel:     channel,
+		ChatID:      chatID,
+		UserID:      "webhook",
+		OwnerUserID: ownerUserID,
+		Text:        req.Message,
+		PeerKind:    "dm",
 	}
 
 	slog.Info("webhook received",

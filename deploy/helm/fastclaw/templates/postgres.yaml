@@ -1,0 +1,66 @@
+{{- if .Values.postgres.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "fastclaw.fullname" . }}-db
+  labels:
+    {{- include "fastclaw.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ include "fastclaw.fullname" . }}-db
+  template:
+    metadata:
+      labels:
+        app: {{ include "fastclaw.fullname" . }}-db
+    spec:
+      containers:
+      - name: postgres
+        image: {{ .Values.postgres.image }}
+        ports:
+        - containerPort: 5432
+        env:
+        - name: POSTGRES_DB
+          value: fastclaw
+        - name: POSTGRES_USER
+          value: fastclaw
+        - name: POSTGRES_PASSWORD
+          value: {{ .Values.postgres.password | quote }}
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/postgresql/data
+        readinessProbe:
+          exec:
+            command: ["pg_isready", "-U", "fastclaw"]
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: {{ include "fastclaw.fullname" . }}-db
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "fastclaw.fullname" . }}-db
+  labels:
+    {{- include "fastclaw.labels" . | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.postgres.storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "fastclaw.fullname" . }}-db
+  labels:
+    {{- include "fastclaw.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: {{ include "fastclaw.fullname" . }}-db
+  ports:
+  - port: 5432
+{{- end }}

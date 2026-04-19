@@ -90,7 +90,7 @@ func (hb *Heartbeat) tick(ctx context.Context) {
 }
 
 func (hb *Heartbeat) loadHeartbeatTasks() string {
-	path := filepath.Join(hb.agent.workspace(), "HEARTBEAT.md")
+	path := filepath.Join(hb.agent.home(), "HEARTBEAT.md")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""
@@ -104,5 +104,5 @@ func (hb *Heartbeat) loadHeartbeatTasks() string {
 
 func (hb *Heartbeat) updateMemory() {
 	slog.Info("heartbeat: triggering memory update", "agent", hb.agent.Name())
-	hb.agent.memory.ReviewAndUpdateMemory(hb.agent.workspace())
+	hb.agent.memory.ReviewAndUpdateMemory(hb.agent.home())
 }

@@ -18,7 +18,7 @@ func (s *Server) handleListPlugins(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg, _ := config.Load()
+	cfg, _ := s.loadUserConfig(r)
 	pluginsDir := filepath.Join(homeDir, "plugins")
 	entries, err := os.ReadDir(pluginsDir)
 	if err != nil {
@@ -87,7 +87,7 @@ func (s *Server) handleUpdatePlugin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg, err := config.Load()
+	cfg, err := s.loadUserConfig(r)
 	if err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
 		return
@@ -105,7 +105,7 @@ func (s *Server) handleUpdatePlugin(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg.Plugins.Entries[id] = entry
 
-	if err := saveConfigFile(cfg); err != nil {
+	if err := s.saveUserConfig(r, cfg); err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}

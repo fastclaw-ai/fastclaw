@@ -18,19 +18,25 @@ const (
 	AfterModelCall
 	BeforeToolCall
 	AfterToolCall
+	PostTurn // fires after a complete agent turn (response + all tool calls)
 )
 
 // HookContext carries data available to hooks at each hook point.
 type HookContext struct {
-	AgentName  string
-	Point      HookPoint
-	Messages   []provider.Message
-	ToolName   string // for tool-related hooks
-	ToolArgs   string // for BeforeToolCall
-	ToolResult string // for AfterToolCall
-	Response   *provider.Response
-	Error      error
-	StartTime  time.Time // set at BeforeModelCall/BeforeToolCall for timing
+	AgentName     string
+	Point         HookPoint
+	Messages      []provider.Message
+	ToolName      string // for tool-related hooks
+	ToolArgs      string // for BeforeToolCall
+	ToolResult    string // for AfterToolCall
+	Response      *provider.Response
+	Error         error
+	StartTime     time.Time // set at BeforeModelCall/BeforeToolCall for timing
+	TurnCount     int       // incremented each agent turn (for PostTurn)
+	ToolCallCount int       // total tool calls in this turn (for PostTurn)
+	Workspace     string    // agent workspace path (for PostTurn)
+	ChatID        string    // chat/session identifier (for mem0 user isolation)
+	UserID        string    // owning user ID for multi-user namespace isolation
 }
 
 // HookFunc is a function that runs at a hook point.

@@ -86,12 +86,12 @@ func pluginListCmd() *cobra.Command {
 func pluginInstallCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "install <name|github-url|npm-package|path>",
-		Short: "Install a plugin from FastClaw Hub, GitHub, npm (OpenClaw), or local path",
+		Short: "Install a plugin from FastClaw Hub, GitHub, npm, or local path",
 		Long: `Install a plugin. The source is auto-detected:
 
   fastclaw plugins install telegram                        # FastClaw Hub
   fastclaw plugins install github.com/user/repo            # GitHub repo
-  fastclaw plugins install @ollama/openclaw-web-search     # OpenClaw npm plugin (bridged)
+  fastclaw plugins install @ollama/web-search              # npm plugin (bridged)
   fastclaw plugins install ./my-plugin                     # local directory`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -126,7 +126,7 @@ func isGitHubRef(s string) bool {
 }
 
 func isNpmPackage(s string) bool {
-	// @scope/package is always npm. "openclaw-xxx" without @ is a hub plugin name, not npm.
+	// @scope/package is always npm.
 	return strings.HasPrefix(s, "@")
 }
 
@@ -228,8 +228,10 @@ func installFromHub(name, pluginsDir string) error {
 		return installFromLocal(pluginDir, pluginsDir)
 	}
 
-	// No plugin.json — copy as utility (e.g. openclaw-proxy)
-	destDir := filepath.Join(pluginsDir, name)
+	// No plugin.json — copy as utility (e.g. plugin-bridge)
+	toolsDir := filepath.Join(filepath.Dir(pluginsDir), "tools")
+	os.MkdirAll(toolsDir, 0o755)
+	destDir := filepath.Join(toolsDir, name)
 	os.RemoveAll(destDir)
 	cpCmd := exec.Command("cp", "-r", pluginDir, destDir)
 	if out, err := cpCmd.CombinedOutput(); err != nil {
@@ -247,7 +249,7 @@ func installFromNpm(pkg, pluginsDir string) error {
 	if i := strings.LastIndex(pluginID, "/"); i >= 0 {
 		pluginID = pluginID[i+1:]
 	}
-	pluginID = strings.TrimPrefix(pluginID, "openclaw-")
+	pluginID = strings.TrimPrefix(pluginID, "fastclaw-")
 
 	// 1. npm install to temp dir to inspect the package
 	tmpDir, err := os.MkdirTemp("", "fastclaw-npm-*")
@@ -263,25 +265,31 @@ func installFromNpm(pkg, pluginsDir string) error {
 		return fmt.Errorf("npm install failed: %s: %w", string(out), err)
 	}
 
-	// 2. Check if it's an OpenClaw plugin
+	// 2. Check if it's a compatible plugin (supports fastclaw or openclaw plugin format)
 	pkgDir := filepath.Join(tmpDir, "node_modules", pkg)
-	isOpenClaw := false
-	if _, err := os.Stat(filepath.Join(pkgDir, "openclaw.plugin.json")); err == nil {
-		isOpenClaw = true
+	isPlugin := false
+	for _, marker := range []string{"fastclaw.plugin.json", "openclaw.plugin.json"} {
+		if _, err := os.Stat(filepath.Join(pkgDir, marker)); err == nil {
+			isPlugin = true
+			break
+		}
 	}
-	// Also check package.json for openclaw field
-	if !isOpenClaw {
+	// Also check package.json for fastclaw/openclaw field
+	if !isPlugin {
 		if data, err := os.ReadFile(filepath.Join(pkgDir, "package.json")); err == nil {
 			var pj map[string]json.RawMessage
 			if json.Unmarshal(data, &pj) == nil {
-				if _, ok := pj["openclaw"]; ok {
-					isOpenClaw = true
+				for _, key := range []string{"fastclaw", "openclaw"} {
+					if _, ok := pj[key]; ok {
+						isPlugin = true
+						break
+					}
 				}
 			}
 		}
 	}
-	if !isOpenClaw {
-		return fmt.Errorf("%s is not an OpenClaw plugin", pkg)
+	if !isPlugin {
+		return fmt.Errorf("%s is not a compatible plugin", pkg)
 	}
 
 	// 3. Find entry file
@@ -297,12 +305,12 @@ func installFromNpm(pkg, pluginsDir string) error {
 	}
 
 	// 4. Test bridgeability — run proxy and check if tools are registered
-	proxyDir := filepath.Join(homeDir, "plugins", "openclaw-proxy")
+	proxyDir := filepath.Join(homeDir, "tools", "plugin-bridge")
 	proxyJS := filepath.Join(proxyDir, "proxy.js")
 	if _, err := os.Stat(proxyJS); os.IsNotExist(err) {
-		fmt.Println("Installing openclaw-proxy from FastClaw Hub...")
-		if err := installFromHub("openclaw-proxy", pluginsDir); err != nil {
-			return fmt.Errorf("failed to install openclaw-proxy: %w", err)
+		fmt.Println("Installing plugin-bridge from FastClaw Hub...")
+		if err := installFromHub("plugin-bridge", pluginsDir); err != nil {
+			return fmt.Errorf("failed to install plugin-bridge: %w", err)
 		}
 		depCmd := exec.Command("npm", "install", "--production")
 		depCmd.Dir = proxyDir
@@ -347,13 +355,13 @@ func installFromNpm(pkg, pluginsDir string) error {
 
 	if testErr != nil && toolCount == 0 {
 		if hasChannel {
-			return fmt.Errorf("cannot install %s: this is a channel plugin that requires the OpenClaw runtime. Consider writing a native FastClaw plugin instead", pkg)
+			return fmt.Errorf("cannot install %s: this is a channel plugin that requires a separate runtime. Consider writing a native FastClaw plugin instead", pkg)
 		}
-		return fmt.Errorf("cannot install %s: plugin is not compatible with FastClaw bridge (requires OpenClaw runtime)", pkg)
+		return fmt.Errorf("cannot install %s: plugin is not compatible with FastClaw bridge", pkg)
 	}
 
 	if toolCount == 0 {
-		return fmt.Errorf("cannot install %s: no tools detected. Only OpenClaw plugins that register tools can be bridged", pkg)
+		return fmt.Errorf("cannot install %s: no tools detected. Only plugins that register tools can be bridged", pkg)
 	}
 
 	// 5. Compatible! Move to plugins dir
@@ -374,9 +382,9 @@ func installFromNpm(pkg, pluginsDir string) error {
 	// Generate plugin.json
 	manifest := map[string]any{
 		"id":           pluginID,
-		"name":         fmt.Sprintf("OpenClaw: %s", pkg),
+		"name":         fmt.Sprintf("Bridged: %s", pkg),
 		"version":      "0.1.0",
-		"description":  fmt.Sprintf("OpenClaw plugin %s (bridged via openclaw-proxy)", pkg),
+		"description":  fmt.Sprintf("Plugin %s (bridged via plugin-bridge)", pkg),
 		"type":         "tool",
 		"command":      fmt.Sprintf("npx tsx %s %s", proxyJS, entryFile),
 		"capabilities": []string{"tool"},
@@ -387,7 +395,7 @@ func installFromNpm(pkg, pluginsDir string) error {
 		return err
 	}
 
-	fmt.Printf("Plugin %q installed (%d tools bridged from OpenClaw)\n", pluginID, toolCount)
+	fmt.Printf("Plugin %q installed (%d tools bridged)\n", pluginID, toolCount)
 	return nil
 }
 

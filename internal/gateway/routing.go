@@ -22,6 +22,13 @@ func (g *Gateway) processInbound(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case msg := <-g.bus.Inbound:
+			// When the message targets a specific user (e.g. from a cron job
+			// in cloud mode), resolve that user's agent manager for routing.
+			if msg.OwnerUserID != "" && msg.OwnerUserID != config.DefaultUserID {
+				g.routeToUserSpace(ctx, msg)
+				continue
+			}
+
 			// For DMs, use existing binding-based routing
 			if msg.PeerKind != "group" {
 				g.routeDM(ctx, msg)
@@ -174,6 +181,34 @@ func (g *Gateway) routeGroup(ctx context.Context, msg bus.InboundMessage) {
 			ag.InjectGroupMessage(ctx, msg)
 		}
 	}
+}
+
+// routeToUserSpace dispatches a message to a non-local user's agent manager.
+// Used when cron jobs or webhooks target a specific user in cloud mode.
+func (g *Gateway) routeToUserSpace(ctx context.Context, msg bus.InboundMessage) {
+	space, err := g.users.getOrLoad(msg.OwnerUserID)
+	if err != nil {
+		slog.Warn("failed to load user space for routing",
+			"user", msg.OwnerUserID, "error", err)
+		return
+	}
+	mgr := space.Agents
+
+	// Find agent: try binding-level agentID in channel (cron sets it),
+	// then default or first.
+	var ag *agent.Agent
+	if def := mgr.DefaultAgent(); def != nil {
+		ag = def
+	} else if all := mgr.All(); len(all) > 0 {
+		ag = all[0]
+	}
+	if ag == nil {
+		slog.Warn("user has no agents", "user", msg.OwnerUserID)
+		return
+	}
+	slog.Info("routing to user space",
+		"user", msg.OwnerUserID, "agent", ag.Name(), "channel", msg.Channel)
+	g.taskQueue.Submit(ag.Name(), chatKey(msg.Channel, msg.ChatID), msg, msg.AccountID)
 }
 
 // matchAgent evaluates bindings top-to-bottom and returns the first matching agent.

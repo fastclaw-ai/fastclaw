@@ -41,6 +41,7 @@ node_modules/
 
 # Config with secrets (users create their own)
 config.json
+fastclaw.json
 
 # Debug
 debug/
@@ -51,9 +52,21 @@ DESIGN.md
 tmp/
 .air.toml
 
+# Deploy instance data (tokens, passwords, local state)
+deploy/docker/instances/
+deploy/docker/.env
+deploy/docker/.state/
+
 # Web build artifacts (embedded at build time)
 internal/setup/web/
 web/out/
 web/.next/
 
 openclaw.json
+
+# Runtime config
+env.toml
+
+# Local data
+web/node_modules/
+web/pnpm-lock.yaml

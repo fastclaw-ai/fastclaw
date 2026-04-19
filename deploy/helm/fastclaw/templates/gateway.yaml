@@ -1,0 +1,93 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "fastclaw.fullname" . }}-gateway
+  labels:
+    {{- include "fastclaw.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.gateway.replicas }}
+  selector:
+    matchLabels:
+      app: {{ include "fastclaw.fullname" . }}-gateway
+  template:
+    metadata:
+      labels:
+        app: {{ include "fastclaw.fullname" . }}-gateway
+    spec:
+      initContainers:
+      - name: init-config
+        image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
+        command: ["sh", "-c"]
+        args:
+        - |
+          mkdir -p /data/.fastclaw/users/local
+          if [ ! -f /data/.fastclaw/users/local/fastclaw.json ]; then
+            cp /config/fastclaw.json /data/.fastclaw/users/local/fastclaw.json
+            sed -i "s|\"dsn\": \"\"|\"dsn\": \"$STORAGE_DSN\"|" /data/.fastclaw/users/local/fastclaw.json
+            sed -i "s|\"token\": \"\"|\"token\": \"$ADMIN_TOKEN\"|" /data/.fastclaw/users/local/fastclaw.json
+          fi
+        env:
+        - name: HOME
+          value: /data
+        - name: STORAGE_DSN
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "fastclaw.fullname" . }}-admin
+              key: dsn
+        - name: ADMIN_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "fastclaw.fullname" . }}-admin
+              key: token
+        volumeMounts:
+        - name: data
+          mountPath: /data/.fastclaw
+        - name: config
+          mountPath: /config
+      containers:
+      - name: gateway
+        image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        args: ["gateway"]
+        env:
+        - name: HOME
+          value: /data
+        ports:
+        - containerPort: {{ .Values.gateway.port }}
+          name: http
+        volumeMounts:
+        - name: data
+          mountPath: /data/.fastclaw
+        resources:
+          {{- toYaml .Values.gateway.resources | nindent 10 }}
+        readinessProbe:
+          httpGet:
+            path: /api/status
+            port: {{ .Values.gateway.port }}
+          initialDelaySeconds: 3
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /api/status
+            port: {{ .Values.gateway.port }}
+          initialDelaySeconds: 10
+          periodSeconds: 30
+      volumes:
+      - name: data
+        emptyDir: {}
+      - name: config
+        configMap:
+          name: {{ include "fastclaw.fullname" . }}-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "fastclaw.fullname" . }}-gateway
+  labels:
+    {{- include "fastclaw.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: {{ include "fastclaw.fullname" . }}-gateway
+  ports:
+  - port: {{ .Values.gateway.port }}
+    name: http

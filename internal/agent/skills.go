@@ -17,7 +17,7 @@ import (
 // Skill represents a discovered skill.
 type Skill struct {
 	Name        string            // directory name
-	Layer       string            // "agent", "user", "openclaw-managed", "openclaw-bundled", "extra"
+	Layer       string            // "agent", "user", "managed", "bundled", "extra"
 	Content     string            // contents of SKILL.md (with {baseDir} replaced)
 	BaseDir     string            // absolute path to the skill directory
 	Description string            // from frontmatter
@@ -34,9 +34,19 @@ type SkillFrontmatter struct {
 	Metadata    yaml.Node    `yaml:"metadata"`
 }
 
-// SkillMetadata represents the openclaw metadata block.
+// SkillMetadata represents the skill metadata block.
+// Supports both "fastclaw" and "openclaw" keys for backward compatibility.
 type SkillMetadata struct {
+	FastClaw *OpenClawMeta `json:"fastclaw"`
 	OpenClaw *OpenClawMeta `json:"openclaw"`
+}
+
+// Meta returns the effective metadata, preferring fastclaw over openclaw.
+func (m *SkillMetadata) Meta() *OpenClawMeta {
+	if m.FastClaw != nil {
+		return m.FastClaw
+	}
+	return m.OpenClaw
 }
 
 // OpenClawMeta holds OpenClaw-specific metadata.
@@ -85,7 +95,7 @@ func NewSkillsLoaderWithGlobal(homeDir, agentDir, teamDir string, skillsCfg conf
 }
 
 // LoadSkills discovers skills from all layers and returns them merged.
-// Precedence: agent workspace > user installed > openclaw managed > openclaw bundled > extra dirs.
+// Precedence: agent workspace > user installed > managed > extra dirs.
 func (sl *SkillsLoader) LoadSkills() []Skill {
 	skills := make(map[string]Skill)
 
@@ -100,7 +110,7 @@ func (sl *SkillsLoader) LoadSkills() []Skill {
 		}
 	}
 
-	// Layer 5 (lowest): extra dirs from config
+	// Layer 4 (lowest): extra dirs from config
 	for _, dir := range sl.globalCfg.Load.ExtraDirs {
 		dir = expandPath(dir)
 		for name, skill := range discoverSkillsEnhanced(dir, "extra") {
@@ -110,18 +120,9 @@ func (sl *SkillsLoader) LoadSkills() []Skill {
 		}
 	}
 
-	// Layer 4: OpenClaw bundled skills (if openclaw is installed)
-	for _, dir := range openclawBundledDirs() {
-		for name, skill := range discoverSkillsEnhanced(dir, "openclaw-bundled") {
-			if !disabled[name] {
-				skills[name] = skill
-			}
-		}
-	}
-
-	// Layer 3: OpenClaw managed skills (~/.openclaw/skills/)
-	openclawManaged := openclawManagedDir()
-	for name, skill := range discoverSkillsEnhanced(openclawManaged, "openclaw-managed") {
+	// Layer 3: managed skills (~/.fastclaw/skills/)
+	managedDir := fastclawManagedDir()
+	for name, skill := range discoverSkillsEnhanced(managedDir, "managed") {
 		if !disabled[name] {
 			skills[name] = skill
 		}
@@ -183,7 +184,7 @@ func (sl *SkillsLoader) BuildSkillsSummary(skills []Skill) string {
 	sb.WriteString("<skills>\n")
 
 	for _, skill := range skills {
-		if alwaysLoad[skill.Name] || (skill.Metadata != nil && skill.Metadata.OpenClaw != nil && skill.Metadata.OpenClaw.Always) {
+		if alwaysLoad[skill.Name] || (skill.Metadata != nil && skill.Metadata.Meta() != nil && skill.Metadata.Meta().Always) {
 			fmt.Fprintf(&sb, "<skill name=%q layer=%q>\n%s\n</skill>\n", skill.Name, skill.Layer, skill.Content)
 		} else {
 			summary := skill.Description
@@ -217,8 +218,8 @@ func (sl *SkillsLoader) SkillEnvVars(skillName string) map[string]string {
 			fm := parseFrontmatter(filepath.Join(skillDir, "SKILL.md"))
 			if fm != nil && fm.Metadata.Kind == yaml.MappingNode {
 				meta := parseMetadata(&fm.Metadata)
-				if meta != nil && meta.OpenClaw != nil && meta.OpenClaw.PrimaryEnv != "" {
-					env[meta.OpenClaw.PrimaryEnv] = entry.APIKey
+				if meta != nil && meta.Meta() != nil && meta.Meta().PrimaryEnv != "" {
+					env[meta.Meta().PrimaryEnv] = entry.APIKey
 					break
 				}
 			}
@@ -239,8 +240,7 @@ func (sl *SkillsLoader) allSkillDirs() []string {
 		dirs = append(dirs, filepath.Join(sl.teamDir, "skills"))
 	}
 	dirs = append(dirs, filepath.Join(sl.homeDir, "skills"))
-	dirs = append(dirs, openclawManagedDir())
-	dirs = append(dirs, openclawBundledDirs()...)
+	dirs = append(dirs, fastclawManagedDir())
 	dirs = append(dirs, sl.globalCfg.Load.ExtraDirs...)
 	return dirs
 }
@@ -400,10 +400,10 @@ func convertYAMLToJSON(v interface{}) interface{} {
 // checkGating validates whether a skill's requirements are met.
 // Returns (gated, reason). gated=true means the skill should be skipped.
 func checkGating(meta *SkillMetadata) (bool, string) {
-	if meta == nil || meta.OpenClaw == nil {
+	if meta == nil || meta.Meta() == nil {
 		return false, ""
 	}
-	oc := meta.OpenClaw
+	oc := meta.Meta()
 
 	if oc.Always {
 		return false, ""
@@ -459,41 +459,13 @@ func checkGating(meta *SkillMetadata) (bool, string) {
 	return false, ""
 }
 
-// openclawManagedDir returns the OpenClaw managed skills directory.
-func openclawManagedDir() string {
+// fastclawManagedDir returns the FastClaw managed skills directory (~/.fastclaw/skills/).
+func fastclawManagedDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".openclaw", "skills")
-}
-
-// openclawBundledDirs returns possible paths to OpenClaw's bundled skills.
-func openclawBundledDirs() []string {
-	var dirs []string
-
-	// macOS homebrew location
-	if _, err := os.Stat("/opt/homebrew/lib/node_modules/openclaw/skills"); err == nil {
-		dirs = append(dirs, "/opt/homebrew/lib/node_modules/openclaw/skills")
-	}
-	// Linux global npm
-	if _, err := os.Stat("/usr/lib/node_modules/openclaw/skills"); err == nil {
-		dirs = append(dirs, "/usr/lib/node_modules/openclaw/skills")
-	}
-	if _, err := os.Stat("/usr/local/lib/node_modules/openclaw/skills"); err == nil {
-		dirs = append(dirs, "/usr/local/lib/node_modules/openclaw/skills")
-	}
-
-	// User-local npm global
-	home, err := os.UserHomeDir()
-	if err == nil {
-		userNpm := filepath.Join(home, ".npm-global", "lib", "node_modules", "openclaw", "skills")
-		if _, statErr := os.Stat(userNpm); statErr == nil {
-			dirs = append(dirs, userNpm)
-		}
-	}
-
-	return dirs
+	return filepath.Join(home, ".fastclaw", "skills")
 }
 
 func expandPath(path string) string {

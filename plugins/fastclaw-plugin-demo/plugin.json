@@ -1,0 +1,10 @@
+{
+  "id": "fastclaw-plugin-demo",
+  "name": "FastClaw Plugin Demo",
+  "version": "0.1.0",
+  "description": "A demo plugin showing how to build a FastClaw native plugin",
+  "type": "tool",
+  "command": "python3 plugin.py",
+  "capabilities": ["tool"],
+  "config": {}
+}

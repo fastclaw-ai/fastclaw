@@ -37,12 +37,13 @@ func (e *RPCError) Error() string { return e.Message }
 
 // Standard JSON-RPC methods.
 const (
-	MethodInitialize    = "initialize"
-	MethodShutdown      = "shutdown"
-	MethodChannelSend   = "channel.send"
-	MethodToolList      = "tool.list"
-	MethodToolExecute   = "tool.execute"
-	MethodHookFire      = "hook.fire"
+	MethodInitialize     = "initialize"
+	MethodShutdown       = "shutdown"
+	MethodChannelSend    = "channel.send"
+	MethodToolList       = "tool.list"
+	MethodToolExecute    = "tool.execute"
+	MethodHookRegister   = "hook.register"
+	MethodHookFire       = "hook.fire"
 	MethodMessageInbound = "message.inbound"
 )
 
@@ -90,10 +91,42 @@ type InboundMessageParams struct {
 	SenderName string `json:"senderName,omitempty"`
 }
 
+// HookRegisterResult is returned from hook.register.
+type HookRegisterResult struct {
+	Points []string `json:"points"`
+}
+
 // HookFireParams is sent with hook.fire.
 type HookFireParams struct {
-	Event string                 `json:"event"`
-	Data  map[string]interface{} `json:"data,omitempty"`
+	Point      string             `json:"point"`
+	AgentName  string             `json:"agentName"`
+	ChatID     string             `json:"chatId"`
+	UserID     string             `json:"userId,omitempty"`
+	Messages   []HookMessage      `json:"messages,omitempty"`
+	Response   *HookResponseData  `json:"response,omitempty"`
+	ToolName   string             `json:"toolName,omitempty"`
+	ToolArgs   string             `json:"toolArgs,omitempty"`
+	ToolResult string             `json:"toolResult,omitempty"`
+}
+
+// HookMessage is a simplified message for hook communication.
+type HookMessage struct {
+	Role       string          `json:"role"`
+	Content    string          `json:"content,omitempty"`
+	ToolCalls  json.RawMessage `json:"tool_calls,omitempty"`
+	ToolCallID string          `json:"tool_call_id,omitempty"`
+	Name       string          `json:"name,omitempty"`
+}
+
+// HookResponseData is a simplified response for hook communication.
+type HookResponseData struct {
+	Content   string `json:"content"`
+	HasTools  bool   `json:"hasTools"`
+}
+
+// HookFireResult is returned from hook.fire (for synchronous hooks).
+type HookFireResult struct {
+	Messages []HookMessage `json:"messages,omitempty"`
 }
 
 // newRequest creates a JSON-RPC 2.0 request.

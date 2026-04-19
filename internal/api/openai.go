@@ -82,9 +82,18 @@ func (s *Server) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve agent from header
-	agentID := r.Header.Get("x-openclaw-agent-id")
-	ag := s.resolveAgent(agentID)
+	// Resolve the caller's user space (set by authMiddleware) and pick an
+	// agent out of it.
+	space, err := s.userSpaceFor(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{
+			"error": map[string]string{"message": err.Error(), "type": "authentication_error"},
+		})
+		return
+	}
+
+	agentID := r.Header.Get("x-fastclaw-agent-id")
+	ag := resolveAgent(space, agentID)
 	if ag == nil {
 		writeJSON(w, http.StatusNotFound, map[string]any{
 			"error": map[string]string{"message": "agent not found", "type": "not_found_error"},
@@ -93,7 +102,7 @@ func (s *Server) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build session key from header
-	sessionKey := r.Header.Get("x-openclaw-session-key")
+	sessionKey := r.Header.Get("x-fastclaw-session-key")
 	if sessionKey == "" {
 		sessionKey = "api-" + fmt.Sprintf("%d", time.Now().UnixNano())
 	}
@@ -228,17 +237,20 @@ func (s *Server) fullResponse(w http.ResponseWriter, reply, chatID, model string
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (s *Server) resolveAgent(agentID string) *agent.Agent {
+// resolveAgent picks an agent out of the caller's user space, preferring an
+// explicit agent ID from the x-fastclaw-agent-id header and falling back to
+// the default / first agent.
+func resolveAgent(space *UserSpaceView, agentID string) *agent.Agent {
+	mgr := space.Agents
 	if agentID != "" {
-		if ag := s.agentMgr.AgentByID(agentID); ag != nil {
+		if ag := mgr.AgentByID(agentID); ag != nil {
 			return ag
 		}
 	}
-	// Fall back to default or first agent
-	if def := s.agentMgr.DefaultAgent(); def != nil {
+	if def := mgr.DefaultAgent(); def != nil {
 		return def
 	}
-	all := s.agentMgr.All()
+	all := mgr.All()
 	if len(all) > 0 {
 		return all[0]
 	}

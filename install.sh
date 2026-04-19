@@ -1,147 +1,166 @@
-#!/bin/bash
-set -euo pipefail
+#!/bin/sh
+# FastClaw Installer
+# Usage: curl -fsSL https://raw.githubusercontent.com/fastclaw-ai/fastclaw/main/install.sh | sh
+# Or:    FASTCLAW_INSTALL_DIR=~/bin curl -fsSL ... | sh
+set -e
 
 REPO="fastclaw-ai/fastclaw"
 BINARY="fastclaw"
-INSTALL_DIR="/usr/local/bin"
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
+# Colors (only if terminal supports it)
+if [ -t 1 ]; then
+  RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BOLD='\033[1m'; NC='\033[0m'
+else
+  RED=''; GREEN=''; YELLOW=''; BOLD=''; NC=''
+fi
 
-info()  { echo -e "${GREEN}[INFO]${NC} $*"; }
-warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
-error() { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
+info()    { printf "${GREEN}[INFO]${NC} %s\n" "$*"; }
+warn()    { printf "${YELLOW}[WARN]${NC} %s\n" "$*"; }
+error()   { printf "${RED}[ERROR]${NC} %s\n" "$*" >&2; exit 1; }
+success() { printf "${GREEN}[✓]${NC} %s\n" "$*"; }
 
-# Detect OS and arch
+# ── Detect OS & arch ────────────────────────────────────────────────────────
 detect_platform() {
-  OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-  ARCH=$(uname -m)
+  _os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+  _arch="$(uname -m)"
 
-  case "$OS" in
+  case "$_os" in
     linux)  OS="linux" ;;
     darwin) OS="darwin" ;;
-    *)      error "Unsupported OS: $OS" ;;
+    msys*|mingw*|cygwin*) OS="windows" ;;
+    *) error "Unsupported OS: $_os" ;;
   esac
 
-  case "$ARCH" in
+  case "$_arch" in
     x86_64|amd64)  ARCH="amd64" ;;
     aarch64|arm64) ARCH="arm64" ;;
-    *)             error "Unsupported architecture: $ARCH" ;;
+    *) error "Unsupported architecture: $_arch" ;;
   esac
 
   PLATFORM="${OS}_${ARCH}"
+  EXT="tar.gz"
+  [ "$OS" = "windows" ] && EXT="zip"
 }
 
-# Get latest release tag from GitHub
+# ── Decide install dir (no sudo, no password) ───────────────────────────────
+choose_install_dir() {
+  if [ -n "${FASTCLAW_INSTALL_DIR:-}" ]; then
+    INSTALL_DIR="$FASTCLAW_INSTALL_DIR"
+  else
+    INSTALL_DIR="$HOME/.local/bin"
+  fi
+  mkdir -p "$INSTALL_DIR"
+}
+
+# ── Ensure install dir is in PATH and shell config ──────────────────────────
+ensure_path() {
+  # Check if already in PATH
+  case ":$PATH:" in
+    *":$INSTALL_DIR:"*) return 0 ;;
+  esac
+
+  # Detect shell config file
+  _shell="$(basename "${SHELL:-sh}")"
+  case "$_shell" in
+    zsh)  RC="$HOME/.zshrc" ;;
+    bash) RC="${HOME}/.bashrc" ;;
+    fish) RC="$HOME/.config/fish/config.fish" ;;
+    *)    RC="$HOME/.profile" ;;
+  esac
+
+  # Check if already written
+  if [ -f "$RC" ] && grep -q "$INSTALL_DIR" "$RC" 2>/dev/null; then
+    return 0
+  fi
+
+  # Write PATH export
+  if [ "$_shell" = "fish" ]; then
+    mkdir -p "$(dirname "$RC")"
+    printf '\n# FastClaw\nfish_add_path "%s"\n' "$INSTALL_DIR" >> "$RC"
+  else
+    printf '\n# FastClaw\nexport PATH="%s:$PATH"\n' "$INSTALL_DIR" >> "$RC"
+  fi
+
+  NEEDS_SOURCE=1
+  SHELL_RC="$RC"
+}
+
+# ── Fetch latest version ─────────────────────────────────────────────────────
 get_latest_version() {
-  if command -v curl &>/dev/null; then
-    VERSION=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name"' | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
-  elif command -v wget &>/dev/null; then
-    VERSION=$(wget -qO- "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name"' | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+  if command -v curl >/dev/null 2>&1; then
+    _resp=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest")
+  elif command -v wget >/dev/null 2>&1; then
+    _resp=$(wget -qO- "https://api.github.com/repos/${REPO}/releases/latest")
   else
-    error "Neither curl nor wget found. Please install one of them."
+    error "curl or wget is required."
   fi
-
-  if [ -z "$VERSION" ]; then
-    error "Failed to fetch latest version. Check https://github.com/${REPO}/releases"
-  fi
+  VERSION=$(printf '%s' "$_resp" | grep '"tag_name"' | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+  [ -n "$VERSION" ] || error "Could not fetch latest version. Check https://github.com/${REPO}/releases"
 }
 
-# Download and install
-install() {
-  local TARBALL="${BINARY}_${PLATFORM}.tar.gz"
-  local URL="https://github.com/${REPO}/releases/download/${VERSION}/${TARBALL}"
-  local TMP_DIR=$(mktemp -d)
+# ── Download & install binary ────────────────────────────────────────────────
+install_binary() {
+  TARBALL="${BINARY}_${PLATFORM}.${EXT}"
+  URL="https://github.com/${REPO}/releases/download/${VERSION}/${TARBALL}"
+  TMP_DIR="$(mktemp -d)"
 
-  info "Downloading ${BINARY} ${VERSION} for ${PLATFORM}..."
+  info "Downloading ${BINARY} ${VERSION} (${PLATFORM})..."
 
-  if command -v curl &>/dev/null; then
-    curl -fsSL "$URL" -o "${TMP_DIR}/${TARBALL}" || error "Download failed. URL: $URL"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$URL" -o "${TMP_DIR}/${TARBALL}" || error "Download failed: $URL"
   else
-    wget -q "$URL" -O "${TMP_DIR}/${TARBALL}" || error "Download failed. URL: $URL"
+    wget -q "$URL" -O "${TMP_DIR}/${TARBALL}" || error "Download failed: $URL"
   fi
 
   info "Extracting..."
-  tar -xzf "${TMP_DIR}/${TARBALL}" -C "${TMP_DIR}"
-
-  info "Installing to ${INSTALL_DIR}/${BINARY}..."
-  if [ -w "$INSTALL_DIR" ]; then
-    mv "${TMP_DIR}/${BINARY}" "${INSTALL_DIR}/${BINARY}"
+  if [ "$EXT" = "zip" ]; then
+    unzip -q "${TMP_DIR}/${TARBALL}" -d "${TMP_DIR}"
   else
-    sudo mv "${TMP_DIR}/${BINARY}" "${INSTALL_DIR}/${BINARY}"
+    tar -xzf "${TMP_DIR}/${TARBALL}" -C "${TMP_DIR}"
   fi
-  chmod +x "${INSTALL_DIR}/${BINARY}"
+
+  # Atomic replace: backup old → move new → remove backup
+  DEST="${INSTALL_DIR}/${BINARY}"
+  if [ -f "$DEST" ]; then
+    mv "$DEST" "${DEST}.bak"
+  fi
+  mv "${TMP_DIR}/${BINARY}" "$DEST"
+  chmod +x "$DEST"
+  rm -f "${DEST}.bak"
 
   rm -rf "$TMP_DIR"
 }
 
-# Create default config if not exists
-init_config() {
-  local CONFIG_DIR="$HOME/.fastclaw"
-  local CONFIG_FILE="${CONFIG_DIR}/fastclaw.json"
-
-  if [ ! -f "$CONFIG_FILE" ]; then
-    info "Creating default config at ${CONFIG_FILE}..."
-    mkdir -p "$CONFIG_DIR"
-    cat > "$CONFIG_FILE" << 'CFGEOF'
-{
-  "providers": {
-    "openai": {
-      "apiKey": "YOUR_API_KEY",
-      "apiBase": "https://api.openai.com/v1"
-    }
-  },
-  "agents": {
-    "defaults": {
-      "model": "gpt-4o",
-      "maxTokens": 8192,
-      "temperature": 0.7,
-      "maxToolIterations": 20
-    },
-    "list": [
-      { "id": "main", "workspace": "~/.fastclaw/agents/main/agent" }
-    ]
-  },
-  "channels": {
-    "telegram": {
-      "enabled": true,
-      "accounts": {
-        "default": {
-          "botToken": "YOUR_TELEGRAM_BOT_TOKEN"
-        }
-      }
-    }
-  }
-}
-CFGEOF
-    warn "Edit ${CONFIG_FILE} to add your API key and bot token."
-  fi
-}
-
+# ── Main ─────────────────────────────────────────────────────────────────────
 main() {
-  echo ""
-  echo "  ⚡ FastClaw Installer"
-  echo "  ====================="
-  echo ""
+  printf "\n${BOLD}  ⚡ FastClaw Installer${NC}\n"
+  printf "  ─────────────────────\n\n"
 
   detect_platform
   info "Platform: ${PLATFORM}"
 
+  choose_install_dir
+  info "Install dir: ${INSTALL_DIR}"
+
   get_latest_version
   info "Version: ${VERSION}"
 
-  install
+  install_binary
+  ensure_path
 
-  echo ""
-  info "✅ FastClaw installed successfully!"
-  echo ""
-  echo "  Next steps:"
-  echo "    Run: fastclaw"
-  echo "    This will open the setup wizard in your browser."
-  echo ""
+  printf "\n"
+  success "FastClaw ${VERSION} installed → ${INSTALL_DIR}/${BINARY}"
+  printf "\n"
+
+  if [ "${NEEDS_SOURCE:-0}" = "1" ]; then
+    printf "  ${YELLOW}Run this to activate:${NC}\n"
+    printf "    source %s\n\n" "$SHELL_RC"
+    printf "  Or open a new terminal, then run: ${BOLD}fastclaw${NC}\n"
+  else
+    printf "  Run: ${BOLD}fastclaw${NC}\n"
+    printf "  Opens the setup wizard in your browser.\n"
+  fi
+  printf "\n"
 }
 
 main "$@"

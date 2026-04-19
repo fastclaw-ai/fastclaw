@@ -34,14 +34,15 @@ func runDoctor() error {
 	fmt.Printf("\n📌 Version: %s (%s)\n", version, commit)
 
 	// 2. Config file
-	homeDir, err := config.HomeDir()
+	_ = config.MigrateLegacyLayout()
+	userDir, err := config.UserDir(config.DefaultUserID)
 	if err != nil {
 		fmt.Printf("❌ Config dir: cannot determine (%v)\n", err)
 		issues++
 	} else {
-		fmt.Printf("📂 Config dir: %s\n", homeDir)
+		fmt.Printf("📂 Config dir: %s\n", userDir)
 
-		configPath := filepath.Join(homeDir, "fastclaw.json")
+		configPath := filepath.Join(userDir, "fastclaw.json")
 		if _, err := os.Stat(configPath); os.IsNotExist(err) {
 			fmt.Printf("❌ Config file: not found (%s)\n", configPath)
 			fmt.Println("   → Run 'fastclaw' to start the setup wizard")
@@ -96,26 +97,26 @@ func runDoctor() error {
 					warnings++
 				} else {
 					for _, rc := range resolved {
-						wsExists := false
-						if _, err := os.Stat(rc.Workspace); err == nil {
-							wsExists = true
+						homeExists := false
+						if _, err := os.Stat(rc.Home); err == nil {
+							homeExists = true
 						}
-						if wsExists {
-							// Check workspace files
+						if homeExists {
+							// Check home files
 							missing := []string{}
 							for _, f := range []string{"SOUL.md", "IDENTITY.md"} {
-								if _, err := os.Stat(filepath.Join(rc.Workspace, f)); err != nil {
+								if _, err := os.Stat(filepath.Join(rc.Home, f)); err != nil {
 									missing = append(missing, f)
 								}
 							}
 							if len(missing) > 0 {
-								fmt.Printf("⚠️  Agent '%s': workspace OK, missing %s\n", rc.ID, strings.Join(missing, ", "))
+								fmt.Printf("⚠️  Agent '%s': home OK, missing %s\n", rc.ID, strings.Join(missing, ", "))
 								warnings++
 							} else {
-								fmt.Printf("✅ Agent '%s': model=%s, workspace=%s\n", rc.ID, rc.Model, rc.Workspace)
+								fmt.Printf("✅ Agent '%s': model=%s, home=%s, workspace=%s\n", rc.ID, rc.Model, rc.Home, rc.Workspace)
 							}
 						} else {
-							fmt.Printf("❌ Agent '%s': workspace not found (%s)\n", rc.ID, rc.Workspace)
+							fmt.Printf("❌ Agent '%s': home not found (%s)\n", rc.ID, rc.Home)
 							issues++
 						}
 					}

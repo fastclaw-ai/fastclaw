@@ -1,0 +1,14 @@
+{
+  "id": "mem0",
+  "name": "Mem0 Long-term Memory",
+  "version": "1.0.0",
+  "type": "hook",
+  "description": "Long-term memory via Mem0 - searches relevant memories before LLM calls and stores conversations after",
+  "command": "python3 plugin.py",
+  "capabilities": ["hook"],
+  "config": {
+    "url": "http://127.0.0.1:8100",
+    "apiKey": "",
+    "topK": 5
+  }
+}

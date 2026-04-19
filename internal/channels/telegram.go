@@ -221,10 +221,16 @@ func (t *Telegram) registerCommands() {
 	commands := []tgbotapi.BotCommand{
 		{Command: "start", Description: "Start the bot"},
 		{Command: "new", Description: "Start a new conversation"},
+		{Command: "retry", Description: "Re-run the last message"},
+		{Command: "undo", Description: "Undo the last turn"},
+		{Command: "compact", Description: "Compress context window"},
 		{Command: "status", Description: "Show agent status"},
-		{Command: "compact", Description: "Compress conversation history"},
+		{Command: "usage", Description: "Session turn & token stats"},
+		{Command: "insights", Description: "Activity insights (last 7 days)"},
+		{Command: "personality", Description: "List or switch personality"},
+		{Command: "model", Description: "Switch LLM model"},
 		{Command: "help", Description: "Show available commands"},
-		{Command: "version", Description: "Show version info"},
+		{Command: "version", Description: "Show version"},
 	}
 	cfg := tgbotapi.NewSetMyCommands(commands...)
 	if _, err := t.bot.Request(cfg); err != nil {

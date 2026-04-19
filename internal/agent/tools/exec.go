@@ -177,3 +177,35 @@ func mergeEnv(base []string, additional map[string]string) []string {
 
 	return env
 }
+
+// registerSandboxedExec re-registers the exec tool so it delegates to a
+// sandbox.Executor instead of running on the host.
+func registerSandboxedExec(r *Registry, ex sandbox.Executor) {
+	r.Register("exec", "Execute a shell command in the sandbox and return stdout/stderr", map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"command": map[string]interface{}{
+				"type":        "string",
+				"description": "The shell command to execute",
+			},
+			"timeout": map[string]interface{}{
+				"type":        "integer",
+				"description": "Timeout in seconds (default 30)",
+			},
+		},
+		"required": []string{"command"},
+	}, func(ctx context.Context, rawArgs json.RawMessage) (string, error) {
+		var args execArgs
+		if err := json.Unmarshal(rawArgs, &args); err != nil {
+			return "", fmt.Errorf("parse args: %w", err)
+		}
+		if args.Command == "" {
+			return "", fmt.Errorf("command is required")
+		}
+		timeout := 30
+		if args.Timeout > 0 {
+			timeout = args.Timeout
+		}
+		return ex.Exec(ctx, args.Command, time.Duration(timeout)*time.Second)
+	})
+}

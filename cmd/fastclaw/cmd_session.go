@@ -28,12 +28,13 @@ func sessionListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List all sessions across all agents",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			homeDir, err := config.HomeDir()
+			userDir, err := config.UserDir(config.DefaultUserID)
 			if err != nil {
 				return err
 			}
+			_ = config.MigrateLegacyLayout()
 
-			agentsDir := filepath.Join(homeDir, "agents")
+			agentsDir := filepath.Join(userDir, "agents")
 			entries, err := os.ReadDir(agentsDir)
 			if err != nil {
 				if os.IsNotExist(err) {
@@ -82,12 +83,13 @@ func sessionClearCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			key := args[0]
-			homeDir, err := config.HomeDir()
+			userDir, err := config.UserDir(config.DefaultUserID)
 			if err != nil {
 				return err
 			}
+			_ = config.MigrateLegacyLayout()
 
-			agentsDir := filepath.Join(homeDir, "agents")
+			agentsDir := filepath.Join(userDir, "agents")
 			entries, err := os.ReadDir(agentsDir)
 			if err != nil {
 				return err
@@ -118,12 +120,13 @@ func sessionClearAllCmd() *cobra.Command {
 		Use:   "clear-all",
 		Short: "Clear all sessions across all agents",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			homeDir, err := config.HomeDir()
+			userDir, err := config.UserDir(config.DefaultUserID)
 			if err != nil {
 				return err
 			}
+			_ = config.MigrateLegacyLayout()
 
-			agentsDir := filepath.Join(homeDir, "agents")
+			agentsDir := filepath.Join(userDir, "agents")
 			entries, err := os.ReadDir(agentsDir)
 			if err != nil {
 				if os.IsNotExist(err) {

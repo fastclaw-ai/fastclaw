@@ -43,19 +43,26 @@ type apiMessage struct {
 }
 
 type chatRequest struct {
-	Model       string       `json:"model"`
-	Messages    []apiMessage `json:"messages"`
-	Tools       []Tool       `json:"tools,omitempty"`
-	MaxTokens   int          `json:"max_tokens,omitempty"`
-	Temperature float64      `json:"temperature,omitempty"`
-	Stream      bool         `json:"stream"`
+	Model       string            `json:"model"`
+	Messages    []json.RawMessage `json:"messages"`
+	Tools       []Tool            `json:"tools,omitempty"`
+	MaxTokens   int               `json:"max_tokens,omitempty"`
+	Temperature float64           `json:"temperature,omitempty"`
+	Stream      bool              `json:"stream"`
 }
 
 // toAPIMessages converts provider Messages to wire-format apiMessages,
 // handling ContentParts for multimodal messages.
-func toAPIMessages(msgs []Message) []apiMessage {
-	out := make([]apiMessage, len(msgs))
+func toAPIMessages(msgs []Message) []json.RawMessage {
+	out := make([]json.RawMessage, len(msgs))
 	for i, m := range msgs {
+		// For assistant messages with cached raw JSON, use it directly
+		// to guarantee prompt cache hits (byte-identical prefix).
+		if m.Role == "assistant" && len(m.RawAssistant) > 0 {
+			out[i] = m.RawAssistant
+			continue
+		}
+
 		am := apiMessage{
 			Role:       m.Role,
 			ToolCalls:  m.ToolCalls,
@@ -63,13 +70,11 @@ func toAPIMessages(msgs []Message) []apiMessage {
 			Name:       m.Name,
 		}
 		if len(m.ContentParts) > 0 {
-			// Multimodal: marshal content as array of parts
 			am.Content, _ = json.Marshal(m.ContentParts)
-		} else if m.Content != "" {
-			// String content
+		} else {
 			am.Content, _ = json.Marshal(m.Content)
 		}
-		out[i] = am
+		out[i], _ = json.Marshal(am)
 	}
 	return out
 }
@@ -99,7 +104,7 @@ type sseResponse struct {
 
 func (p *OpenAIProvider) buildRequest(ctx context.Context, messages []Message, tools []Tool, model string, maxTokens int, temperature float64, stream bool) (*http.Request, error) {
 	req := chatRequest{
-		Model:       model,
+		Model:       StripProviderPrefix(model),
 		Messages:    toAPIMessages(messages),
 		MaxTokens:   maxTokens,
 		Temperature: temperature,
@@ -114,7 +119,9 @@ func (p *OpenAIProvider) buildRequest(ctx context.Context, messages []Message, t
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.apiBase+"/chat/completions", bytes.NewReader(body))
+	url := p.apiBase + "/chat/completions"
+	slog.Info("openai request", "url", url, "model", req.Model)
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -322,6 +329,15 @@ func (p *OpenAIProvider) parseSSE(reader io.Reader) (*Response, error) {
 			result.ToolCalls = append(result.ToolCalls, *tc)
 		}
 	}
+
+	// Capture raw assistant message for cache-safe replay.
+	// Reconstruct the exact message format the API would expect back.
+	rawMsg := apiMessage{
+		Role:      "assistant",
+		ToolCalls: result.ToolCalls,
+	}
+	rawMsg.Content, _ = json.Marshal(result.Content)
+	result.RawAssistant, _ = json.Marshal(rawMsg)
 
 	return result, nil
 }

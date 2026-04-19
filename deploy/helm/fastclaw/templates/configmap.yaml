@@ -1,0 +1,46 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "fastclaw.fullname" . }}-config
+  labels:
+    {{- include "fastclaw.labels" . | nindent 4 }}
+data:
+  fastclaw.json: |
+    {
+      "providers": {
+        {{- if .Values.provider.name }}
+        "{{ .Values.provider.name }}": {
+          "apiKey": "{{ .Values.provider.apiKey }}",
+          "apiBase": "{{ .Values.provider.apiBase }}"
+        }
+        {{- end }}
+      },
+      "agents": {
+        "defaults": {
+          "model": "gpt-4o",
+          "maxTokens": 8192,
+          "temperature": 0.7,
+          "maxToolIterations": 20
+        },
+        "list": []
+      },
+      "channels": {},
+      "gateway": {
+        "mode": "{{ .Values.gateway.mode }}",
+        "bind": "all",
+        "port": {{ .Values.gateway.port }},
+        "auth": { "mode": "token", "token": "" },
+        "rateLimit": { "rpm": {{ .Values.gateway.rateLimit.rpm }} },
+        "http": {
+          "endpoints": {
+            "chatCompletions": { "enabled": true },
+            "agents": { "enabled": true }
+          }
+        }
+      },
+      "storage": {
+        "type": "postgres",
+        "dsn": "",
+        "autoMigrate": true
+      }
+    }

@@ -1,0 +1,45 @@
+##
+## FastClaw Cloud — Single-machine deployment
+##
+## Usage:
+##   1. Copy .env.example to .env, fill in your values
+##   2. docker compose up -d
+##   3. Create users:  docker compose exec fastclaw fastclaw user add alice --name Alice
+##   4. Open http://localhost:18953
+##
+services:
+  fastclaw:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: fastclaw/fastclaw:latest
+    restart: unless-stopped
+    ports:
+      - "${FASTCLAW_PORT:-18953}:18953"
+    volumes:
+      - fastclaw-data:/data/.fastclaw
+    environment:
+      - HOME=/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["gateway"]
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: fastclaw
+      POSTGRES_USER: fastclaw
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fastclaw-secret}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fastclaw"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  fastclaw-data:
+  postgres-data:

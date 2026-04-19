@@ -154,6 +154,38 @@ func (p *Process) Call(ctx context.Context, method string, params interface{}) (
 	}
 }
 
+// Notify sends a JSON-RPC notification (no response expected) to the plugin.
+func (p *Process) Notify(method string, params interface{}) error {
+	req, err := newRequest(method, params, 0)
+	if err != nil {
+		return fmt.Errorf("marshal notification: %w", err)
+	}
+	// Notifications have no ID in JSON-RPC 2.0; we use a minimal struct.
+	notif := struct {
+		JSONRPC string          `json:"jsonrpc"`
+		Method  string          `json:"method"`
+		Params  json.RawMessage `json:"params,omitempty"`
+	}{
+		JSONRPC: "2.0",
+		Method:  method,
+		Params:  req.Params,
+	}
+
+	data, err := json.Marshal(notif)
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.running {
+		return fmt.Errorf("plugin %s: not running", p.manifest.ID)
+	}
+	_, err = p.stdin.Write(data)
+	return err
+}
+
 // Stop gracefully shuts down the plugin process.
 func (p *Process) Stop(timeout time.Duration) {
 	p.mu.Lock()

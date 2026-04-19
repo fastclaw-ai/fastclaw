@@ -17,16 +17,24 @@ import (
 	"github.com/fastclaw-ai/fastclaw/internal/config"
 	"github.com/fastclaw-ai/fastclaw/internal/cron"
 	"github.com/fastclaw-ai/fastclaw/internal/plugin"
-	"github.com/fastclaw-ai/fastclaw/internal/provider"
+	"github.com/fastclaw-ai/fastclaw/internal/session"
+	"github.com/fastclaw-ai/fastclaw/internal/store"
 	"github.com/fastclaw-ai/fastclaw/internal/taskqueue"
 	"github.com/fastclaw-ai/fastclaw/internal/webhook"
 )
 
 // Gateway is the main orchestrator that starts all services.
+//
+// It owns a registry of per-user spaces. The "local" user is loaded at
+// startup and drives channels, cron, webhooks and plugins (these remain
+// host-global features). In cloud mode, additional users are loaded lazily
+// on first HTTP request and get isolated agents + sessions + memory.
 type Gateway struct {
-	config       *config.Config
+	config       *config.Config // local user's config
 	bus          *bus.MessageBus
-	agents       *agent.Manager
+	users        *userSpaceRegistry
+	localSpace   *UserSpace // shortcut to users.get(config.DefaultUserID)
+	agents       *agent.Manager // alias for localSpace.Agents (channels/cron/plugins)
 	chanMgr      *channels.Manager
 	bindings     []config.Binding
 	botUsernames map[string]string          // agentID -> bot username
@@ -38,39 +46,61 @@ type Gateway struct {
 	webhookSrv   *webhook.Server
 	pluginMgr    *plugin.Manager
 	taskQueue    *taskqueue.Queue
+	store        store.Store
 }
 
 // New creates a new Gateway with multi-agent support.
 func New(cfg *config.Config) (*Gateway, error) {
 	mb := bus.New()
 
-	// Create LLM provider — try known keys in order, fall back to first available
-	var providerCfg config.ProviderConfig
-	for _, key := range []string{"default", "openai", "openrouter"} {
-		if p, ok := cfg.Providers[key]; ok {
-			providerCfg = p
-			break
-		}
+	// Initialize storage backend. Local user's config on the filesystem is
+	// always the bootstrap; after reading it, we open the configured store
+	// (FileStore or DBStore) for all subsequent per-user data.
+	homeDir, _ := config.HomeDir()
+	st, err := store.New(&store.StorageConfig{
+		Type:        store.StorageType(cfg.Storage.Type),
+		DSN:         cfg.Storage.DSN,
+		AutoMigrate: cfg.Storage.AutoMigrate,
+	}, homeDir)
+	if err != nil {
+		return nil, fmt.Errorf("open store: %w", err)
 	}
-	if providerCfg.APIKey == "" {
-		// Use the first provider defined
-		for _, p := range cfg.Providers {
-			providerCfg = p
-			break
-		}
-	}
-	llm := provider.NewOpenAI(providerCfg.APIKey, providerCfg.APIBase)
 
-	// Resolve agent configs
+	// Resolve provider + agents for the local user. This mirrors what
+	// loadUserSpace does, but we keep the inline version here because the
+	// caller already handed us a *config.Config (avoiding a redundant disk
+	// read) and we want to surface any provider log lines.
+	llm := newProviderFromConfig(cfg)
+	slog.Info("local provider resolved", "defaultModel", cfg.Agents.Defaults.Model)
+
 	resolved := config.ResolveAgents(cfg)
-
-	// Create agent manager
-	agentMgr, err := agent.NewManager(resolved, llm, mb)
+	var managerOpts []agent.ManagerOption
+	if st != nil {
+		managerOpts = append(managerOpts,
+			agent.WithSessionStore(session.NewStoreAdapter(st)),
+			agent.WithMemoryStore(agent.NewMemoryStoreAdapter(st)),
+		)
+	}
+	agentMgr, err := agent.NewManager(resolved, llm, mb, managerOpts...)
 	if err != nil {
 		return nil, err
 	}
 
-	slog.Info("agents loaded", "count", len(resolved), "names", agentMgr.Names())
+	// Tag local agents with owner user ID for hook namespacing.
+	for _, ag := range agentMgr.All() {
+		ag.SetOwnerUserID(config.DefaultUserID)
+	}
+
+	localSpace := &UserSpace{
+		UserID:   config.DefaultUserID,
+		Config:   cfg,
+		Provider: llm,
+		Agents:   agentMgr,
+	}
+	userReg := newUserSpaceRegistry(mb, st)
+	userReg.put(localSpace)
+
+	slog.Info("agents loaded", "user", config.DefaultUserID, "count", len(resolved), "names", agentMgr.Names())
 
 	// Create channel manager and register channel instances
 	chanMgr := channels.NewManager(mb)
@@ -150,6 +180,19 @@ func New(cfg *config.Config) (*Gateway, error) {
 		slog.Info("web search registered", "provider", cfg.WebSearch.Provider)
 	}
 
+	// Register Exa search tool for all agents if configured. Falls back to
+	// EXA_API_KEY env var when the config field is empty.
+	exaKey := cfg.ExaSearch.APIKey
+	if exaKey == "" {
+		exaKey = os.Getenv("EXA_API_KEY")
+	}
+	if exaKey != "" {
+		for _, ag := range agentMgr.All() {
+			ag.RegisterExaSearchTool(exaKey)
+		}
+		slog.Info("exa search registered")
+	}
+
 	// Register sub-agent spawner for all agents
 	spawner := &gatewaySubAgentSpawner{agents: agentMgr}
 	for _, ag := range agentMgr.All() {
@@ -159,7 +202,7 @@ func New(cfg *config.Config) (*Gateway, error) {
 	// Set up webhook server if enabled
 	var webhookSrv *webhook.Server
 	if cfg.Hooks.Enabled {
-		webhookSrv = webhook.NewServer(cfg.Hooks.Token, cfg.Hooks.Path, &webhookAgentHandler{agents: agentMgr})
+		webhookSrv = webhook.NewServer(cfg.Hooks.Token, cfg.Hooks.Path, &webhookAgentHandler{agents: agentMgr}, nil)
 	}
 
 	// Set up plugin manager
@@ -204,6 +247,9 @@ func New(cfg *config.Config) (*Gateway, error) {
 	g := &Gateway{
 		config:       cfg,
 		bus:          mb,
+		store:        st,
+		users:        userReg,
+		localSpace:   localSpace,
 		agents:       agentMgr,
 		chanMgr:      chanMgr,
 		bindings:     cfg.Bindings,
@@ -256,9 +302,46 @@ func New(cfg *config.Config) (*Gateway, error) {
 	return g, nil
 }
 
-// AgentManager returns the gateway's agent manager.
+// AgentManager returns the local user's agent manager.
+// For per-user routing in cloud mode, use UserSpaceFor.
 func (g *Gateway) AgentManager() *agent.Manager {
 	return g.agents
+}
+
+// LocalUserSpace returns the preloaded local ("host admin") user space that
+// owns channels, cron jobs, plugins, and the webhook ingress.
+func (g *Gateway) LocalUserSpace() *UserSpace {
+	return g.localSpace
+}
+
+// UserSpaceFor returns the user space for the given user ID, loading it
+// lazily from disk if needed. In local mode callers normally pass
+// config.DefaultUserID and get the preloaded space; in cloud mode the HTTP
+// auth middleware resolves the real user ID and this method fetches the
+// matching space.
+func (g *Gateway) UserSpaceFor(userID string) (*UserSpace, error) {
+	if userID == "" {
+		userID = config.DefaultUserID
+	}
+	return g.users.getOrLoad(userID)
+}
+
+// LocalAgentManager satisfies the api.UserResolver interface by exposing
+// the local user's agent manager.
+func (g *Gateway) LocalAgentManager() *agent.Manager {
+	return g.agents
+}
+
+// IsCloudMode reports whether the gateway is configured to accept multiple
+// users via HTTP auth. Channels, cron and plugins remain bound to the
+// local user regardless.
+func (g *Gateway) IsCloudMode() bool {
+	return g.config != nil && g.config.Gateway.Mode == "cloud"
+}
+
+// Store returns the gateway's storage backend.
+func (g *Gateway) Store() store.Store {
+	return g.store
 }
 
 // TaskQueue returns the gateway's task queue.
@@ -280,6 +363,13 @@ func (g *Gateway) Run() error {
 	}()
 
 	var wg sync.WaitGroup
+
+	// Start idle user space evictor (cloud mode: free memory for inactive users)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		g.users.startEvictor(ctx)
+	}()
 
 	// Start config file watcher for hot-reload
 	wg.Add(1)
@@ -356,6 +446,15 @@ func (g *Gateway) Run() error {
 			for _, ag := range g.agents.All() {
 				if err := plugin.RegisterPluginTools(ctx, g.pluginMgr, inst.Manifest.ID, ag.ToolRegistry()); err != nil {
 					slog.Error("register plugin tools failed", "plugin", inst.Manifest.ID, "agent", ag.Name(), "error", err)
+				}
+			}
+		}
+
+		// Register hook plugins with all agents
+		for _, inst := range g.pluginMgr.HookPlugins() {
+			for _, ag := range g.agents.All() {
+				if err := plugin.RegisterPluginHooks(ctx, g.pluginMgr, inst.Manifest.ID, ag.HookRegistry(), ag.Name()); err != nil {
+					slog.Error("register plugin hooks failed", "plugin", inst.Manifest.ID, "agent", ag.Name(), "error", err)
 				}
 			}
 		}

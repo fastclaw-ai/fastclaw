@@ -24,24 +24,33 @@ import {
 import { Brain, Plus, Pencil, Trash2, Check, Key, Globe, Cpu, Layers } from "lucide-react";
 import { getConfig, updateConfig, testProvider, type ModelEntry, type ProviderData } from "@/lib/api";
 
-const PROVIDER_PRESETS: Record<string, { apiBase: string; api: string }> = {
-  openrouter: { apiBase: "https://openrouter.ai/api/v1", api: "openai-chat" },
-  openai: { apiBase: "https://api.openai.com/v1", api: "openai-chat" },
-  anthropic: { apiBase: "https://api.anthropic.com/v1", api: "anthropic-messages" },
-  deepseek: { apiBase: "https://api.deepseek.com/v1", api: "openai-chat" },
-  groq: { apiBase: "https://api.groq.com/openai/v1", api: "openai-chat" },
-  ollama: { apiBase: "http://localhost:11434/v1", api: "openai-chat" },
-  custom: { apiBase: "", api: "openai-chat" },
+const PROVIDER_PRESETS: Record<string, { apiBase: string; apiType: string }> = {
+  openrouter: { apiBase: "https://openrouter.ai/api/v1", apiType: "openai-chat" },
+  openai: { apiBase: "https://api.openai.com/v1", apiType: "openai-chat" },
+  anthropic: { apiBase: "https://api.anthropic.com/v1", apiType: "anthropic-messages" },
+  deepseek: { apiBase: "https://api.deepseek.com/v1", apiType: "openai-chat" },
+  groq: { apiBase: "https://api.groq.com/openai/v1", apiType: "openai-chat" },
+  ollama: { apiBase: "http://localhost:11434/v1", apiType: "openai-chat" },
+  custom: { apiBase: "", apiType: "openai-chat" },
 };
 
-const API_TYPES = ["openai-chat", "anthropic-messages"];
+const API_TYPE_OPTIONS = [
+  { value: "openai-chat", label: "OpenAI Completions" },
+  { value: "anthropic-messages", label: "Anthropic Messages" },
+];
+
+const AUTH_TYPE_OPTIONS = [
+  { value: "api-key", label: "API Key" },
+  { value: "bearer-token", label: "Bearer Token" },
+];
 
 interface ProviderEntry {
   name: string;
   apiBase: string;
   apiKey: string;
   maskedKey: string;
-  api: string;
+  apiType: string;
+  authType: string;
   models: ModelEntry[];
 }
 
@@ -71,7 +80,8 @@ export default function ModelsPage() {
   const [formName, setFormName] = useState("");
   const [formApiBase, setFormApiBase] = useState("");
   const [formApiKey, setFormApiKey] = useState("");
-  const [formApi, setFormApi] = useState("openai-chat");
+  const [formApiType, setFormApi] = useState("openai-chat");
+  const [formAuthType, setFormAuthType] = useState("api-key");
   const [formModels, setFormModels] = useState<ModelEntry[]>([]);
   const [testStatus, setTestStatus] = useState<"idle" | "testing" | "success" | "error">("idle");
   const [testError, setTestError] = useState("");
@@ -99,7 +109,8 @@ export default function ModelsPage() {
             apiBase: p.apiBase || "",
             apiKey: "",
             maskedKey: p.apiKey || "",
-            api: p.api || "openai-chat",
+            apiType: p.apiType || "openai-chat",
+            authType: p.authType || "api-key",
             models: p.models || [],
           });
         }
@@ -120,7 +131,8 @@ export default function ModelsPage() {
       providersMap[p.name] = {
         apiBase: p.apiBase,
         apiKey: p.apiKey || p.maskedKey,
-        api: p.api,
+        apiType: p.apiType,
+        authType: p.authType,
         models: p.models,
       };
     }
@@ -144,7 +156,8 @@ export default function ModelsPage() {
     setFormPreset("openrouter");
     setFormName("openrouter");
     setFormApiBase(PROVIDER_PRESETS["openrouter"].apiBase);
-    setFormApi(PROVIDER_PRESETS["openrouter"].api);
+    setFormApi(PROVIDER_PRESETS["openrouter"].apiType);
+    setFormAuthType("api-key");
     setFormApiKey("");
     setFormModels([]);
     setTestStatus("idle");
@@ -158,7 +171,8 @@ export default function ModelsPage() {
     setFormPreset(preset);
     setFormName(provider.name);
     setFormApiBase(provider.apiBase);
-    setFormApi(provider.api);
+    setFormApi(provider.apiType);
+    setFormAuthType(provider.authType || "api-key");
     setFormApiKey("");
     setFormModels(provider.models.map((m) => ({ ...m, cost: { ...m.cost }, input: [...m.input] })));
     setTestStatus("idle");
@@ -171,7 +185,7 @@ export default function ModelsPage() {
     if (preset !== "custom") {
       setFormName(preset);
       setFormApiBase(PROVIDER_PRESETS[preset].apiBase);
-      setFormApi(PROVIDER_PRESETS[preset].api);
+      setFormApi(PROVIDER_PRESETS[preset].apiType);
     } else {
       setFormName("");
       setFormApiBase("");
@@ -189,9 +203,14 @@ export default function ModelsPage() {
         apiBase: formApiBase,
         apiKey: formApiKey,
         model: "",
+        apiType: formApiType,
+        authType: formAuthType,
       });
       setTestStatus(result.ok ? "success" : "error");
-      if (!result.ok) setTestError(result.error || "Connection failed");
+      if (!result.ok) {
+        const urlInfo = result.url ? `\nRequest URL: ${result.url}` : "";
+        setTestError((result.error || "Connection failed") + urlInfo);
+      }
     } catch {
       setTestStatus("error");
       setTestError("Connection failed");
@@ -234,7 +253,8 @@ export default function ModelsPage() {
         apiBase: formApiBase,
         apiKey: formApiKey,
         maskedKey: formApiKey ? "sk-****" : "",
-        api: formApi,
+        apiType: formApiType,
+        authType: formAuthType,
         models: formModels.filter((m) => m.id.trim()),
       },
     ];
@@ -490,21 +510,42 @@ export default function ModelsPage() {
               )}
             </div>
 
-            {/* API Type */}
-            <div className="space-y-2">
-              <Label>API Type</Label>
-              <Select value={formApi} onValueChange={(v: string | null) => v && setFormApi(v)}>
-                <SelectTrigger className="font-mono text-sm">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {API_TYPES.map((t) => (
-                    <SelectItem key={t} value={t}>
-                      <span className="font-mono text-sm">{t}</span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+            {/* API Type & Auth Type */}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>API Type</Label>
+                <Select value={formApiType} onValueChange={(v: string | null) => v && setFormApi(v)}>
+                  <SelectTrigger className="w-full text-sm">
+                    <SelectValue>
+                      {API_TYPE_OPTIONS.find((o) => o.value === formApiType)?.label}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {API_TYPE_OPTIONS.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Auth Type</Label>
+                <Select value={formAuthType} onValueChange={(v: string | null) => v && setFormAuthType(v)}>
+                  <SelectTrigger className="w-full text-sm">
+                    <SelectValue>
+                      {AUTH_TYPE_OPTIONS.find((o) => o.value === formAuthType)?.label}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {AUTH_TYPE_OPTIONS.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
 
             {/* Test Connection */}

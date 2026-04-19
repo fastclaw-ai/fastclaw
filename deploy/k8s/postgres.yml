@@ -1,0 +1,74 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: fastclaw-db
+  namespace: fastclaw
+type: Opaque
+stringData:
+  POSTGRES_PASSWORD: "change-me-in-production"
+  dsn: "postgres://fastclaw:change-me-in-production@fastclaw-db:5432/fastclaw?sslmode=disable"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: fastclaw-db
+  namespace: fastclaw
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fastclaw-db
+  namespace: fastclaw
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fastclaw-db
+  template:
+    metadata:
+      labels:
+        app: fastclaw-db
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:16-alpine
+        ports:
+        - containerPort: 5432
+        env:
+        - name: POSTGRES_DB
+          value: fastclaw
+        - name: POSTGRES_USER
+          value: fastclaw
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: fastclaw-db
+              key: POSTGRES_PASSWORD
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/postgresql/data
+        readinessProbe:
+          exec:
+            command: ["pg_isready", "-U", "fastclaw"]
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: fastclaw-db
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fastclaw-db
+  namespace: fastclaw
+spec:
+  selector:
+    app: fastclaw-db
+  ports:
+  - port: 5432

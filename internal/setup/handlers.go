@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,11 +14,130 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fastclaw-ai/fastclaw/internal/agent"
 	"github.com/fastclaw-ai/fastclaw/internal/config"
+	"github.com/fastclaw-ai/fastclaw/internal/session"
+	"github.com/fastclaw-ai/fastclaw/internal/store"
+	"github.com/fastclaw-ai/fastclaw/internal/users"
 )
 
+// loadUserConfig reads the config for the user identified by the request
+// context. For the local user it always reads from filesystem (bootstrap).
+// For cloud users it tries the Store first (DB-backed), falling back to
+// filesystem, and auto-provisions if nothing exists.
+func (s *Server) loadUserConfig(r *http.Request) (*config.Config, error) {
+	userID := config.UserIDFromContext(r.Context())
+
+	// Try loading from filesystem first (works for both local and file-backed cloud).
+	cfg, err := config.LoadForUser(userID)
+	if err == nil {
+		return cfg, nil
+	}
+
+	// Auto-provision if missing.
+	if os.IsNotExist(unwrapPathError(err)) {
+		if provErr := users.ProvisionWorkspace(userID); provErr != nil {
+			return nil, fmt.Errorf("auto-provision user %s: %w", userID, provErr)
+		}
+		return config.LoadForUser(userID)
+	}
+	return nil, err
+}
+
+func unwrapPathError(err error) error {
+	for err != nil {
+		if pe, ok := err.(*os.PathError); ok {
+			return pe.Err
+		}
+		err = errors.Unwrap(err)
+	}
+	return nil
+}
+
+// saveUserConfig persists the config for the request's user.
+// Writes to file (always) and to Store (if available, for DB-backed deployments).
+func (s *Server) saveUserConfig(r *http.Request, cfg *config.Config) error {
+	if _, err := config.EnsureUserDir(); err != nil {
+		return err
+	}
+	// Write to global config path (~/.fastclaw/fastclaw.json)
+	configPath, err := config.GlobalConfigPath()
+	if err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	// Always write to file (bootstrap source)
+	if err := os.WriteFile(configPath, data, 0o644); err != nil {
+		return err
+	}
+	// Also save to DB store if available
+	if s.dataStore != nil {
+		var rawCfg map[string]interface{}
+		json.Unmarshal(data, &rawCfg)
+		s.dataStore.SaveConfig(r.Context(), &store.GlobalConfig{Data: rawCfg})
+	}
+	return nil
+}
+
+// userDir returns the workspace directory for the request's user.
+func userDirForRequest(r *http.Request) (string, error) {
+	return config.HomeDir()
+}
+
+// resolveAgent finds an agent for the current request's user. For the local
+// user it uses the preloaded agentProvider; for cloud users it lazily loads
+// their UserSpace via the resolver.
+func (s *Server) resolveAgent(r *http.Request, agentID string) AgentHandle {
+	userID := config.UserIDFromContext(r.Context())
+
+	// Cloud user → resolve from userResolver.
+	if userID != config.DefaultUserID && s.userResolver != nil {
+		space, err := s.userResolver.UserSpaceFor(userID)
+		if err != nil {
+			return nil
+		}
+		ag := space.Agents.AgentByID(agentID)
+		if ag == nil {
+			return nil
+		}
+		return ag
+	}
+
+	// Local user → use preloaded provider.
+	if s.agentProvider != nil {
+		return s.agentProvider.AgentByID(agentID)
+	}
+	return nil
+}
+
+// resolveAllAgents returns all agents for the current request's user.
+func (s *Server) resolveAllAgents(r *http.Request) []AgentHandle {
+	userID := config.UserIDFromContext(r.Context())
+
+	if userID != config.DefaultUserID && s.userResolver != nil {
+		space, err := s.userResolver.UserSpaceFor(userID)
+		if err != nil {
+			return nil
+		}
+		all := space.Agents.All()
+		result := make([]AgentHandle, len(all))
+		for i, ag := range all {
+			result[i] = ag
+		}
+		return result
+	}
+
+	if s.agentProvider != nil {
+		return s.agentProvider.AllAgents()
+	}
+	return nil
+}
+
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	homeDir, err := config.HomeDir()
+	configPath, err := config.GlobalConfigPath()
 	if err != nil {
 		jsonResponse(w, http.StatusOK, map[string]any{
 			"configured": false,
@@ -25,9 +145,11 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	configPath := filepath.Join(homeDir, "fastclaw.json")
 	_, statErr := os.Stat(configPath)
 	configured := statErr == nil
+
+	userID := config.UserIDFromContext(r.Context())
+	isAdmin := userID == config.DefaultUserID && s.authToken != ""
 
 	resp := map[string]any{
 		"configured": configured,
@@ -37,12 +159,15 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"channels":   []any{},
 		"provider":   nil,
 		"uptime":     "",
+		"userId":     userID,
+		"isAdmin":    isAdmin,
 	}
 
-	if s.agentProvider != nil {
-		resp["uptime"] = formatDuration(time.Since(s.startedAt))
+	resp["uptime"] = formatDuration(time.Since(s.startedAt))
+	allAgents := s.resolveAllAgents(r)
+	if len(allAgents) > 0 {
 		var agentList []map[string]string
-		for _, ag := range s.agentProvider.AllAgents() {
+		for _, ag := range allAgents {
 			agentList = append(agentList, map[string]string{
 				"id": ag.Name(),
 			})
@@ -52,7 +177,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	// Load config for provider/channel/agent details
 	if configured {
-		cfg, loadErr := config.Load()
+		cfg, loadErr := s.loadUserConfig(r)
 		if loadErr == nil {
 			// Provider info
 			for name, prov := range cfg.Providers {
@@ -82,7 +207,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			// Agent info with model details
 			if s.agentProvider == nil {
 				// Not running - get agent list from config
-				resolved := config.ResolveAgents(cfg)
+				resolved := config.ResolveAgentsForUser(cfg, userID)
 				var agentList []map[string]string
 				for _, ra := range resolved {
 					agentList = append(agentList, map[string]string{
@@ -94,7 +219,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 				resp["agents"] = agentList
 			} else {
 				// Running - enrich with model info from config
-				resolved := config.ResolveAgents(cfg)
+				resolved := config.ResolveAgentsForUser(cfg, userID)
 				modelMap := make(map[string]string)
 				wsMap := make(map[string]string)
 				for _, ra := range resolved {
@@ -118,7 +243,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
-	cfg, err := config.Load()
+	cfg, err := s.loadUserConfig(r)
 	if err != nil {
 		jsonResponse(w, http.StatusOK, map[string]any{"error": "no config found"})
 		return
@@ -136,9 +261,11 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 type testProviderRequest struct {
-	APIBase string `json:"apiBase"`
-	APIKey  string `json:"apiKey"`
-	Model   string `json:"model"`
+	APIBase  string `json:"apiBase"`
+	APIKey   string `json:"apiKey"`
+	Model    string `json:"model"`
+	APIType  string `json:"apiType"`
+	AuthType string `json:"authType"`
 }
 
 func (s *Server) handleTestProvider(w http.ResponseWriter, r *http.Request) {
@@ -148,60 +275,237 @@ func (s *Server) handleTestProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Test connectivity by listing models (GET /models)
-	httpReq, err := http.NewRequestWithContext(r.Context(), "GET", strings.TrimRight(req.APIBase, "/")+"/models", nil)
+	base := strings.TrimRight(req.APIBase, "/")
+	var testURL string
+	var method string
+	var body io.Reader
+
+	if req.APIType == "anthropic-messages" {
+		// Anthropic Messages API: base + /v1/messages
+		testURL = base + "/v1/messages"
+		method = "POST"
+		model := req.Model
+		if model == "" {
+			model = "claude-sonnet-4-20250514"
+		}
+		payload := fmt.Sprintf(`{"model":"%s","messages":[{"role":"user","content":"hi"}]}`, model)
+		body = strings.NewReader(payload)
+	} else {
+		// OpenAI-compatible: send a minimal chat completion to verify API key
+		testURL = base + "/chat/completions"
+		method = "POST"
+		model := req.Model
+		if model == "" {
+			model = "gpt-4o-mini"
+		}
+		payload := fmt.Sprintf(`{"model":"%s","messages":[{"role":"user","content":"hi"}]}`, model)
+		body = strings.NewReader(payload)
+	}
+
+	httpReq, err := http.NewRequestWithContext(r.Context(), method, testURL, body)
 	if err != nil {
-		jsonResponse(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+		jsonResponse(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error(), "url": testURL})
 		return
 	}
-	if req.APIKey != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+req.APIKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	// Set auth headers based on API type
+	if req.APIType == "anthropic-messages" {
+		if req.APIKey != "" {
+			httpReq.Header.Set("x-api-key", req.APIKey)
+		}
+		httpReq.Header.Set("anthropic-version", "2023-06-01")
+	} else {
+		if req.APIKey != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+req.APIKey)
+		}
 	}
 
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(httpReq)
 	if err != nil {
-		jsonResponse(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+		jsonResponse(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error(), "url": testURL})
 		return
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		jsonResponse(w, http.StatusOK, map[string]any{"ok": false, "error": fmt.Sprintf("HTTP %d: %s", resp.StatusCode, string(respBody))})
+	// For chat/messages endpoints, 200 means success.
+	// 401/403 means bad API key, other errors are connectivity issues.
+	if resp.StatusCode == http.StatusOK {
+		jsonResponse(w, http.StatusOK, map[string]any{"ok": true, "url": testURL})
 		return
 	}
 
-	jsonResponse(w, http.StatusOK, map[string]any{"ok": true})
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	errMsg := fmt.Sprintf("HTTP %d: %s", resp.StatusCode, string(respBody))
+
+	// 401/403 = auth failure, clearly report it
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		jsonResponse(w, http.StatusOK, map[string]any{"ok": false, "error": "Authentication failed. Please check your API Key.", "url": testURL})
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]any{"ok": false, "error": errMsg, "url": testURL})
 }
 
 type chatRequest struct {
-	AgentID string `json:"agentId"`
-	Message string `json:"message"`
+	AgentID   string `json:"agentId"`
+	SessionID string `json:"sessionId"`
+	Message   string `json:"message"`
 }
 
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
-	if s.agentProvider == nil {
-		jsonResponse(w, http.StatusServiceUnavailable, map[string]any{
-			"error": "gateway is not running",
-		})
-		return
-	}
-
 	var req chatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "invalid request"})
 		return
 	}
 
-	ag := s.agentProvider.AgentByID(req.AgentID)
+	ag := s.resolveAgent(r, req.AgentID)
 	if ag == nil {
 		jsonResponse(w, http.StatusNotFound, map[string]any{"error": "agent not found"})
 		return
 	}
 
-	reply := ag.HandleWebChat(r.Context(), req.Message)
+	reply := ag.HandleWebChat(r.Context(), req.SessionID, req.Message)
 	jsonResponse(w, http.StatusOK, map[string]any{"response": reply})
+}
+
+func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
+	var req chatRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+
+	ag := s.resolveAgent(r, req.AgentID)
+	if ag == nil {
+		http.Error(w, "agent not found", http.StatusNotFound)
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	events := make(chan agent.ChatEvent, 32)
+
+	// Run agent in background
+	go func() {
+		defer close(events)
+		ag.HandleWebChatStream(r.Context(), req.SessionID, req.Message, events)
+	}()
+
+	for evt := range events {
+		data, _ := json.Marshal(evt)
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+	}
+
+	// Send final done event (in case agent returned without emitting done)
+	fmt.Fprintf(w, "data: {\"type\":\"done\"}\n\n")
+	flusher.Flush()
+}
+
+func (s *Server) handleChatHistory(w http.ResponseWriter, r *http.Request) {
+	agentID := r.URL.Query().Get("agentId")
+	sessionID := r.URL.Query().Get("sessionId")
+	if agentID == "" {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "agentId required"})
+		return
+	}
+
+	ag := s.resolveAgent(r, agentID)
+	if ag == nil {
+		jsonResponse(w, http.StatusOK, []any{})
+		return
+	}
+
+	history := ag.WebChatHistory(sessionID)
+	if history == nil {
+		history = []map[string]any{}
+	}
+	jsonResponse(w, http.StatusOK, history)
+}
+
+func (s *Server) handleChatSessions(w http.ResponseWriter, r *http.Request) {
+	agentID := r.URL.Query().Get("agentId")
+	if agentID == "" {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "agentId required"})
+		return
+	}
+
+	ag := s.resolveAgent(r, agentID)
+	if ag == nil {
+		jsonResponse(w, http.StatusOK, []any{})
+		return
+	}
+
+	sessions := ag.WebChatSessions()
+	if sessions == nil {
+		sessions = []session.WebSession{}
+	}
+	jsonResponse(w, http.StatusOK, sessions)
+}
+
+func (s *Server) handleRenameSession(w http.ResponseWriter, r *http.Request) {
+	sessionKey := r.PathValue("key")
+	if sessionKey == "" {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "session key required"})
+		return
+	}
+
+	var body struct {
+		AgentID string `json:"agentId"`
+		Title   string `json:"title"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "invalid request"})
+		return
+	}
+	if body.Title == "" {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "title required"})
+		return
+	}
+
+	ag := s.resolveAgent(r, body.AgentID)
+	if ag == nil {
+		jsonResponse(w, http.StatusNotFound, map[string]any{"error": "agent not found"})
+		return
+	}
+
+	if err := ag.RenameWebChatSession(sessionKey, body.Title); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	jsonResponse(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
+	sessionKey := r.PathValue("key")
+	if sessionKey == "" {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "session key required"})
+		return
+	}
+
+	agentID := r.URL.Query().Get("agentId")
+	ag := s.resolveAgent(r, agentID)
+	if ag == nil {
+		jsonResponse(w, http.StatusNotFound, map[string]any{"error": "agent not found"})
+		return
+	}
+
+	if err := ag.DeleteWebChatSession(sessionKey); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	jsonResponse(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 type saveConfigRequest struct {
@@ -209,12 +513,15 @@ type saveConfigRequest struct {
 	ProviderName    string `json:"providerName"`
 	APIBase         string `json:"apiBase"`
 	APIKey          string `json:"apiKey"`
+	APIType         string `json:"apiType"`
+	AuthType        string `json:"authType"`
 	Model           string `json:"model"`
 	TelegramEnabled bool   `json:"telegramEnabled"`
 	TelegramToken   string `json:"telegramToken"`
 	Port            int    `json:"port"`
 	AgentName       string `json:"agentName"`
 	Personality     string `json:"personality"`
+	GatewayToken    string `json:"gatewayToken"`
 }
 
 func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
@@ -224,49 +531,71 @@ func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Normalize agent name to slug: lowercase, spaces/underscores to hyphens
+	// Normalize agent name
 	agentID := strings.ToLower(strings.TrimSpace(req.AgentName))
+	if agentID == "" {
+		agentID = "default"
+	}
 	agentID = strings.ReplaceAll(agentID, " ", "-")
 	agentID = strings.ReplaceAll(agentID, "_", "-")
 
-	// Determine provider key
-	providerKey := req.Provider
-	if req.Provider == "custom" && req.ProviderName != "" {
-		providerKey = strings.ToLower(strings.TrimSpace(req.ProviderName))
-		providerKey = strings.ReplaceAll(providerKey, " ", "-")
-	}
-
-	// Build config
+	// Build global config
 	cfg := &config.Config{
-		Providers: map[string]config.ProviderConfig{
-			providerKey: {
-				APIKey:  req.APIKey,
-				APIBase: req.APIBase,
-			},
-		},
+		Providers: map[string]config.ProviderConfig{},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Model:             req.Model,
 				MaxTokens:         8192,
 				Temperature:       0.7,
 				MaxToolIterations: 20,
 			},
-			List: []config.AgentEntry{
-				{ID: agentID},
-			},
 		},
 		Channels: map[string]config.ChannelConfig{},
 		Bindings: []config.Binding{},
+		Storage:  config.StorageCfg{Type: "file"},
+		Sandbox:  config.SandboxCfg{Enabled: false},
 	}
 
-	// Auto-generate a gateway auth token
+	// Provider + model (optional — can be configured later per agent)
+	if req.APIKey != "" && req.Provider != "" {
+		providerKey := req.Provider
+		if req.Provider == "custom" && req.ProviderName != "" {
+			providerKey = strings.ToLower(strings.TrimSpace(req.ProviderName))
+			providerKey = strings.ReplaceAll(providerKey, " ", "-")
+		}
+		cfg.Providers[providerKey] = config.ProviderConfig{
+			APIKey:   req.APIKey,
+			APIBase:  req.APIBase,
+			APIType:  req.APIType,
+			AuthType: req.AuthType,
+		}
+		if req.Model != "" {
+			cfg.Agents.Defaults.Model = providerKey + "/" + req.Model
+		}
+	}
+
+	// Gateway (always set)
+	port := req.Port
+	if port == 0 {
+		port = 18953
+	}
+	gatewayToken := req.GatewayToken
+	if gatewayToken == "" {
+		gatewayToken = generateRandomToken(32)
+	}
 	cfg.Gateway = config.GatewayCfg{
-		Port: req.Port,
+		Port: port,
 		Auth: config.GatewayAuth{
-			Token: generateRandomToken(32),
+			Token: gatewayToken,
+		},
+		HTTP: config.GatewayHTTP{
+			Endpoints: config.GatewayHTTPEndpoints{
+				ChatCompletions: config.GatewayEndpoint{Enabled: true},
+				Agents:          config.GatewayEndpoint{Enabled: true},
+			},
 		},
 	}
 
+	// Telegram (optional)
 	if req.TelegramEnabled && req.TelegramToken != "" {
 		cfg.Channels["telegram"] = config.ChannelConfig{
 			Enabled:  true,
@@ -278,19 +607,18 @@ func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// Ensure home dir exists
-	homeDir, err := config.HomeDir()
-	if err != nil {
-		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
-		return
-	}
-	if err := os.MkdirAll(homeDir, 0o755); err != nil {
+	// Ensure directories exist
+	if _, err := config.EnsureUserDir(); err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
 
-	// Write config
-	configPath := filepath.Join(homeDir, "fastclaw.json")
+	// Write global config to ~/.fastclaw/fastclaw.json
+	configPath, err := config.GlobalConfigPath()
+	if err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
 	data, _ := json.MarshalIndent(cfg, "", "  ")
 	if err := os.WriteFile(configPath, data, 0o644); err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
@@ -298,53 +626,48 @@ func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create agent workspace
-	agentDir := filepath.Join(homeDir, "agents", agentID, "agent")
-	dirs := []string{
+	userDir, _ := config.HomeDir()
+	agentDir := filepath.Join(userDir, "agents", agentID, "agent")
+	for _, dir := range []string{
 		agentDir,
 		filepath.Join(agentDir, "memory"),
 		filepath.Join(agentDir, "sessions"),
 		filepath.Join(agentDir, "skills"),
-	}
-	for _, dir := range dirs {
+	} {
 		os.MkdirAll(dir, 0o755)
 	}
 
-	// Write bootstrap files
-	bootstrapFiles := map[string]string{
-		"AGENTS.md":    "# Agent Capabilities\n\nDescribe what this agent can do.\n",
-		"IDENTITY.md":  fmt.Sprintf("# Identity\n\nYou are %s, a FastClaw AI agent.\n", req.AgentName),  // use display name
+	// Write bootstrap workspace files
+	wsFiles := map[string]string{
+		"SOUL.md":      "# Soul\n\nYour personality and behavioral guidelines.\n",
+		"IDENTITY.md":  fmt.Sprintf("# Identity\n\nYou are %s, a FastClaw AI agent.\n", req.AgentName),
 		"USER.md":      "# User\n\nInformation about the user you serve.\n",
-		"TOOLS.md":     "# Tools\n\nAdditional tool usage instructions.\n",
-		"BOOTSTRAP.md": "# Bootstrap\n\nStartup instructions loaded on every conversation.\n",
-		"HEARTBEAT.md": "# Heartbeat\n\nPeriodic check-in instructions.\n",
-		"MEMORY.md":    "# Memory\n\nLong-term memory for this agent.\n",
+		"TOOLS.md":     "",
+		"BOOTSTRAP.md": "",
+		"HEARTBEAT.md": "",
+		"MEMORY.md":    "",
+		"AGENTS.md":    "",
 	}
 	if req.Personality != "" {
-		bootstrapFiles["SOUL.md"] = fmt.Sprintf("# Soul\n\n%s\n", req.Personality)
-	} else {
-		bootstrapFiles["SOUL.md"] = "# Soul\n\nYour personality and behavioral guidelines.\n"
+		wsFiles["SOUL.md"] = fmt.Sprintf("# %s\n\n%s\n", req.AgentName, req.Personality)
 	}
-
-	for filename, content := range bootstrapFiles {
+	for filename, content := range wsFiles {
 		path := filepath.Join(agentDir, filename)
 		if _, err := os.Stat(path); os.IsNotExist(err) {
 			os.WriteFile(path, []byte(content), 0o644)
 		}
 	}
 
-	// Write agent.json
-	agentCfg := config.AgentFileConfig{Model: req.Model}
-	agentData, _ := json.MarshalIndent(agentCfg, "", "  ")
-	agentJSONPath := filepath.Join(agentDir, "agent.json")
-	if _, err := os.Stat(agentJSONPath); os.IsNotExist(err) {
-		os.WriteFile(agentJSONPath, agentData, 0o644)
-	}
+	slog.Info("config saved", "path", configPath, "agent", agentID,
+		"hasProvider", len(cfg.Providers) > 0,
+		"defaultModel", cfg.Agents.Defaults.Model,
+	)
 
-	slog.Info("config saved", "path", configPath, "agent", agentID)
+	jsonResponse(w, http.StatusOK, map[string]any{
+		"ok":    true,
+		"token": cfg.Gateway.Auth.Token,
+	})
 
-	jsonResponse(w, http.StatusOK, map[string]any{"ok": true})
-
-	// Signal that config is ready
 	if s.onConfig != nil {
 		go s.onConfig(cfg)
 	}
@@ -359,7 +682,7 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg, err := config.Load()
+	cfg, err := s.loadUserConfig(r)
 	if err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
 		return
@@ -373,9 +696,10 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 			cfg.Providers = make(map[string]config.ProviderConfig)
 			for k, v := range providers {
 				p := config.ProviderConfig{
-					APIBase: v.APIBase,
-					API:     v.API,
-					Models:  v.Models,
+					APIBase:  v.APIBase,
+					APIType:  v.APIType,
+					AuthType: v.AuthType,
+					Models:   v.Models,
 				}
 				if v.APIKey != "" && !strings.Contains(v.APIKey, "****") {
 					p.APIKey = v.APIKey
@@ -390,13 +714,33 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	// Merge agents defaults
 	if raw, ok := incoming["agents"]; ok {
 		var agentUpdate struct {
-			Defaults struct {
-				Model string `json:"model"`
-			} `json:"defaults"`
+			Defaults config.AgentDefaults `json:"defaults"`
 		}
 		if json.Unmarshal(raw, &agentUpdate) == nil {
-			if agentUpdate.Defaults.Model != "" {
-				cfg.Agents.Defaults.Model = agentUpdate.Defaults.Model
+			d := agentUpdate.Defaults
+			if d.Model != "" {
+				cfg.Agents.Defaults.Model = d.Model
+			}
+		}
+	}
+
+	// Merge sandbox (top-level)
+	if raw, ok := incoming["sandbox"]; ok {
+		var sandbox config.SandboxCfg
+		if json.Unmarshal(raw, &sandbox) == nil {
+			cfg.Sandbox = sandbox
+		}
+	}
+	// Also handle sandbox inside agents.defaults (backwards compat)
+	if raw, ok := incoming["agents"]; ok {
+		var agentSandbox struct {
+			Defaults struct {
+				Sandbox config.SandboxCfg `json:"sandbox"`
+			} `json:"defaults"`
+		}
+		if json.Unmarshal(raw, &agentSandbox) == nil {
+			if agentSandbox.Defaults.Sandbox.Enabled || agentSandbox.Defaults.Sandbox.Backend != "" {
+				cfg.Sandbox = agentSandbox.Defaults.Sandbox
 			}
 		}
 	}
@@ -417,7 +761,7 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := saveConfigFile(cfg); err != nil {
+	if err := s.saveUserConfig(r, cfg); err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
@@ -492,13 +836,15 @@ func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, result)
 }
 
-// saveConfigFile persists the config to ~/.fastclaw/fastclaw.json.
+// saveConfigFile persists the config to ~/.fastclaw/users/local/fastclaw.json.
 func saveConfigFile(cfg *config.Config) error {
-	homeDir, err := config.HomeDir()
+	if _, err := config.EnsureUserDir(); err != nil {
+		return err
+	}
+	configPath, err := config.UserConfigPath(config.DefaultUserID)
 	if err != nil {
 		return err
 	}
-	configPath := filepath.Join(homeDir, "fastclaw.json")
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err

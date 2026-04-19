@@ -22,7 +22,7 @@ type deleteCronJobArgs struct {
 }
 
 // RegisterCronTools registers cron job management tools.
-func RegisterCronTools(r *Registry, st store.Store, tenantID, agentID, channel, chatID string) {
+func RegisterCronTools(r *Registry, st store.Store, userID, agentID, channel, chatID string) {
 	r.Register("create_cron_job",
 		"Create a scheduled task. The task will run at the specified schedule and send the message to the current channel.",
 		map[string]interface{}{
@@ -47,7 +47,7 @@ func RegisterCronTools(r *Registry, st store.Store, tenantID, agentID, channel, 
 			},
 			"required": []string{"name", "schedule", "message"},
 		},
-		makeCreateCronJob(st, tenantID, agentID, channel, chatID),
+		makeCreateCronJob(st, userID, agentID, channel, chatID),
 	)
 
 	r.Register("list_cron_jobs",
@@ -56,7 +56,7 @@ func RegisterCronTools(r *Registry, st store.Store, tenantID, agentID, channel, 
 			"type":       "object",
 			"properties": map[string]interface{}{},
 		},
-		makeListCronJobs(st, tenantID, agentID),
+		makeListCronJobs(st, userID, agentID),
 	)
 
 	r.Register("delete_cron_job",
@@ -71,11 +71,11 @@ func RegisterCronTools(r *Registry, st store.Store, tenantID, agentID, channel, 
 			},
 			"required": []string{"id"},
 		},
-		makeDeleteCronJob(st, tenantID),
+		makeDeleteCronJob(st, userID),
 	)
 }
 
-func makeCreateCronJob(st store.Store, tenantID, agentID, channel, chatID string) ToolFunc {
+func makeCreateCronJob(st store.Store, userID, agentID, channel, chatID string) ToolFunc {
 	return func(ctx context.Context, rawArgs json.RawMessage) (string, error) {
 		var args createCronJobArgs
 		if err := json.Unmarshal(rawArgs, &args); err != nil {
@@ -93,7 +93,7 @@ func makeCreateCronJob(st store.Store, tenantID, agentID, channel, chatID string
 		now := time.Now()
 		job := &store.CronJobRecord{
 			ID:        id,
-			TenantID:  tenantID,
+			
 			AgentID:   agentID,
 			Name:      args.Name,
 			Type:      jobType,
@@ -107,7 +107,7 @@ func makeCreateCronJob(st store.Store, tenantID, agentID, channel, chatID string
 			CreatedAt: now,
 		}
 
-		if err := st.SaveCronJob(ctx, tenantID, job); err != nil {
+		if err := st.SaveCronJob(ctx, job); err != nil {
 			return "", fmt.Errorf("save cron job: %w", err)
 		}
 
@@ -115,9 +115,9 @@ func makeCreateCronJob(st store.Store, tenantID, agentID, channel, chatID string
 	}
 }
 
-func makeListCronJobs(st store.Store, tenantID, agentID string) ToolFunc {
+func makeListCronJobs(st store.Store, userID, agentID string) ToolFunc {
 	return func(ctx context.Context, rawArgs json.RawMessage) (string, error) {
-		jobs, err := st.ListCronJobs(ctx, tenantID)
+		jobs, err := st.ListCronJobs(ctx)
 		if err != nil {
 			return "", fmt.Errorf("list cron jobs: %w", err)
 		}
@@ -138,7 +138,7 @@ func makeListCronJobs(st store.Store, tenantID, agentID string) ToolFunc {
 	}
 }
 
-func makeDeleteCronJob(st store.Store, tenantID string) ToolFunc {
+func makeDeleteCronJob(st store.Store, userID string) ToolFunc {
 	return func(ctx context.Context, rawArgs json.RawMessage) (string, error) {
 		var args deleteCronJobArgs
 		if err := json.Unmarshal(rawArgs, &args); err != nil {
@@ -147,7 +147,7 @@ func makeDeleteCronJob(st store.Store, tenantID string) ToolFunc {
 		if args.ID == "" {
 			return "", fmt.Errorf("id is required")
 		}
-		if err := st.DeleteCronJob(ctx, tenantID, args.ID); err != nil {
+		if err := st.DeleteCronJob(ctx, args.ID); err != nil {
 			return "", fmt.Errorf("delete cron job: %w", err)
 		}
 		return fmt.Sprintf("Cron job %s deleted.", args.ID), nil

@@ -52,12 +52,13 @@ func resetCmd() *cobra.Command {
 				return fmt.Errorf("aborted: use --yes flag to confirm")
 			}
 
-			homeDir, err := config.HomeDir()
+			_ = config.MigrateLegacyLayout()
+			userDir, err := config.UserDir(config.DefaultUserID)
 			if err != nil {
 				return err
 			}
 
-			agentsDir := filepath.Join(homeDir, "agents")
+			agentsDir := filepath.Join(userDir, "agents")
 			entries, err := os.ReadDir(agentsDir)
 			if err != nil {
 				if os.IsNotExist(err) {

@@ -1,0 +1,55 @@
+## FastClaw Helm Chart — default values
+
+image:
+  repository: fastclaw/fastclaw
+  tag: latest
+  pullPolicy: IfNotPresent
+
+## Gateway
+gateway:
+  replicas: 2
+  port: 18953
+  mode: cloud           # "local" or "cloud"
+  adminToken: ""        # set via --set or secret; auto-generated if empty
+  rateLimit:
+    rpm: 60
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "2"
+      memory: 1Gi
+
+## Postgres (built-in)
+## Set enabled=false and externalDSN to use an external database.
+postgres:
+  enabled: true
+  image: postgres:16-alpine
+  password: "fastclaw-secret"
+  storage: 10Gi
+
+## Use an external Postgres instead of the built-in one.
+externalDSN: ""
+
+## Ingress
+ingress:
+  enabled: false
+  host: fastclaw.example.com
+  tls: false
+  tlsSecret: ""
+  annotations: {}
+
+## LLM provider defaults (written into user config template)
+provider:
+  name: ""              # e.g. "openai", "anthropic", "ollama"
+  apiKey: ""
+  apiBase: ""
+
+## Sandbox
+sandbox:
+  enabled: false
+  backend: docker       # "docker" or "e2b"
+  image: fastclaw/sandbox:latest
+  e2bApiKey: ""
+  e2bTemplate: base

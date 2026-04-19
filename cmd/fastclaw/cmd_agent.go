@@ -31,12 +31,13 @@ func agentCreateCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 
-			homeDir, err := config.HomeDir()
+			_ = config.MigrateLegacyLayout()
+			userDir, err := config.EnsureUserDir(config.DefaultUserID)
 			if err != nil {
 				return err
 			}
 
-			agentDir := filepath.Join(homeDir, "agents", name, "agent")
+			agentDir := filepath.Join(userDir, "agents", name, "agent")
 
 			if _, err := os.Stat(agentDir); err == nil {
 				return fmt.Errorf("agent %q already exists at %s", name, agentDir)
@@ -90,12 +91,13 @@ func agentListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List all agents",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			homeDir, err := config.HomeDir()
+			_ = config.MigrateLegacyLayout()
+			userDir, err := config.UserDir(config.DefaultUserID)
 			if err != nil {
 				return err
 			}
 
-			agentsDir := filepath.Join(homeDir, "agents")
+			agentsDir := filepath.Join(userDir, "agents")
 			entries, err := os.ReadDir(agentsDir)
 			if err != nil {
 				if os.IsNotExist(err) {

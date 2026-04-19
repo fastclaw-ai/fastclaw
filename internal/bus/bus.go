@@ -6,6 +6,7 @@ type InboundMessage struct {
 	AccountID    string   // account within the channel (e.g. which bot)
 	ChatID       string   // unique chat identifier within the channel
 	UserID       string   // user identifier
+	OwnerUserID  string   // fastclaw user that owns the agent (for multi-user routing)
 	MessageID    string   // unique message identifier within the chat
 	Text         string   // message text
 	PeerKind     string   // "group" or "dm"

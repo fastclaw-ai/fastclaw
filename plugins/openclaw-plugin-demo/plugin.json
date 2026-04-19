@@ -1,0 +1,10 @@
+{
+  "id": "openclaw-plugin-demo",
+  "name": "OpenClaw Plugin Demo",
+  "version": "0.1.0",
+  "description": "A demo plugin showing how to bridge an OpenClaw plugin to FastClaw via openclaw-proxy",
+  "type": "tool",
+  "command": "node ../../tools/openclaw-plugin-bridge/proxy.js ./plugin.js",
+  "capabilities": ["tool"],
+  "config": {}
+}

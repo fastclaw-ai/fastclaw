@@ -2,14 +2,12 @@ package setup
 
 import (
 	"net/http"
-
-	"github.com/fastclaw-ai/fastclaw/internal/config"
 )
 
 // --- Channels ---
 
 func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) {
-	cfg, err := config.Load()
+	cfg, err := s.loadUserConfig(r)
 	if err != nil {
 		jsonResponse(w, http.StatusOK, []any{})
 		return

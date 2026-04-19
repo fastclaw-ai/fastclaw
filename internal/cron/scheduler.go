@@ -25,13 +25,14 @@ const (
 
 // Job defines a scheduled job.
 type Job struct {
-	Name     string  `json:"name"`
-	Type     JobType `json:"type"`
-	Schedule string  `json:"schedule"` // depends on type
-	AgentID  string  `json:"agentId"`
-	Channel  string  `json:"channel"`  // channel to send results back through
-	ChatID   string  `json:"chatId"`   // chat to send results to
-	Message  string  `json:"message"`  // message to send to the agent
+	Name        string  `json:"name"`
+	Type        JobType `json:"type"`
+	Schedule    string  `json:"schedule"` // depends on type
+	AgentID     string  `json:"agentId"`
+	Channel     string  `json:"channel"`  // channel to send results back through
+	ChatID      string  `json:"chatId"`   // chat to send results to
+	Message     string  `json:"message"`  // message to send to the agent
+	OwnerUserID string  `json:"ownerUserId,omitempty"` // fastclaw user that owns this job
 }
 
 // CronConfig holds cron job configuration.
@@ -49,6 +50,7 @@ type StoreInterface interface {
 // StoreJob mirrors store.CronJobRecord to avoid import cycle.
 type StoreJob struct {
 	ID       string
+	UserID   string // owning fastclaw user
 	AgentID  string
 	Name     string
 	Type     string
@@ -164,11 +166,12 @@ func (s *Scheduler) processDueJobs(ctx context.Context) {
 		}
 
 		s.bus.Inbound <- bus.InboundMessage{
-			Channel:  j.Channel,
-			ChatID:   j.ChatID,
-			UserID:   "cron",
-			Text:     text,
-			PeerKind: "dm",
+			Channel:     j.Channel,
+			ChatID:      j.ChatID,
+			UserID:      "cron",
+			OwnerUserID: j.UserID,
+			Text:        text,
+			PeerKind:    "dm",
 		}
 
 		// Calculate next run (simple: add 60s for now; real implementation would parse schedule)
@@ -304,7 +307,7 @@ func fieldMatch(field string, value int) bool {
 }
 
 func (s *Scheduler) fireJob(job Job) {
-	slog.Info("cron job firing", "name", job.Name, "agent", job.AgentID)
+	slog.Info("cron job firing", "name", job.Name, "agent", job.AgentID, "owner", job.OwnerUserID)
 
 	text := job.Message
 	if text == "" {
@@ -312,11 +315,12 @@ func (s *Scheduler) fireJob(job Job) {
 	}
 
 	s.bus.Inbound <- bus.InboundMessage{
-		Channel:  job.Channel,
-		ChatID:   job.ChatID,
-		UserID:   "cron",
-		Text:     text,
-		PeerKind: "dm",
+		Channel:     job.Channel,
+		ChatID:      job.ChatID,
+		UserID:      "cron",
+		OwnerUserID: job.OwnerUserID,
+		Text:        text,
+		PeerKind:    "dm",
 	}
 }
 

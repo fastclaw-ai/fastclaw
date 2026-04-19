@@ -1,0 +1,171 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fastclaw-config
+  namespace: fastclaw
+data:
+  fastclaw.json: |
+    {
+      "providers": {},
+      "agents": {
+        "defaults": {
+          "model": "gpt-4o",
+          "maxTokens": 8192,
+          "temperature": 0.7,
+          "maxToolIterations": 20
+        },
+        "list": []
+      },
+      "channels": {},
+      "gateway": {
+        "mode": "cloud",
+        "bind": "all",
+        "port": 18953,
+        "auth": {
+          "mode": "token",
+          "token": ""
+        },
+        "rateLimit": { "rpm": 60 },
+        "http": {
+          "endpoints": {
+            "chatCompletions": { "enabled": true },
+            "agents": { "enabled": true }
+          }
+        }
+      },
+      "storage": {
+        "type": "postgres",
+        "dsn": "",
+        "autoMigrate": true
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fastclaw-gateway
+  namespace: fastclaw
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: fastclaw-gateway
+  template:
+    metadata:
+      labels:
+        app: fastclaw-gateway
+    spec:
+      initContainers:
+      # Seed the config into the user dir on first boot.
+      - name: init-config
+        image: fastclaw/fastclaw:latest
+        command: ["sh", "-c"]
+        args:
+        - |
+          mkdir -p /data/.fastclaw/users/local
+          if [ ! -f /data/.fastclaw/users/local/fastclaw.json ]; then
+            cp /config/fastclaw.json /data/.fastclaw/users/local/fastclaw.json
+            # Patch DSN from secret
+            sed -i "s|\"dsn\": \"\"|\"dsn\": \"$STORAGE_DSN\"|" /data/.fastclaw/users/local/fastclaw.json
+            # Patch admin token from secret
+            sed -i "s|\"token\": \"\"|\"token\": \"$ADMIN_TOKEN\"|" /data/.fastclaw/users/local/fastclaw.json
+          fi
+        env:
+        - name: HOME
+          value: /data
+        - name: STORAGE_DSN
+          valueFrom:
+            secretKeyRef:
+              name: fastclaw-db
+              key: dsn
+        - name: ADMIN_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: fastclaw-admin
+              key: token
+        volumeMounts:
+        - name: data
+          mountPath: /data/.fastclaw
+        - name: config
+          mountPath: /config
+      containers:
+      - name: gateway
+        image: fastclaw/fastclaw:latest
+        args: ["gateway"]
+        env:
+        - name: HOME
+          value: /data
+        ports:
+        - containerPort: 18953
+          name: http
+        volumeMounts:
+        - name: data
+          mountPath: /data/.fastclaw
+        resources:
+          requests:
+            cpu: 250m
+            memory: 256Mi
+          limits:
+            cpu: "2"
+            memory: 1Gi
+        readinessProbe:
+          httpGet:
+            path: /api/status
+            port: 18953
+          initialDelaySeconds: 3
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /api/status
+            port: 18953
+          initialDelaySeconds: 10
+          periodSeconds: 30
+      volumes:
+      - name: data
+        emptyDir: {}
+      - name: config
+        configMap:
+          name: fastclaw-config
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: fastclaw-admin
+  namespace: fastclaw
+type: Opaque
+stringData:
+  token: "change-me-generate-with-openssl-rand-hex-32"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fastclaw-gateway
+  namespace: fastclaw
+spec:
+  selector:
+    app: fastclaw-gateway
+  ports:
+  - port: 18953
+    name: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: fastclaw
+  namespace: fastclaw
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/affinity: "cookie"
+spec:
+  rules:
+  - host: fastclaw.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: fastclaw-gateway
+            port:
+              number: 18953

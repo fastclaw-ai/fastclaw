@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -28,13 +29,12 @@ func (g *Gateway) startConfigWatcher(ctx context.Context, wg *sync.WaitGroup) {
 	}
 	defer watcher.Close()
 
-	// Watch config directory
-	homeDir, err := config.HomeDir()
+	// Watch the default user's config directory for fastclaw.json changes.
+	configPath, err := config.UserConfigPath(config.DefaultUserID)
 	if err != nil {
 		slog.Error("cannot determine config dir for watcher", "error", err)
 		return
 	}
-	configPath := filepath.Join(homeDir, "fastclaw.json")
 	configDir := filepath.Dir(configPath)
 
 	if err := watcher.Add(configDir); err != nil {
@@ -43,12 +43,12 @@ func (g *Gateway) startConfigWatcher(ctx context.Context, wg *sync.WaitGroup) {
 	}
 	slog.Info("config watcher started", "path", configDir)
 
-	// Also watch agent workspace directories for SOUL.md, AGENTS.md, etc.
+	// Also watch agent home directories for SOUL.md, AGENTS.md, etc.
 	for _, ag := range g.agents.All() {
-		wsPath := ag.WorkspacePath()
-		if wsPath != "" {
-			if err := watcher.Add(wsPath); err != nil {
-				slog.Warn("failed to watch workspace", "path", wsPath, "error", err)
+		hPath := ag.HomePath()
+		if hPath != "" {
+			if err := watcher.Add(hPath); err != nil {
+				slog.Warn("failed to watch agent home", "path", hPath, "error", err)
 			}
 		}
 	}
@@ -149,60 +149,83 @@ func (g *Gateway) reloadConfig() {
 	slog.Info("hot-reload complete ✅")
 }
 
-// reloadProvider updates the LLM provider if API key/base changed.
-func (g *Gateway) reloadProvider(newCfg *config.Config) {
-	var newProvCfg config.ProviderConfig
+// resolveProviderCfg picks the active provider config from a Config.
+func resolveProviderCfg(cfg *config.Config) config.ProviderConfig {
+	var pc config.ProviderConfig
+	defaultModel := cfg.Agents.Defaults.Model
+	if parts := strings.SplitN(defaultModel, "/", 2); len(parts) == 2 {
+		if p, ok := cfg.Providers[parts[0]]; ok {
+			return p
+		}
+	}
 	for _, key := range []string{"default", "openai", "openrouter"} {
-		if p, ok := newCfg.Providers[key]; ok {
-			newProvCfg = p
-			break
+		if p, ok := cfg.Providers[key]; ok {
+			return p
 		}
 	}
-	if newProvCfg.APIKey == "" {
-		for _, p := range newCfg.Providers {
-			newProvCfg = p
-			break
-		}
+	for _, p := range cfg.Providers {
+		return p
 	}
+	return pc
+}
 
-	// Check if provider actually changed
+// reloadProvider updates the LLM provider if API key/base/type changed.
+func (g *Gateway) reloadProvider(newCfg *config.Config) {
+	newProvCfg := resolveProviderCfg(newCfg)
+
 	g.mu.RLock()
 	oldCfg := g.config
 	g.mu.RUnlock()
 
-	var oldProvCfg config.ProviderConfig
-	for _, key := range []string{"default", "openai", "openrouter"} {
-		if p, ok := oldCfg.Providers[key]; ok {
-			oldProvCfg = p
-			break
-		}
-	}
-	if oldProvCfg.APIKey == "" {
-		for _, p := range oldCfg.Providers {
-			oldProvCfg = p
-			break
-		}
-	}
+	oldProvCfg := resolveProviderCfg(oldCfg)
 
-	if newProvCfg.APIKey != oldProvCfg.APIKey || newProvCfg.APIBase != oldProvCfg.APIBase {
-		llm := provider.NewOpenAI(newProvCfg.APIKey, newProvCfg.APIBase)
+	if newProvCfg.APIKey != oldProvCfg.APIKey || newProvCfg.APIBase != oldProvCfg.APIBase || newProvCfg.APIType != oldProvCfg.APIType {
+		llm := provider.NewProvider(newProvCfg.APIKey, newProvCfg.APIBase, newProvCfg.APIType)
 		g.agents.UpdateProvider(llm)
-		slog.Info("hot-reload: provider updated", "apiBase", newProvCfg.APIBase)
+		slog.Info("hot-reload: provider updated", "apiBase", newProvCfg.APIBase, "apiType", newProvCfg.APIType)
 	}
 }
 
-// reloadAgents updates agent model settings from new config.
+// reloadAgents adds new agents, updates configs on existing ones, and removes
+// agents that no longer have a workspace on disk.
 func (g *Gateway) reloadAgents(newCfg *config.Config) {
 	resolved := config.ResolveAgents(newCfg)
+	seen := make(map[string]bool, len(resolved))
 	for _, rc := range resolved {
+		seen[rc.ID] = true
 		ag := g.agents.AgentByID(rc.ID)
 		if ag == nil {
-			slog.Info("hot-reload: new agent detected (restart required to add)", "id", rc.ID)
+			if err := g.agents.AddAgent(rc, g.localSpace.Provider, g.bus); err != nil {
+				slog.Error("hot-reload: failed to add agent", "id", rc.ID, "error", err)
+			} else {
+				slog.Info("hot-reload: new agent added", "id", rc.ID, "model", rc.Model)
+			}
 			continue
 		}
 		ag.UpdateConfig(rc)
 		slog.Info("hot-reload: agent config updated", "id", rc.ID, "model", rc.Model)
 	}
+	// Remove agents that disappeared from disk.
+	for _, existing := range g.agents.All() {
+		if !seen[existing.Name()] {
+			g.agents.RemoveAgent(existing.Name())
+		}
+	}
+}
+
+// ReloadAgents is the public entrypoint used by the HTTP API after an agent
+// is created / updated / deleted via the web UI. It reloads the local user's
+// config and syncs the in-memory agent manager with disk.
+func (g *Gateway) ReloadAgents() error {
+	newCfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	g.reloadAgents(newCfg)
+	g.mu.Lock()
+	g.config = newCfg
+	g.mu.Unlock()
+	return nil
 }
 
 // reloadCron updates the cron scheduler with new jobs.
@@ -260,19 +283,20 @@ func (g *Gateway) reloadTeams(newCfg *config.Config) {
 	}
 }
 
-// reloadWorkspaceFile handles changes to agent workspace files (SOUL.md, etc.)
+// reloadWorkspaceFile handles changes to agent identity files (SOUL.md, etc.)
+// stored in the agent's home directory.
 func (g *Gateway) reloadWorkspaceFile(fullPath, filename string) {
-	wsDir := filepath.Dir(fullPath)
+	dir := filepath.Dir(fullPath)
 
-	// Find which agent owns this workspace
+	// Find which agent owns this home dir
 	for _, ag := range g.agents.All() {
-		if ag.WorkspacePath() == wsDir {
+		if ag.HomePath() == dir {
 			ag.ReloadWorkspaceFiles()
-			slog.Info("hot-reload: workspace file updated", "agent", ag.Name(), "file", filename)
+			slog.Info("hot-reload: agent home file updated", "agent", ag.Name(), "file", filename)
 			return
 		}
 	}
-	slog.Warn("hot-reload: changed file doesn't match any agent workspace", "path", fullPath)
+	slog.Warn("hot-reload: changed file doesn't match any agent home", "path", fullPath)
 }
 
 // Minimal channel hot-reload: new channels require restart,

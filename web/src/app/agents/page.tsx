@@ -65,8 +65,7 @@ export default function AgentsPage() {
   const [saving, setSaving] = useState(false);
 
   const [newName, setNewName] = useState("");
-  const [newModel, setNewModel] = useState("gpt-4o");
-  const [newSoul, setNewSoul] = useState("");
+  const [createError, setCreateError] = useState<string | null>(null);
 
   const [editModel, setEditModel] = useState("");
   const [editSoul, setEditSoul] = useState("");
@@ -86,12 +85,15 @@ export default function AgentsPage() {
   const handleCreate = async () => {
     if (!newName.trim()) return;
     setSaving(true);
-    await createAgent({ id: newName.trim(), model: newModel, soul: newSoul });
+    setCreateError(null);
+    const resp = await createAgent({ id: newName.trim() });
+    setSaving(false);
+    if (resp && resp.ok === false) {
+      setCreateError(resp.error || "Failed to create agent");
+      return;
+    }
     setCreateOpen(false);
     setNewName("");
-    setNewModel("gpt-4o");
-    setNewSoul("");
-    setSaving(false);
     fetchAgents();
   };
 
@@ -171,7 +173,7 @@ export default function AgentsPage() {
                 <TableRow
                   key={agent.id}
                   className="cursor-pointer hover:bg-muted/50 transition-colors"
-                  onClick={() => handleEdit(agent)}
+                  onClick={() => window.location.href = `/agents/${agent.id}/chat/`}
                 >
                   <TableCell>
                     <div className="flex items-center gap-3">
@@ -239,7 +241,7 @@ export default function AgentsPage() {
       </div>
 
       {/* Create Dialog */}
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+      <Dialog open={createOpen} onOpenChange={(v) => { setCreateOpen(v); if (!v) { setCreateError(null); setNewName(""); } }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Create New Agent</DialogTitle>
@@ -252,34 +254,15 @@ export default function AgentsPage() {
               <Label>Agent Name</Label>
               <Input
                 value={newName}
-                onChange={(e) => setNewName(e.target.value)}
+                onChange={(e) => { setNewName(e.target.value); setCreateError(null); }}
                 placeholder="my-agent"
               />
-            </div>
-            <div className="space-y-2">
-              <Label>Model</Label>
-              <Select value={newModel} onValueChange={(v) => v && setNewModel(v)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {models.map((m) => (
-                    <SelectItem key={m} value={m}>
-                      {m}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label>Personality (SOUL.md)</Label>
-              <Textarea
-                value={newSoul}
-                onChange={(e) => setNewSoul(e.target.value)}
-                placeholder="You are a helpful AI assistant..."
-                rows={4}
-                className="resize-none"
-              />
+              <p className="text-xs text-muted-foreground">
+                Public identifier — used in URLs and bot handles. Globally unique, 3–32 chars, lowercase letters / digits / hyphens.
+              </p>
+              {createError && (
+                <p className="text-xs text-destructive">{createError}</p>
+              )}
             </div>
           </div>
           <DialogFooter>

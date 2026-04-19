@@ -23,10 +23,12 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { testProvider, saveConfig } from "@/lib/api";
+import { login as loginWithToken } from "@/lib/auth";
 
-const PROVIDERS: Record<string, { apiBase: string; models: string[] }> = {
+const PROVIDERS: Record<string, { apiBase: string; apiType: string; models: string[] }> = {
   openrouter: {
     apiBase: "https://openrouter.ai/api/v1",
+    apiType: "openai-chat",
     models: [
       "openai/gpt-5.4",
       "anthropic/claude-sonnet-4.6",
@@ -35,22 +37,36 @@ const PROVIDERS: Record<string, { apiBase: string; models: string[] }> = {
   },
   ollama: {
     apiBase: "http://localhost:11434/v1",
+    apiType: "openai-chat",
     models: ["llama3", "mistral", "codellama"],
   },
-  custom: { apiBase: "", models: [] },
+  custom: { apiBase: "", apiType: "openai-chat", models: [] },
 };
+
+const API_TYPE_OPTIONS = [
+  { value: "openai-chat", label: "OpenAI Completions" },
+  { value: "anthropic-messages", label: "Anthropic Messages" },
+];
+
+const AUTH_TYPE_OPTIONS = [
+  { value: "api-key", label: "API Key" },
+  { value: "bearer-token", label: "Bearer Token" },
+];
 
 interface OnboardConfig {
   provider: string;
   providerName: string;
   apiBase: string;
   apiKey: string;
+  apiType: string;
+  authType: string;
   model: string;
   telegramEnabled: boolean;
   telegramToken: string;
   port: number;
   agentName: string;
   personality: string;
+  gatewayToken: string; // returned after save, for display + auto-login
 }
 
 const STEP_LABELS = [
@@ -108,6 +124,8 @@ export default function OnboardPage() {
     providerName: "openrouter",
     apiBase: "https://openrouter.ai/api/v1",
     apiKey: "",
+    apiType: "openai-chat",
+    authType: "api-key",
     model: "openai/gpt-5.4",
     telegramEnabled: false,
     telegramToken: "",
@@ -115,6 +133,7 @@ export default function OnboardPage() {
     agentName: "FastClaw",
     personality:
       "You are a helpful, friendly AI assistant. You respond concisely and accurately.",
+    gatewayToken: "",
   });
   const [testStatus, setTestStatus] = useState<
     "idle" | "testing" | "success" | "error"
@@ -122,7 +141,7 @@ export default function OnboardPage() {
   const [testError, setTestError] = useState("");
   const [showConfetti, setShowConfetti] = useState(false);
   const [launched, setLaunched] = useState(false);
-  const [jsonExpanded, setJsonExpanded] = useState(false);
+  const [copiedToken, setCopiedToken] = useState(false);
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -136,6 +155,18 @@ export default function OnboardPage() {
     []
   );
 
+  // Generate gateway token when entering the final step
+  useEffect(() => {
+    if (step === 3 && !config.gatewayToken) {
+      const chars = "abcdef0123456789";
+      let token = "";
+      for (let i = 0; i < 64; i++) {
+        token += chars[Math.floor(Math.random() * chars.length)];
+      }
+      updateConfig({ gatewayToken: token });
+    }
+  }, [step, config.gatewayToken, updateConfig]);
+
   const handleProviderChange = useCallback(
     (provider: string | null) => {
       if (!provider) return;
@@ -144,6 +175,7 @@ export default function OnboardPage() {
         provider,
         providerName: provider === "custom" ? "" : provider,
         apiBase: preset.apiBase,
+        apiType: preset.apiType,
         model: preset.models[0] || "",
       });
       setTestStatus("idle");
@@ -159,35 +191,42 @@ export default function OnboardPage() {
         apiBase: config.apiBase,
         apiKey: config.apiKey,
         model: config.model,
+        apiType: config.apiType,
+        authType: config.authType,
       });
       if (result.ok) {
         setTestStatus("success");
       } else {
+        const urlInfo = result.url ? `\nRequest URL: ${result.url}` : "";
         setTestStatus("error");
-        setTestError(result.error || "Connection failed");
+        setTestError((result.error || "Connection failed") + urlInfo);
       }
     } catch {
       setTestStatus("error");
       setTestError("Could not reach the server. Is FastClaw running?");
     }
-  }, [config.apiBase, config.apiKey, config.model]);
+  }, [config.apiBase, config.apiKey, config.model, config.apiType, config.authType]);
 
   const handleLaunch = useCallback(async () => {
+    // Auto-login before saving (in case the server restarts and drops the connection)
+    if (config.gatewayToken) {
+      loginWithToken(config.gatewayToken);
+    }
+
     try {
       await saveConfig(config as unknown as Record<string, unknown>);
-      setShowConfetti(true);
-      setLaunched(true);
-      setTimeout(() => setShowConfetti(false), 4000);
-      setTimeout(() => {
-        const port = config.port || window.location.port;
-        window.location.href = `http://localhost:${port}/chat/`;
-      }, 3000);
     } catch {
-      setLaunched(true);
-      setShowConfetti(true);
-      setTimeout(() => setShowConfetti(false), 4000);
+      // Server may restart mid-request — that's expected
     }
-  }, [config, router]);
+
+    setShowConfetti(true);
+    setLaunched(true);
+    setTimeout(() => setShowConfetti(false), 4000);
+    // Wait for server to restart, then redirect
+    setTimeout(() => {
+      window.location.href = "/overview/";
+    }, 3000);
+  }, [config]);
 
   const canProceed = useCallback(() => {
     switch (step) {
@@ -368,6 +407,49 @@ export default function OnboardPage() {
                   }
                   className="font-mono text-sm"
                 />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>API Type</Label>
+                  <Select
+                    value={config.apiType}
+                    onValueChange={(v) => v && updateConfig({ apiType: v })}
+                  >
+                    <SelectTrigger className="w-full text-sm">
+                      <SelectValue>
+                        {API_TYPE_OPTIONS.find((o) => o.value === config.apiType)?.label}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {API_TYPE_OPTIONS.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Auth Type</Label>
+                  <Select
+                    value={config.authType}
+                    onValueChange={(v) => v && updateConfig({ authType: v })}
+                  >
+                    <SelectTrigger className="w-full text-sm">
+                      <SelectValue>
+                        {AUTH_TYPE_OPTIONS.find((o) => o.value === config.authType)?.label}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {AUTH_TYPE_OPTIONS.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
 
               <div className="space-y-2">
@@ -579,30 +661,35 @@ export default function OnboardPage() {
                     />
                   </div>
 
-                  <button
-                    onClick={() => setJsonExpanded(!jsonExpanded)}
-                    className="flex w-full items-center justify-between rounded-lg border border-border bg-muted/30 px-4 py-2.5 text-sm text-muted-foreground transition-colors hover:bg-muted/50"
-                  >
-                    <span>JSON Preview</span>
-                    <svg
-                      className={`h-4 w-4 transition-transform ${jsonExpanded ? "rotate-180" : ""}`}
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M19 9l-7 7-7-7"
-                      />
-                    </svg>
-                  </button>
-                  {jsonExpanded && (
-                    <pre className="max-h-64 overflow-auto rounded-lg border border-border bg-background p-4 font-mono text-xs text-muted-foreground">
-                      {JSON.stringify(config, null, 2)}
-                    </pre>
-                  )}
+                  <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4 space-y-2">
+                    <p className="text-sm font-medium text-amber-500">Admin Token</p>
+                    <p className="text-xs text-muted-foreground">
+                      Save this token — you&apos;ll need it to log in to the admin dashboard.
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <code className="flex-1 rounded-md bg-background px-3 py-2 font-mono text-xs break-all select-all">
+                        {config.gatewayToken || "auto-generated on launch"}
+                      </code>
+                      <button
+                        onClick={() => {
+                          const token = config.gatewayToken;
+                          if (token) {
+                            navigator.clipboard.writeText(token);
+                            setCopiedToken(true);
+                            setTimeout(() => setCopiedToken(false), 2000);
+                          }
+                        }}
+                        className="shrink-0 rounded-md border border-border p-2 text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+                        title="Copy token"
+                      >
+                        {copiedToken ? (
+                          <svg className="h-4 w-4 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
+                        ) : (
+                          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+                        )}
+                      </button>
+                    </div>
+                  </div>
 
                   <Button
                     onClick={handleLaunch}

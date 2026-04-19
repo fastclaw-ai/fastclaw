@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/fastclaw-ai/fastclaw/internal/config"
 )
 
 // CredentialEntry represents a stored credential.
@@ -24,26 +26,30 @@ type CredentialEntry struct {
 
 // CredentialManager handles secure credential storage and retrieval.
 type CredentialManager struct {
-	masterKey []byte
-	entries   map[string]*CredentialEntry
-	storePath string
-	mu        sync.RWMutex
+	masterKey     []byte
+	entries       map[string]*CredentialEntry
+	storePath     string
+	needsReencrypt bool // true after legacy-key fallback decrypt
+	mu            sync.RWMutex
 }
 
-// NewCredentialManager creates a new credential manager.
+// NewCredentialManager creates a new credential manager for the default user.
 // If passphrase is empty, uses a machine-derived key.
 func NewCredentialManager(passphrase string) (*CredentialManager, error) {
-	home, err := os.UserHomeDir()
+	return NewCredentialManagerForUser(config.DefaultUserID, passphrase)
+}
+
+// NewCredentialManagerForUser creates a credential manager scoped to a specific
+// user. Credentials live at ~/.fastclaw/users/{userID}/credentials.json and
+// are encrypted with a key derived from the user ID, so one user's file
+// cannot be decrypted with another user's key even if moved on disk.
+func NewCredentialManagerForUser(userID, passphrase string) (*CredentialManager, error) {
+	storeDir, err := config.EnsureUserDir(userID)
 	if err != nil {
-		return nil, fmt.Errorf("get home dir: %w", err)
+		return nil, fmt.Errorf("ensure user dir: %w", err)
 	}
 
-	storeDir := filepath.Join(home, ".fastclaw")
-	if err := os.MkdirAll(storeDir, 0o700); err != nil {
-		return nil, fmt.Errorf("create store dir: %w", err)
-	}
-
-	key := deriveKey(passphrase)
+	key := deriveKeyForUser(userID, passphrase)
 
 	cm := &CredentialManager{
 		masterKey: key,
@@ -55,6 +61,14 @@ func NewCredentialManager(passphrase string) (*CredentialManager, error) {
 	if err := cm.load(); err != nil && !os.IsNotExist(err) {
 		// If decryption fails, start fresh
 		cm.entries = make(map[string]*CredentialEntry)
+	}
+
+	// If we decrypted with the legacy key, immediately re-save with the
+	// new per-user key so the file is migrated on disk.
+	if cm.needsReencrypt {
+		if err := cm.save(); err == nil {
+			cm.needsReencrypt = false
+		}
 	}
 
 	return cm, nil
@@ -230,20 +244,51 @@ func (cm *CredentialManager) load() error {
 
 	decrypted, err := decrypt(data, cm.masterKey)
 	if err != nil {
-		return fmt.Errorf("decrypt credentials: %w", err)
+		// Fallback: try legacy key format (pre-multiuser) so existing
+		// installs don't lose their stored credentials after upgrading.
+		legacyKey := legacyDeriveKey()
+		decrypted, err = decrypt(data, legacyKey)
+		if err != nil {
+			return fmt.Errorf("decrypt credentials: %w", err)
+		}
+		cm.needsReencrypt = true
 	}
 
 	return json.Unmarshal(decrypted, &cm.entries)
 }
 
+// legacyDeriveKey returns the old (pre-multiuser) machine-derived key so
+// we can decrypt credentials files created before per-user KEK was added.
+func legacyDeriveKey() []byte {
+	hostname, _ := os.Hostname()
+	home, _ := os.UserHomeDir()
+	hash := sha256.Sum256([]byte("fastclaw:" + hostname + ":" + home))
+	return hash[:]
+}
+
 func deriveKey(passphrase string) []byte {
-	if passphrase == "" {
-		// Use machine-derived key from hostname + home dir
+	return deriveKeyForUser(config.DefaultUserID, passphrase)
+}
+
+// deriveKeyForUser mixes the user ID into the encryption key so that each
+// user's credentials file is encrypted with a distinct KEK. In the absence
+// of an explicit passphrase, a machine-derived seed (hostname + home) is
+// still included so the same user ID yields different keys on different
+// hosts — preventing wholesale copy of the credentials file across hosts
+// from decrypting.
+func deriveKeyForUser(userID, passphrase string) []byte {
+	if userID == "" {
+		userID = config.DefaultUserID
+	}
+	var seed string
+	if passphrase != "" {
+		seed = "fastclaw:user:" + userID + ":pp:" + passphrase
+	} else {
 		hostname, _ := os.Hostname()
 		home, _ := os.UserHomeDir()
-		passphrase = "fastclaw:" + hostname + ":" + home
+		seed = "fastclaw:user:" + userID + ":host:" + hostname + ":" + home
 	}
-	hash := sha256.Sum256([]byte(passphrase))
+	hash := sha256.Sum256([]byte(seed))
 	return hash[:]
 }
 

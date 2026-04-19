@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
 import { ThemeProvider } from "@/components/theme-provider";
+import { AuthGuard } from "@/components/auth-guard";
 import "./globals.css";
 import { cn } from "@/lib/utils";
 
@@ -50,7 +51,7 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        <ThemeProvider>{children}</ThemeProvider>
+        <ThemeProvider><AuthGuard>{children}</AuthGuard></ThemeProvider>
       </body>
     </html>
   );

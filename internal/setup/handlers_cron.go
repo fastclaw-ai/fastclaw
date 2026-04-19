@@ -11,7 +11,7 @@ import (
 // --- Cron Jobs ---
 
 func (s *Server) handleListCronJobs(w http.ResponseWriter, r *http.Request) {
-	cfg, err := config.Load()
+	cfg, err := s.loadUserConfig(r)
 	if err != nil {
 		jsonResponse(w, http.StatusOK, []any{})
 		return
@@ -53,7 +53,7 @@ func (s *Server) handleCreateCronJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg, err := config.Load()
+	cfg, err := s.loadUserConfig(r)
 	if err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
 		return
@@ -69,7 +69,7 @@ func (s *Server) handleCreateCronJob(w http.ResponseWriter, r *http.Request) {
 		Message:  req.Message,
 	})
 
-	if err := saveConfigFile(cfg); err != nil {
+	if err := s.saveUserConfig(r, cfg); err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
@@ -105,7 +105,7 @@ func (s *Server) handleDeleteCronJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg, err := config.Load()
+	cfg, err := s.loadUserConfig(r)
 	if err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
 		return
@@ -118,7 +118,7 @@ func (s *Server) handleDeleteCronJob(w http.ResponseWriter, r *http.Request) {
 
 	cfg.CronJobs = append(cfg.CronJobs[:idx], cfg.CronJobs[idx+1:]...)
 
-	if err := saveConfigFile(cfg); err != nil {
+	if err := s.saveUserConfig(r, cfg); err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}

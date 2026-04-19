@@ -219,6 +219,23 @@ func (m *Manager) ToolPlugins() []*PluginInstance {
 	return result
 }
 
+// HookPlugins returns all running plugins that provide hook capability.
+func (m *Manager) HookPlugins() []*PluginInstance {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var result []*PluginInstance
+	for _, inst := range m.plugins {
+		if !inst.Enabled || inst.Process == nil || !inst.Process.IsRunning() {
+			continue
+		}
+		if hasCapability(inst.Manifest, "hook") {
+			result = append(result, inst)
+		}
+	}
+	return result
+}
+
 // ListTools queries a plugin for its available tools.
 func (m *Manager) ListTools(ctx context.Context, pluginID string) ([]ToolDef, error) {
 	inst := m.Plugin(pluginID)
