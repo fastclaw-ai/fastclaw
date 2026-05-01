@@ -66,6 +66,7 @@ func (c *HTTPClient) sendRequest(method string, params interface{}) (*jsonRPCRes
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/json, text/event-stream")
 	for k, v := range c.headers {
 		httpReq.Header.Set(k, v)
 	}
@@ -85,6 +86,8 @@ func (c *HTTPClient) sendRequest(method string, params interface{}) (*jsonRPCRes
 		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
 	}
 
+	respBody = extractSSEPayload(respBody)
+
 	var rpcResp jsonRPCResponse
 	if err := json.Unmarshal(respBody, &rpcResp); err != nil {
 		return nil, fmt.Errorf("parse response: %w", err)
@@ -95,6 +98,26 @@ func (c *HTTPClient) sendRequest(method string, params interface{}) (*jsonRPCRes
 	}
 
 	return &rpcResp, nil
+}
+
+// extractSSEPayload extracts JSON from SSE response format.
+// Handles both plain JSON and SSE (event:/data:) responses.
+func extractSSEPayload(body []byte) []byte {
+	s := strings.TrimSpace(string(body))
+	if len(s) > 0 && s[0] == '{' {
+		return body
+	}
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "data:") {
+			payload := strings.TrimPrefix(line, "data:")
+			payload = strings.TrimSpace(payload)
+			if payload != "" {
+				return []byte(payload)
+			}
+		}
+	}
+	return body
 }
 
 // Connect initializes the connection with the MCP server.
