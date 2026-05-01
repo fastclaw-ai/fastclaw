@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	// DefaultTokenThreshold is the default threshold at which compaction triggers (80K tokens).
-	DefaultTokenThreshold = 80000
+	// DefaultTokenThreshold is the default threshold at which compaction triggers (150K tokens, for 200K context models).
+	DefaultTokenThreshold = 150000
 	// PruneTurnAge is the number of recent turns to keep intact; older messages get pruned.
 	PruneTurnAge = 20
 	// truncatedPlaceholder replaces pruned tool results.
