@@ -172,8 +172,9 @@ export default function AgentSkillsPage() {
         <div>
           <h2 className="text-2xl font-semibold tracking-tight">Skills</h2>
           <p className="text-sm text-muted-foreground mt-1">
-            Skills scoped to <strong>{agentName}</strong> — only this
-            agent sees them
+            Every skill <strong>{agentName}</strong> can use — badges
+            mark whether it's agent-private, user-wide, or global.
+            Install lands in this agent's private dir.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -227,9 +228,12 @@ export default function AgentSkillsPage() {
                   </div>
                   <div>
                     <p className="text-sm font-medium">{skill.name}</p>
-                    <Badge variant="outline" className="mt-1 text-[10px]">
-                      {skill.type || "skill"}
-                    </Badge>
+                    <div className="mt-1 flex flex-wrap items-center gap-1">
+                      <ScopeBadge scope={skill.scope} />
+                      <Badge variant="outline" className="text-[10px]">
+                        {skill.type || "skill"}
+                      </Badge>
+                    </div>
                   </div>
                 </div>
                 <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -242,14 +246,23 @@ export default function AgentSkillsPage() {
                   >
                     <Settings className="h-3.5 w-3.5" />
                   </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                    onClick={() => setDeleteTarget(skill.name)}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
+                  {/* Delete is agent-scope only — user-wide / global
+                      skills aren't owned by this dialog; trying to
+                      DELETE one through /api/agents/<id>/skills/<name>
+                      would 404 (or worse, succeed silently on a
+                      shadowed copy that doesn't exist). Hide the
+                      button to keep the affordance honest. */}
+                  {skill.scope === "agent" || skill.scope === undefined ? (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                      onClick={() => setDeleteTarget(skill.name)}
+                      title="Remove from this agent"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  ) : null}
                 </div>
               </div>
               <p className="text-sm text-muted-foreground line-clamp-2">
@@ -433,6 +446,29 @@ export default function AgentSkillsPage() {
         }}
       />
     </div>
+  );
+}
+
+// ScopeBadge surfaces which loader layer a listed skill came from so
+// the user can tell at a glance whether removing it from this dialog
+// will work (only agent-scope is deletable here) and whether the skill
+// is shared with their other agents. Colors are deliberately distinct:
+// agent (violet) reads as "mine to manage", user (amber) as "yours but
+// shared", global (zinc) as "platform-managed, hands-off".
+function ScopeBadge({ scope }: { scope?: SkillInfo["scope"] }) {
+  if (!scope) return null;
+  const label =
+    scope === "agent" ? "agent" : scope === "user" ? "user" : "global";
+  const tone =
+    scope === "agent"
+      ? "border-violet-500/40 text-violet-400"
+      : scope === "user"
+        ? "border-amber-500/40 text-amber-400"
+        : "border-zinc-500/40 text-zinc-400";
+  return (
+    <Badge variant="outline" className={`text-[10px] ${tone}`}>
+      {label}
+    </Badge>
   );
 }
 

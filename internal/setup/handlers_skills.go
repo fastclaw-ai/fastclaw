@@ -67,9 +67,20 @@ func (s *Server) handleDeleteSkill(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// handleListAgentSkills lists skills installed into an agent's own home
-// directory (~/.fastclaw/agents/<id>/skills/). Loader "Layer 1" picks
-// these up at the highest precedence — they're exclusive to the agent.
+// handleListAgentSkills lists every skill the agent actually sees at
+// runtime — the three layers the skill loader merges, with the innermost
+// layer winning when names collide:
+//
+//   - "agent":  ~/.fastclaw/agents/<id>/agent/skills/  (Layer 1)
+//   - "user":   ~/.fastclaw/users/<uid>/skills/         (Layer 1.3)
+//   - "global": ~/.fastclaw/skills/                     (Layer 2/3)
+//
+// Each entry carries a `scope` field so the UI can badge "agent" /
+// "user" / "global" and gate destructive actions (only agent-scope is
+// deletable from this dialog). Previously this endpoint only walked
+// Layer 1, which made user-scoped installs (the path skill-creator
+// uses by default, for instance) invisible — the agent loaded them at
+// chat time but no UI could see, configure, or remove them.
 func (s *Server) handleListAgentSkills(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	// Skill listing exposes per-skill env spec (which env keys the
@@ -79,24 +90,56 @@ func (s *Server) handleListAgentSkills(w http.ResponseWriter, r *http.Request) {
 	if s.requireAgentOwner(w, r, id) == nil {
 		return
 	}
-	homePath, err := config.AgentHomeDir(id)
-	if err != nil {
-		jsonResponse(w, http.StatusOK, []any{})
-		return
-	}
-	skillsDir := filepath.Join(homePath, "skills")
-	// Hydrate this agent's skills from object store on demand so replica
-	// pods that haven't yet cached the bundle still list it in the UI.
-	if s.workspaceStore != nil {
-		if err := skills.HydrateSkillsDown(r.Context(), s.workspaceStore, id, skillsDir); err != nil {
-			slog.Warn("failed to hydrate agent skills from object store",
-				"agent", id, "error", err)
+	uid := s.effectiveUserID(r)
+
+	// Hydrate agent-scope from object store on demand so replica pods
+	// that haven't yet cached the bundle still list it in the UI.
+	agentSkillsDir := ""
+	if homePath, err := config.AgentHomeDir(id); err == nil {
+		agentSkillsDir = filepath.Join(homePath, "skills")
+		if s.workspaceStore != nil {
+			if err := skills.HydrateSkillsDown(r.Context(), s.workspaceStore, id, agentSkillsDir); err != nil {
+				slog.Warn("failed to hydrate agent skills from object store",
+					"agent", id, "error", err)
+			}
 		}
 	}
-	out := scanSkillsDir(skillsDir)
-	if out == nil {
-		jsonResponse(w, http.StatusOK, []any{})
-		return
+
+	home, _ := config.HomeDir()
+	userSkillsDir := ""
+	globalSkillsDir := ""
+	if home != "" {
+		if uid != "" {
+			userSkillsDir = filepath.Join(home, "users", uid, "skills")
+		}
+		globalSkillsDir = filepath.Join(home, "skills")
+	}
+
+	// Merge in agent → user → global order so the innermost layer wins
+	// on name collisions (mirrors the runtime loader's precedence). The
+	// resulting list is stable per layer for predictable UI ordering.
+	seen := map[string]bool{}
+	out := []map[string]any{}
+	for _, layer := range []struct {
+		scope string
+		dir   string
+	}{
+		{"agent", agentSkillsDir},
+		{"user", userSkillsDir},
+		{"global", globalSkillsDir},
+	} {
+		if layer.dir == "" {
+			continue
+		}
+		for _, entry := range scanSkillsDir(layer.dir) {
+			name, _ := entry["name"].(string)
+			if name == "" || seen[name] {
+				continue
+			}
+			seen[name] = true
+			entry["scope"] = layer.scope
+			out = append(out, entry)
+		}
 	}
 	jsonResponse(w, http.StatusOK, out)
 }
