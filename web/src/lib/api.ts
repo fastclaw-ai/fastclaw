@@ -107,6 +107,14 @@ export interface SkillInfo {
   location: string;
   type: string;
   envSpec?: SkillEnvSpec[];
+  // scope is set on the per-agent listing endpoint
+  // (/api/agents/<id>/skills) to indicate which loader layer this skill
+  // came from:
+  //   - "agent":  agent-private (Layer 1), deletable from this dialog
+  //   - "user":   per-user (Layer 1.3), shared across the caller's agents
+  //   - "global": global (Layer 2/3), shared across all agents
+  // The global /api/skills endpoint leaves it undefined.
+  scope?: "agent" | "user" | "global";
 }
 
 export interface SkillEntryCfg {

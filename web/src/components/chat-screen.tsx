@@ -24,21 +24,44 @@ function urlTransform(url: string, key: string): string {
 // makeUrlTransform builds a urlTransform that also remaps sandbox
 // `/workspace/<name>` paths to the authenticated file API URL for the
 // active agent. Skills that produce a file return a sandbox path like
-// /workspace/img_xxx.png; the LLM puts that in `![](/workspace/...)`.
+// /workspace/img_xxx.png; the LLM puts that in `![](/workspace/...)`
+// for images and `[label](workspace/file.zip)` (commonmark eats the
+// leading slash on relative refs) for plain links.
+//
 // The docker bind-mount is session-scoped (host:
 // ~/.fastclaw/workspaces/<agent>/sessions/<sid>/ ↔ container:/workspace),
 // so the workspace.Store sees the file at sessions/<sid>/<name>. We
 // must prepend that prefix or the file API resolves against the agent
 // root and 404s.
+//
+// Without the href branch a click on `[file](workspace/x.zip)` navigates
+// the browser top-level to `/workspace/x.zip`, which no API route
+// handles. The SPA catch-all serves index.html, Next.js finds no
+// matching route, falls through to the root page, and the root page's
+// auth check redirects the (logged-in) user to /overview/. End result:
+// click "download" → land on /overview/. Rewriting hrefs the same way
+// as srcs sends the click to the proper authenticated file endpoint
+// with ?download=1 so it triggers a real download instead.
 function makeUrlTransform(agentId: string, sessionId: string) {
+  const rewriteWorkspace = (url: string, asDownload: boolean): string | null => {
+    // Tolerate both `/workspace/...` (LLM writes the absolute sandbox
+    // path) and `workspace/...` (commonmark / agents that drop the
+    // leading slash on relative refs).
+    let rel: string | null = null;
+    if (url.startsWith("/workspace/")) rel = url.slice("/workspace/".length);
+    else if (url.startsWith("workspace/")) rel = url.slice("workspace/".length);
+    if (rel === null) return null;
+    const scoped = sessionId ? `sessions/${sessionId}/${rel}` : rel;
+    return fileUrl(agentId, scoped, asDownload);
+  };
   return (url: string, key: string): string => {
     if (key === "src") {
       if (url.startsWith("data:image/")) return url;
-      if (url.startsWith("/workspace/")) {
-        const rel = url.slice("/workspace/".length);
-        const scoped = sessionId ? `sessions/${sessionId}/${rel}` : rel;
-        return fileUrl(agentId, scoped, false);
-      }
+      const rewritten = rewriteWorkspace(url, false);
+      if (rewritten !== null) return rewritten;
+    } else if (key === "href") {
+      const rewritten = rewriteWorkspace(url, true);
+      if (rewritten !== null) return rewritten;
     }
     return defaultUrlTransform(url);
   };
@@ -2689,6 +2712,7 @@ function FilesPanel({ agentId, files }: { agentId: string; files: ProducedFile[]
                 </button>
                 <a
                   href={downloadUrl}
+                  download={basename}
                   className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
                   title="Download"
                 >
@@ -2948,6 +2972,7 @@ function WorkspacePanel({
                     </span>
                     <a
                       href={downloadUrl}
+                      download={basename}
                       className="text-[11px] text-muted-foreground/70 whitespace-nowrap hover:text-foreground"
                       title="Download"
                     >
@@ -3036,6 +3061,7 @@ function FilePreview({ agentId, file, onClose }: { agentId: string; file: Produc
             )}
             <a
               href={downloadUrl}
+              download={basename}
               className="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted/50"
               title="Download"
             >
@@ -3094,7 +3120,7 @@ function FilePreview({ agentId, file, onClose }: { agentId: string; file: Produc
             <div className="flex flex-col items-center justify-center h-full gap-3 text-center">
               <File className="h-12 w-12 text-muted-foreground/50" />
               <p className="text-sm text-muted-foreground">Preview not available for this file type.</p>
-              <a href={downloadUrl} className="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90">
+              <a href={downloadUrl} download={basename} className="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90">
                 <Download className="h-3.5 w-3.5" /> Download
               </a>
             </div>

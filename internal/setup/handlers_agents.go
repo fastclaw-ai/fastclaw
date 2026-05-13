@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -971,6 +972,9 @@ func (s *Server) handleAgentFile(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Security-Policy", "sandbox allow-scripts")
 	}
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if r.URL.Query().Get("download") == "1" {
+		w.Header().Set("Content-Disposition", attachmentDisposition(rel))
+	}
 	http.ServeFile(w, r, abs)
 }
 
@@ -981,7 +985,7 @@ func (s *Server) serveFileFromWorkspaceStore(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	defer rc.Close()
-	setFileResponseHeaders(w, path)
+	setFileResponseHeaders(w, r, path)
 	io.Copy(w, rc)
 }
 
@@ -993,7 +997,15 @@ func (s *Server) serveFileFromWorkspaceStore(w http.ResponseWriter, r *http.Requ
 // `sandbox` header is the same protection the chat preview gets via the
 // iframe `sandbox` attribute, but applied at the HTTP layer so it kicks in
 // no matter how the file is loaded.
-func setFileResponseHeaders(w http.ResponseWriter, path string) {
+//
+// When the request carries `?download=1`, a `Content-Disposition: attachment`
+// header is emitted so the browser triggers a real download instead of
+// trying to render in-tab. Without it, a click on `<a href>` without a
+// `download` attribute can commit a top-level navigation to the API URL
+// — and once the address bar leaves the chat route, the SPA fallback
+// can resolve back to `/`, which the root page then redirects to
+// `/overview/`.
+func setFileResponseHeaders(w http.ResponseWriter, r *http.Request, path string) {
 	ext := strings.ToLower(filepath.Ext(path))
 	ctype := mime.TypeByExtension(ext)
 	if ctype == "" {
@@ -1004,6 +1016,29 @@ func setFileResponseHeaders(w http.ResponseWriter, path string) {
 	if ext == ".html" || ext == ".htm" {
 		w.Header().Set("Content-Security-Policy", "sandbox allow-scripts")
 	}
+	if r != nil && r.URL.Query().Get("download") == "1" {
+		w.Header().Set("Content-Disposition", attachmentDisposition(path))
+	}
+}
+
+// attachmentDisposition builds an RFC 6266 Content-Disposition value
+// that names the file with both an ASCII fallback (for legacy agents)
+// and a UTF-8 percent-encoded form so Chinese / spaced filenames don't
+// arrive as `_______.zip`.
+func attachmentDisposition(path string) string {
+	base := filepath.Base(path)
+	// ASCII fallback: replace anything outside printable ASCII with `_`
+	// and strip quotes so the quoted-string stays well-formed.
+	var ascii strings.Builder
+	for _, r := range base {
+		if r < 0x20 || r > 0x7e || r == '"' || r == '\\' {
+			ascii.WriteByte('_')
+			continue
+		}
+		ascii.WriteRune(r)
+	}
+	return fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`,
+		ascii.String(), url.PathEscape(base))
 }
 
 func (s *Server) handleAgentFileUpload(w http.ResponseWriter, r *http.Request) {
