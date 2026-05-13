@@ -3,13 +3,18 @@ package channels
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/bwmarrin/discordgo"
 
 	"github.com/fastclaw-ai/fastclaw/internal/bus"
+	"github.com/fastclaw-ai/fastclaw/internal/config"
 )
 
 var discordMentionRe = regexp.MustCompile(`<@!?(\d+)>`)
@@ -21,6 +26,14 @@ type Discord struct {
 	accountID   string
 	botUserID   string
 	botUsername string
+
+	// Thread tracking: thread IDs the bot has participated in.
+	// Follow-up messages in these threads don't require @mention.
+	participatedThreads map[string]struct{}
+	threadsMu           sync.RWMutex
+
+	// Whether to auto-create threads on @mention.
+	autoThread bool
 }
 
 // NewDiscord creates a new Discord channel instance.
@@ -32,10 +45,14 @@ func NewDiscord(botToken string, accountID string, mb *bus.MessageBus) (*Discord
 
 	dg.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentsDirectMessages | discordgo.IntentsMessageContent
 
+	autoThread := os.Getenv("FASTCLAW_DISCORD_AUTO_THREAD") != "false"
+
 	d := &Discord{
-		session:   dg,
-		bus:       mb,
-		accountID: accountID,
+		session:             dg,
+		bus:                 mb,
+		accountID:           accountID,
+		autoThread:          autoThread,
+		participatedThreads: make(map[string]struct{}),
 	}
 
 	dg.AddHandler(d.onMessageCreate)
@@ -66,10 +83,15 @@ func (d *Discord) Start(ctx context.Context) error {
 	d.botUserID = d.session.State.User.ID
 	d.botUsername = d.session.State.User.Username
 
+	// Load persisted thread tracking from disk
+	d.loadParticipatedThreads()
+
 	slog.Info("discord bot connected",
 		"username", d.botUsername,
 		"user_id", d.botUserID,
 		"account", d.accountID,
+		"auto_thread", d.autoThread,
+		"tracked_threads", len(d.participatedThreads),
 	)
 
 	<-ctx.Done()
@@ -187,6 +209,45 @@ func (d *Discord) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCrea
 		peerKind = "group"
 	}
 
+	// Determine if we're already in a thread
+	isThread := false
+	if ch, err := s.State.Channel(m.ChannelID); err == nil && ch != nil {
+		isThread = ch.Type == discordgo.ChannelTypeGuildPublicThread ||
+			ch.Type == discordgo.ChannelTypeGuildPrivateThread
+	}
+
+	// Check if bot is mentioned
+	botMentioned := false
+	for _, u := range m.Mentions {
+		if u.ID == d.botUserID {
+			botMentioned = true
+			break
+		}
+	}
+
+	// In a participated thread, treat every message as implicitly mentioned.
+	// In group channels, only respond to @mentions.
+	if peerKind == "group" && !botMentioned {
+		if isThread && d.isParticipatedThread(m.ChannelID) {
+			// Thread we've participated in — respond without explicit @mention
+		} else {
+			// Not mentioned, not in a participated thread — inject to agent
+			// history but don't trigger a response
+			d.bus.Inbound <- bus.InboundMessage{
+				Channel:      "discord",
+				AccountID:    d.accountID,
+				ChatID:       m.ChannelID,
+				UserID:       m.Author.ID,
+				MessageID:    m.ID,
+				Text:         m.Content,
+				PeerKind:     peerKind,
+				SenderName:   m.Author.Username,
+				IsBotMessage: m.Author.Bot,
+			}
+			return
+		}
+	}
+
 	// Parse @mentions
 	var mentions []string
 	for _, u := range m.Mentions {
@@ -203,18 +264,61 @@ func (d *Discord) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCrea
 		text = strings.ReplaceAll(text, "<@!"+u.ID+">", "@"+u.Username)
 	}
 
+	// Target channel for routing (default: current channel)
+	targetChatID := m.ChannelID
+
+	// Auto-thread: create a thread if this is a guild channel (not DM, not already a thread)
+	// and the bot was @mentioned and autoThread is enabled.
+	if d.autoThread && peerKind == "group" && !isThread && botMentioned {
+		threadName := d.deriveThreadName(m.Content)
+		thread, err := s.MessageThreadStart(m.ChannelID, m.ID, threadName, 1440)
+		if err != nil {
+			// Fallback: try creating thread without attaching to the message
+			slog.Warn("discord MessageThreadStart failed, trying fallback",
+				"channel", m.ChannelID, "error", err)
+			// Send a seed message and thread from it
+			seedMsg, seedErr := s.ChannelMessageSend(m.ChannelID,
+				"🧵 **"+threadName+"**")
+			if seedErr == nil {
+				thread, threadErr := s.MessageThreadStart(m.ChannelID, seedMsg.ID, threadName, 1440)
+				if threadErr == nil {
+					targetChatID = thread.ID
+					d.markParticipatedThread(thread.ID)
+					slog.Info("discord auto-thread created (fallback)",
+						"thread_id", thread.ID,
+						"name", threadName,
+						"channel", m.ChannelID,
+					)
+				}
+			}
+		} else {
+			targetChatID = thread.ID
+			d.markParticipatedThread(thread.ID)
+			slog.Info("discord auto-thread created",
+				"thread_id", thread.ID,
+				"name", threadName,
+				"channel", m.ChannelID,
+			)
+		}
+	} else if isThread {
+		d.markParticipatedThread(m.ChannelID)
+	}
+
 	slog.Info("discord message received",
 		"from", m.Author.Username,
 		"channel_id", m.ChannelID,
+		"target_chat_id", targetChatID,
 		"guild_id", m.GuildID,
 		"peer_kind", peerKind,
 		"is_bot", isBot,
+		"is_thread", isThread,
+		"auto_thread", targetChatID != m.ChannelID,
 	)
 
 	d.bus.Inbound <- bus.InboundMessage{
 		Channel:      "discord",
 		AccountID:    d.accountID,
-		ChatID:       m.ChannelID,
+		ChatID:       targetChatID,
 		UserID:       m.Author.ID,
 		MessageID:    m.ID,
 		Text:         text,
@@ -223,4 +327,95 @@ func (d *Discord) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCrea
 		Mentions:     mentions,
 		IsBotMessage: isBot,
 	}
+}
+
+// deriveThreadName creates a thread name from message content, stripping
+// @mentions and truncating to 80 characters.
+func (d *Discord) deriveThreadName(content string) string {
+	// Remove bot mentions
+	content = discordMentionRe.ReplaceAllString(content, "")
+	content = strings.TrimSpace(content)
+
+	if content == "" {
+		return "Conversation"
+	}
+
+	// Truncate to 80 chars, preferring word boundaries
+	const maxLen = 80
+	runes := []rune(content)
+	if len(runes) <= maxLen {
+		return content
+	}
+	// Try to break at last space before maxLen
+	truncated := string(runes[:maxLen])
+	if lastSpace := strings.LastIndex(truncated, " "); lastSpace > maxLen/2 {
+		return truncated[:lastSpace]
+	}
+	return truncated
+}
+
+// --- Thread participation tracking ---
+
+func (d *Discord) threadsPath() string {
+	home, _ := config.HomeDir()
+	return filepath.Join(home, "discord_threads.json")
+}
+
+func (d *Discord) loadParticipatedThreads() {
+	path := d.threadsPath()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var threads []string
+	if err := json.Unmarshal(data, &threads); err != nil {
+		return
+	}
+	d.threadsMu.Lock()
+	defer d.threadsMu.Unlock()
+	for _, id := range threads {
+		d.participatedThreads[id] = struct{}{}
+	}
+}
+
+func (d *Discord) saveParticipatedThreads() {
+	d.threadsMu.RLock()
+	threads := make([]string, 0, len(d.participatedThreads))
+	for id := range d.participatedThreads {
+		threads = append(threads, id)
+	}
+	d.threadsMu.RUnlock()
+
+	// Cap at 500 threads
+	const maxTracked = 500
+	if len(threads) > maxTracked {
+		threads = threads[len(threads)-maxTracked:]
+	}
+
+	data, err := json.Marshal(threads)
+	if err != nil {
+		slog.Warn("discord failed to marshal thread list", "error", err)
+		return
+	}
+	if err := os.WriteFile(d.threadsPath(), data, 0644); err != nil {
+		slog.Warn("discord failed to save thread list", "error", err)
+	}
+}
+
+func (d *Discord) markParticipatedThread(threadID string) {
+	d.threadsMu.Lock()
+	if _, ok := d.participatedThreads[threadID]; ok {
+		d.threadsMu.Unlock()
+		return
+	}
+	d.participatedThreads[threadID] = struct{}{}
+	d.threadsMu.Unlock()
+	d.saveParticipatedThreads()
+}
+
+func (d *Discord) isParticipatedThread(threadID string) bool {
+	d.threadsMu.RLock()
+	defer d.threadsMu.RUnlock()
+	_, ok := d.participatedThreads[threadID]
+	return ok
 }
