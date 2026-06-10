@@ -1805,6 +1805,24 @@ export async function deleteAgentMCPServer(
   return res.json();
 }
 
+export interface MCPTestResult {
+  ok: boolean;
+  toolCount?: number;
+  error?: string;
+}
+
+export async function testAgentMCPServer(
+  agentId: string,
+  input: AgentMCPServerInput,
+): Promise<MCPTestResult> {
+  const res = await apiFetch(`/api/agents/${encodeURIComponent(agentId)}/mcp/test`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return res.json();
+}
+
 // Scope-neutral aliases shared by the per-agent and system MCP managers.
 export type MCPServer = AgentMCPServer;
 export type MCPServerInput = AgentMCPServerInput;
@@ -1844,6 +1862,15 @@ export async function deleteSystemMCPServer(
 ): Promise<{ ok: boolean; error?: string }> {
   const res = await apiFetch(`/api/admin/mcp/${encodeURIComponent(name)}`, {
     method: "DELETE",
+  });
+  return res.json();
+}
+
+export async function testSystemMCPServer(input: MCPServerInput): Promise<MCPTestResult> {
+  const res = await apiFetch(`/api/admin/mcp/test`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
   });
   return res.json();
 }

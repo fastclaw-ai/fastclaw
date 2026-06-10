@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/fastclaw-ai/fastclaw/internal/buildinfo"
 	"github.com/fastclaw-ai/fastclaw/internal/config"
+	"github.com/fastclaw-ai/fastclaw/internal/mcp"
 	"github.com/fastclaw-ai/fastclaw/internal/scope"
 	"github.com/fastclaw-ai/fastclaw/internal/store"
 )
@@ -142,6 +144,49 @@ func (s *Server) handleDeleteSystemMCPServer(w http.ResponseWriter, r *http.Requ
 	if s.mcpDelete(w, r, "", "", r.PathValue("name")) {
 		s.invalidateScope(scope.System, "")
 	}
+}
+
+func (s *Server) handleTestAgentMCPServer(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("id")
+	if s.requireAgentOwner(w, r, agentID) == nil {
+		return
+	}
+	s.mcpTest(w, r, "", agentID)
+}
+
+func (s *Server) handleTestSystemMCPServer(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeScope(w, r, scope.System, "", scopeRead) {
+		return
+	}
+	s.mcpTest(w, r, "", "")
+}
+
+// mcpTest runs a one-shot connection check against the MCP config in the
+// request body. Masked secret values (****) fall back to the stored
+// secret of the same-name row when one exists, so the user can test an
+// edited config without re-pasting credentials. Only HTTP servers are
+// testable; stdio is rejected inside mcp.TestConnection.
+func (s *Server) mcpTest(w http.ResponseWriter, r *http.Request, userID, agentID string) {
+	var req writeAgentMCPServerRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	cfg, err := validateMCPServerConfig(req)
+	if err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	if req.Name != "" {
+		if rec, err := s.dataStore.GetConfigByName(r.Context(), store.KindMCP, userID, agentID, req.Name); err == nil && rec != nil {
+			if existing, err := mcpConfigFromRecord(*rec); err == nil {
+				cfg.Headers = mergeMaskedStringMap(existing.Headers, cfg.Headers)
+			}
+		}
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	jsonResponse(w, http.StatusOK, mcp.TestConnection(ctx, cfg))
 }
 
 // mcpList writes the masked server list for the given ownership.

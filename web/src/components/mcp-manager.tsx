@@ -35,7 +35,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import type { MCPServer, MCPServerInput, MCPServerType } from "@/lib/api";
+import type { MCPServer, MCPServerInput, MCPServerType, MCPTestResult } from "@/lib/api";
 
 type Pair = { key: string; value: string };
 
@@ -53,6 +53,7 @@ export interface MCPManagerProps {
   create: (input: MCPServerInput) => Promise<WriteResult>;
   update: (name: string, input: MCPServerInput) => Promise<WriteResult>;
   remove: (name: string) => Promise<WriteResult>;
+  test: (input: MCPServerInput) => Promise<MCPTestResult>;
 }
 
 export function MCPManager({
@@ -63,6 +64,7 @@ export function MCPManager({
   create,
   update,
   remove,
+  test,
 }: MCPManagerProps) {
   const [servers, setServers] = useState<MCPServer[]>([]);
   const [loading, setLoading] = useState(true);
@@ -181,6 +183,7 @@ export function MCPManager({
         server={editing}
         create={create}
         update={update}
+        test={test}
         onSaved={refresh}
       />
 
@@ -268,6 +271,7 @@ function MCPServerDialog({
   server,
   create,
   update,
+  test,
   onSaved,
 }: {
   open: boolean;
@@ -275,6 +279,7 @@ function MCPServerDialog({
   server: MCPServer | null;
   create: (input: MCPServerInput) => Promise<WriteResult>;
   update: (name: string, input: MCPServerInput) => Promise<WriteResult>;
+  test: (input: MCPServerInput) => Promise<MCPTestResult>;
   onSaved: () => void;
 }) {
   const editing = !!server;
@@ -288,6 +293,8 @@ function MCPServerDialog({
   const [env, setEnv] = useState<Pair[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<MCPTestResult | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -301,6 +308,8 @@ function MCPServerDialog({
     setEnv(recordToPairs(server?.env));
     setSaving(false);
     setError("");
+    setTesting(false);
+    setTestResult(null);
   }, [open, server]);
 
   const canSubmit = useMemo(() => {
@@ -309,30 +318,32 @@ function MCPServerDialog({
     return !!command.trim();
   }, [command, name, type, url]);
 
+  const buildInput = (): MCPServerInput =>
+    type === "http"
+      ? {
+          name: name.trim(),
+          type,
+          enabled,
+          url: url.trim(),
+          headers: pairsToRecord(headers),
+        }
+      : {
+          name: name.trim(),
+          type,
+          enabled,
+          command: command.trim(),
+          args: argsText
+            .split("\n")
+            .map((arg) => arg.trim())
+            .filter(Boolean),
+          env: pairsToRecord(env),
+        };
+
   const submit = async () => {
     if (!canSubmit) return;
     setSaving(true);
     setError("");
-    const input: MCPServerInput =
-      type === "http"
-        ? {
-            name: name.trim(),
-            type,
-            enabled,
-            url: url.trim(),
-            headers: pairsToRecord(headers),
-          }
-        : {
-            name: name.trim(),
-            type,
-            enabled,
-            command: command.trim(),
-            args: argsText
-              .split("\n")
-              .map((arg) => arg.trim())
-              .filter(Boolean),
-            env: pairsToRecord(env),
-          };
+    const input = buildInput();
     try {
       const res = server ? await update(server.name, input) : await create(input);
       if (res.error) {
@@ -347,6 +358,22 @@ function MCPServerDialog({
       setSaving(false);
     }
   };
+
+  const runTest = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      setTestResult(await test(buildInput()));
+    } catch (err) {
+      setTestResult({ ok: false, error: err instanceof Error ? err.message : "Connection test failed" });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  // Connection test only exercises HTTP servers; stdio would spawn a local
+  // process, which the backend refuses for a dashboard dry-run.
+  const canTest = type === "http" && !!url.trim();
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -457,13 +484,38 @@ function MCPServerDialog({
           )}
         </div>
 
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
-            Cancel
+        {testResult && (
+          <div
+            className={
+              testResult.ok
+                ? "rounded-md border border-emerald-500/40 bg-emerald-500/5 p-3 text-sm text-emerald-600 dark:text-emerald-400"
+                : "rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive"
+            }
+          >
+            {testResult.ok
+              ? `Connection OK — ${testResult.toolCount ?? 0} tool${testResult.toolCount === 1 ? "" : "s"} available.`
+              : `Connection failed: ${testResult.error || "unknown error"}`}
+          </div>
+        )}
+
+        <DialogFooter className="sm:justify-between">
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={runTest}
+            disabled={!canTest || testing || saving}
+            title={type === "stdio" ? "Connection test is only available for HTTP servers" : undefined}
+          >
+            {testing ? "Testing..." : "Test connection"}
           </Button>
-          <Button onClick={submit} disabled={!canSubmit || saving}>
-            {saving ? "Saving..." : "Save"}
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
+              Cancel
+            </Button>
+            <Button onClick={submit} disabled={!canSubmit || saving}>
+              {saving ? "Saving..." : "Save"}
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>

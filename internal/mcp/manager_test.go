@@ -15,7 +15,13 @@ func TestHTTPClientExpandsHeaderEnvValues(t *testing.T) {
 	t.Setenv("TOKEN", "expanded-token")
 	gotAuth := make(chan string, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotAuth <- r.Header.Get("Authorization")
+		// Connect() now makes two POSTs (initialize + notifications/
+		// initialized). Use a non-blocking send so the second one doesn't
+		// deadlock on the buffer-1 channel.
+		select {
+		case gotAuth <- r.Header.Get("Authorization"):
+		default:
+		}
 		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{}}`))
 	}))
 	defer server.Close()

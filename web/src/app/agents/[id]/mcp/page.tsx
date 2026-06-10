@@ -7,6 +7,7 @@ import {
   createAgentMCPServer,
   deleteAgentMCPServer,
   listAgentMCPServers,
+  testAgentMCPServer,
   updateAgentMCPServer,
   type MCPServerInput,
 } from "@/lib/api";
@@ -24,6 +25,7 @@ export default function AgentMCPPage() {
       create={(input: MCPServerInput) => createAgentMCPServer(agentId, input)}
       update={(name: string, input: MCPServerInput) => updateAgentMCPServer(agentId, name, input)}
       remove={(name: string) => deleteAgentMCPServer(agentId, name)}
+      test={(input: MCPServerInput) => testAgentMCPServer(agentId, input)}
     />
   );
 }

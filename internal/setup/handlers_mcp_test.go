@@ -377,6 +377,95 @@ func TestSystemMCPServersNonAdminReadAllowedWriteForbidden(t *testing.T) {
 	}
 }
 
+func TestAgentMCPTestConnectionUsesStoredSecretForMaskedHeader(t *testing.T) {
+	ctx := context.Background()
+	s, resolver, _, owner := newAuthTestServer(t, ctx)
+	s.SetUserResolver(&mcpTestResolver{})
+	agentID := createMCPTestAgent(t, ctx, s.dataStore, owner.ID)
+
+	gotAuth := make(chan string, 4)
+	mcpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     int    `json:"id"`
+			Method string `json:"method"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.Method == "initialize" {
+			gotAuth <- r.Header.Get("Authorization")
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"a"}]}}`))
+	}))
+	defer mcpServer.Close()
+
+	// Store a server with a real secret.
+	createBody := `{"name":"svc","type":"http","url":"` + mcpServer.URL + `","headers":{"Authorization":"Bearer real-secret"}}`
+	createReq := mcpAuthRequest(t, ctx, resolver, http.MethodPost, "/api/agents/"+agentID+"/mcp", owner.ID, createBody)
+	createReq.SetPathValue("id", agentID)
+	createRR := httptest.NewRecorder()
+	s.authMiddleware(s.handleCreateAgentMCPServer)(createRR, createReq)
+	if createRR.Code != http.StatusOK {
+		t.Fatalf("create status = %d, body=%s", createRR.Code, createRR.Body.String())
+	}
+
+	// Test with a masked Authorization value — the handler must substitute
+	// the stored secret before connecting.
+	testBody := `{"name":"svc","type":"http","url":"` + mcpServer.URL + `","headers":{"Authorization":"****"}}`
+	testReq := mcpAuthRequest(t, ctx, resolver, http.MethodPost, "/api/agents/"+agentID+"/mcp/test", owner.ID, testBody)
+	testReq.SetPathValue("id", agentID)
+	testRR := httptest.NewRecorder()
+	s.authMiddleware(s.handleTestAgentMCPServer)(testRR, testReq)
+	if testRR.Code != http.StatusOK {
+		t.Fatalf("test status = %d, body=%s", testRR.Code, testRR.Body.String())
+	}
+	var res struct {
+		OK        bool   `json:"ok"`
+		ToolCount int    `json:"toolCount"`
+		Error     string `json:"error"`
+	}
+	if err := json.Unmarshal(testRR.Body.Bytes(), &res); err != nil {
+		t.Fatalf("decode test result: %v", err)
+	}
+	if !res.OK || res.ToolCount != 1 {
+		t.Fatalf("want ok with 1 tool, got %#v", res)
+	}
+
+	// The most recent initialize must have carried the stored secret, not
+	// the masked placeholder.
+	var lastAuth string
+	for len(gotAuth) > 0 {
+		lastAuth = <-gotAuth
+	}
+	if lastAuth != "Bearer real-secret" {
+		t.Fatalf("test should use stored secret, server saw %q", lastAuth)
+	}
+}
+
+func TestSystemMCPTestConnectionRejectsStdio(t *testing.T) {
+	ctx := context.Background()
+	s, resolver, admin, _ := newAuthTestServer(t, ctx)
+	s.SetUserResolver(&mcpTestResolver{})
+
+	body := `{"name":"local","type":"stdio","command":"npx","args":["-y","x"]}`
+	req := mcpAuthRequest(t, ctx, resolver, http.MethodPost, "/api/admin/mcp/test", admin.ID, body)
+	rr := httptest.NewRecorder()
+	s.authMiddleware(s.handleTestSystemMCPServer)(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rr.Code, rr.Body.String())
+	}
+	var res struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &res); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if res.OK || res.Error == "" {
+		t.Fatalf("stdio test should fail with a message, got %#v", res)
+	}
+}
+
 func createMCPTestAgent(t *testing.T, ctx context.Context, st store.Store, userID string) string {
 	t.Helper()
 	agentID := "agt_mcp_test"

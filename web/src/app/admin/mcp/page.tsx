@@ -5,6 +5,7 @@ import {
   createSystemMCPServer,
   deleteSystemMCPServer,
   listSystemMCPServers,
+  testSystemMCPServer,
   updateSystemMCPServer,
 } from "@/lib/api";
 
@@ -17,6 +18,7 @@ export default function AdminMCPPage() {
       create={createSystemMCPServer}
       update={updateSystemMCPServer}
       remove={deleteSystemMCPServer}
+      test={testSystemMCPServer}
     />
   );
 }

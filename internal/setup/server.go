@@ -312,6 +312,7 @@ func (s *Server) Run(ctx context.Context) error {
 	// Per-agent MCP servers
 	mux.HandleFunc("GET /api/agents/{id}/mcp", auth(s.handleListAgentMCPServers))
 	mux.HandleFunc("POST /api/agents/{id}/mcp", auth(s.handleCreateAgentMCPServer))
+	mux.HandleFunc("POST /api/agents/{id}/mcp/test", auth(s.handleTestAgentMCPServer))
 	mux.HandleFunc("PUT /api/agents/{id}/mcp/{name}", auth(s.handleUpdateAgentMCPServer))
 	mux.HandleFunc("DELETE /api/agents/{id}/mcp/{name}", auth(s.handleDeleteAgentMCPServer))
 
@@ -320,6 +321,7 @@ func (s *Server) Run(ctx context.Context) error {
 	// super_admin-only, enforced in the handler via authorizeScope.
 	mux.HandleFunc("GET /api/admin/mcp", auth(s.handleListSystemMCPServers))
 	mux.HandleFunc("POST /api/admin/mcp", auth(s.handleCreateSystemMCPServer))
+	mux.HandleFunc("POST /api/admin/mcp/test", auth(s.handleTestSystemMCPServer))
 	mux.HandleFunc("PUT /api/admin/mcp/{name}", auth(s.handleUpdateSystemMCPServer))
 	mux.HandleFunc("DELETE /api/admin/mcp/{name}", auth(s.handleDeleteSystemMCPServer))
 
