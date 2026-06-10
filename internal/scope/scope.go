@@ -11,17 +11,23 @@
 //	      per-(user, agent) (user=X, agent=Y)
 //
 // kind="provider": name is the provider key ("openai"). Inner rows
-//   replace outer entries entirely (no field-level merge).
+//
+//	replace outer entries entirely (no field-level merge).
+//
 // kind="channel":  name is the channel type ("telegram"). A disabled inner
-//   row erases the outer entry — lets a user opt out of a system-wide bot.
+//
+//	row erases the outer entry — lets a user opt out of a system-wide bot.
+//
 // kind="setting":  name is the namespace ("agents.defaults", "sandbox", …).
-//   Top-level keys merge field-wise; inner-scope keys win.
+//
+//	Top-level keys merge field-wise; inner-scope keys win.
 package scope
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/fastclaw-ai/fastclaw/internal/config"
 	"github.com/fastclaw-ai/fastclaw/internal/store"
@@ -160,6 +166,55 @@ func UserScopeProviders(ctx context.Context, st store.Store, userID string) (map
 	out := make(map[string]config.ProviderConfig, len(rows))
 	for _, r := range rows {
 		out[r.Name] = providerToConfig(r)
+	}
+	return out, nil
+}
+
+// AgentScopeMCPServers returns enabled MCP servers stored at
+// (user='', agent=Y) only. These rows are the dashboard-managed per-agent
+// MCP overlay and intentionally do not walk system/user layers.
+func AgentScopeMCPServers(ctx context.Context, st store.Store, agentID string) (map[string]config.MCPServerConfig, error) {
+	if st == nil || agentID == "" {
+		return map[string]config.MCPServerConfig{}, nil
+	}
+	rows, err := st.ListConfigs(ctx, store.KindMCP, "", agentID)
+	if err != nil {
+		return nil, err
+	}
+	return decodeMCPRows(rows)
+}
+
+// SystemScopeMCPServers returns enabled MCP servers stored at the system
+// layer (user='', agent=''). This is the broadcast base layer inherited
+// by every agent; per-agent rows with the same name shadow these.
+func SystemScopeMCPServers(ctx context.Context, st store.Store) (map[string]config.MCPServerConfig, error) {
+	if st == nil {
+		return map[string]config.MCPServerConfig{}, nil
+	}
+	rows, err := st.ListConfigs(ctx, store.KindMCP, "", "")
+	if err != nil {
+		return nil, err
+	}
+	return decodeMCPRows(rows)
+}
+
+// decodeMCPRows turns kind="mcp" config rows into the runtime map,
+// skipping disabled rows. Shared by the agent- and system-scope readers.
+func decodeMCPRows(rows []store.ConfigRecord) (map[string]config.MCPServerConfig, error) {
+	out := make(map[string]config.MCPServerConfig, len(rows))
+	for _, rec := range rows {
+		if !rec.Enabled {
+			continue
+		}
+		blob, err := json.Marshal(rec.Data)
+		if err != nil {
+			return nil, fmt.Errorf("marshal MCP config %q: %w", rec.Name, err)
+		}
+		var cfg config.MCPServerConfig
+		if err := json.Unmarshal(blob, &cfg); err != nil {
+			return nil, fmt.Errorf("decode MCP config %q: %w", rec.Name, err)
+		}
+		out[rec.Name] = cfg
 	}
 	return out, nil
 }

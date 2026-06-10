@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -320,7 +321,7 @@ type UserSpace struct {
 	mu sync.Mutex
 }
 
-// readUserScopeAgentDefaults reads the (user=X, agent='') agents.defaults
+// readUserScopeAgentDefaults reads the (user=X, agent=”) agents.defaults
 // row raw — distinct from assembleConfig, which merges system + user and
 // can't tell apart "user explicitly chose the system value" from "no
 // user-scope row at all". EnsureAgent uses this to detect a chatter's
@@ -343,6 +344,29 @@ func readUserScopeAgentDefaults(ctx context.Context, st store.Store, userID stri
 	}
 	_ = json.Unmarshal(blob, &out)
 	return out
+}
+
+func overlayAgentScopeMCP(ctx context.Context, st store.Store, rc *config.ResolvedAgent) error {
+	if st == nil || rc == nil || rc.ID == "" {
+		return nil
+	}
+	sys, err := scope.SystemScopeMCPServers(ctx, st)
+	if err != nil {
+		return err
+	}
+	agentServers, err := scope.AgentScopeMCPServers(ctx, st, rc.ID)
+	if err != nil {
+		return err
+	}
+	if len(sys) == 0 && len(agentServers) == 0 {
+		return nil
+	}
+	if rc.MCPServers == nil {
+		rc.MCPServers = make(map[string]config.MCPServerConfig, len(sys)+len(agentServers))
+	}
+	maps.Copy(rc.MCPServers, sys)          // system base layer
+	maps.Copy(rc.MCPServers, agentServers) // per-agent rows shadow same-name system rows
+	return nil
 }
 
 // EnsureAgent attaches an agent the user does not own to this UserSpace.
@@ -526,6 +550,9 @@ func (sp *UserSpace) EnsureAgent(ctx context.Context, st store.Store, mb *bus.Me
 				rc.Providers[k] = v
 			}
 		}
+	}
+	if err := overlayAgentScopeMCP(ctx, st, &rc); err != nil {
+		slog.Warn("failed to load agent MCP config", "agent", rc.ID, "error", err)
 	}
 	ensureAgentHome(rc)
 	if ws != nil {
@@ -737,6 +764,9 @@ func loadUserSpace(ctx context.Context, userID string, mb *bus.MessageBus, st st
 				}
 				rc.Providers[k] = v
 			}
+		}
+		if err := overlayAgentScopeMCP(ctx, st, rc); err != nil {
+			slog.Warn("failed to load agent MCP config", "agent", rc.ID, "error", err)
 		}
 		ensureAgentHome(*rc)
 		if ws != nil {
@@ -1071,7 +1101,7 @@ func (r *userSpaceRegistry) startEvictor(ctx context.Context) {
 // per Account.
 //
 // Pulls rows from three ownership corners this user can route:
-//   - (user_id='', agent_id=Y): the agent's "official" rows for any
+//   - (user_id=”, agent_id=Y): the agent's "official" rows for any
 //     agent Y the user owns (legacy / pre-refactor data)
 //   - (user_id=userID, agent_id=Y) where user owns Y: this user's
 //     bindings on their own agent (the normal post-refactor pattern)

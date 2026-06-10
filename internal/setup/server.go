@@ -309,6 +309,19 @@ func (s *Server) Run(ctx context.Context) error {
 	// running app) — lets the workspace tree show only this task's output.
 	mux.HandleFunc("GET /api/agents/{id}/changed-files", auth(s.handleChangedFiles))
 	mux.HandleFunc("GET /api/agents/{id}/projects/{pid}/runtime/logs", auth(s.handleRuntimeLogs))
+	// Per-agent MCP servers
+	mux.HandleFunc("GET /api/agents/{id}/mcp", auth(s.handleListAgentMCPServers))
+	mux.HandleFunc("POST /api/agents/{id}/mcp", auth(s.handleCreateAgentMCPServer))
+	mux.HandleFunc("PUT /api/agents/{id}/mcp/{name}", auth(s.handleUpdateAgentMCPServer))
+	mux.HandleFunc("DELETE /api/agents/{id}/mcp/{name}", auth(s.handleDeleteAgentMCPServer))
+
+	// System (global) MCP servers — inherited by every agent. Reads are
+	// open to any signed-in user (authorizeScope gates inside); writes are
+	// super_admin-only, enforced in the handler via authorizeScope.
+	mux.HandleFunc("GET /api/admin/mcp", auth(s.handleListSystemMCPServers))
+	mux.HandleFunc("POST /api/admin/mcp", auth(s.handleCreateSystemMCPServer))
+	mux.HandleFunc("PUT /api/admin/mcp/{name}", auth(s.handleUpdateSystemMCPServer))
+	mux.HandleFunc("DELETE /api/admin/mcp/{name}", auth(s.handleDeleteSystemMCPServer))
 
 	// Per-agent channels (IM bot bindings)
 	mux.HandleFunc("GET /api/agents/{id}/channels", auth(s.handleListAgentChannels))

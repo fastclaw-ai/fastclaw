@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/fastclaw-ai/fastclaw/internal/bus"
+	"github.com/fastclaw-ai/fastclaw/internal/config"
 	"github.com/fastclaw-ai/fastclaw/internal/scope"
 	"github.com/fastclaw-ai/fastclaw/internal/store"
 	"github.com/fastclaw-ai/fastclaw/internal/users"
@@ -17,6 +18,155 @@ import (
 // overlays) and non-empty in case 2 (pin chatter's choice past the
 // overlay chain) — the only way to tell apart is reading the raw row,
 // not the merged Setting() view.
+func TestOverlayAgentScopeMCPDisabledRowPreservesExistingServer(t *testing.T) {
+	db, err := store.NewDBStore("sqlite", "file::memory:?cache=shared")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+	if err := db.Migrate(context.Background()); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	ctx := context.Background()
+
+	rc := &config.ResolvedAgent{
+		ID: "agent-mcp",
+		MCPServers: map[string]config.MCPServerConfig{
+			"legacy": {Type: "http", URL: "https://legacy.example/mcp"},
+		},
+	}
+	if err := db.SaveConfig(ctx, &store.ConfigRecord{
+		Kind:    store.KindMCP,
+		AgentID: rc.ID,
+		Name:    "legacy",
+		Enabled: false,
+		Data: map[string]interface{}{
+			"type": "http",
+			"url":  "https://disabled.example/mcp",
+		},
+	}); err != nil {
+		t.Fatalf("save disabled MCP row: %v", err)
+	}
+
+	if err := overlayAgentScopeMCP(ctx, db, rc); err != nil {
+		t.Fatalf("overlayAgentScopeMCP: %v", err)
+	}
+	if got := rc.MCPServers["legacy"].URL; got != "https://legacy.example/mcp" {
+		t.Fatalf("disabled DB row should preserve same-name legacy MCP server, got %q", got)
+	}
+}
+
+func TestOverlayAgentScopeMCPOverlaysDBRows(t *testing.T) {
+	db, err := store.NewDBStore("sqlite", "file::memory:?cache=shared")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+	if err := db.Migrate(context.Background()); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	ctx := context.Background()
+
+	rc := &config.ResolvedAgent{
+		ID: "agent-mcp",
+		MCPServers: map[string]config.MCPServerConfig{
+			"existing": {Type: "http", URL: "https://existing.example/mcp"},
+			"db":       {Type: "http", URL: "https://old.example/mcp"},
+		},
+	}
+	if err := db.SaveConfig(ctx, &store.ConfigRecord{
+		Kind:    store.KindMCP,
+		AgentID: rc.ID,
+		Name:    "db",
+		Enabled: true,
+		Data: map[string]interface{}{
+			"type": "http",
+			"url":  "https://db.example/mcp",
+		},
+	}); err != nil {
+		t.Fatalf("save db MCP row: %v", err)
+	}
+	if err := db.SaveConfig(ctx, &store.ConfigRecord{
+		Kind:    store.KindMCP,
+		AgentID: rc.ID,
+		Name:    "disabled",
+		Enabled: false,
+		Data: map[string]interface{}{
+			"type": "http",
+			"url":  "https://disabled.example/mcp",
+		},
+	}); err != nil {
+		t.Fatalf("save disabled MCP row: %v", err)
+	}
+
+	if err := overlayAgentScopeMCP(ctx, db, rc); err != nil {
+		t.Fatalf("overlayAgentScopeMCP: %v", err)
+	}
+	if got := rc.MCPServers["existing"].URL; got != "https://existing.example/mcp" {
+		t.Fatalf("existing MCP should be preserved, got %q", got)
+	}
+	if got := rc.MCPServers["db"].URL; got != "https://db.example/mcp" {
+		t.Fatalf("db MCP should overlay existing entry, got %q", got)
+	}
+	if _, ok := rc.MCPServers["disabled"]; ok {
+		t.Fatalf("disabled MCP row should not be overlaid: %#v", rc.MCPServers)
+	}
+}
+
+func TestOverlayAgentScopeMCPMergesSystemAndAgentLayers(t *testing.T) {
+	db, err := store.NewDBStore("sqlite", "file::memory:?cache=shared")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+	if err := db.Migrate(context.Background()); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	ctx := context.Background()
+
+	rc := &config.ResolvedAgent{ID: "agent-mcp"}
+
+	// System base layer: "shared" (also overridden by agent) + "sysonly".
+	if err := db.SaveConfig(ctx, &store.ConfigRecord{
+		Kind: store.KindMCP, Name: "shared", Enabled: true,
+		Data: map[string]interface{}{"type": "http", "url": "https://system.example/mcp"},
+	}); err != nil {
+		t.Fatalf("save system shared row: %v", err)
+	}
+	if err := db.SaveConfig(ctx, &store.ConfigRecord{
+		Kind: store.KindMCP, Name: "sysonly", Enabled: true,
+		Data: map[string]interface{}{"type": "http", "url": "https://sysonly.example/mcp"},
+	}); err != nil {
+		t.Fatalf("save system sysonly row: %v", err)
+	}
+	// Agent layer: same-name "shared" must win; "agentonly" coexists.
+	if err := db.SaveConfig(ctx, &store.ConfigRecord{
+		Kind: store.KindMCP, AgentID: rc.ID, Name: "shared", Enabled: true,
+		Data: map[string]interface{}{"type": "http", "url": "https://agent.example/mcp"},
+	}); err != nil {
+		t.Fatalf("save agent shared row: %v", err)
+	}
+	if err := db.SaveConfig(ctx, &store.ConfigRecord{
+		Kind: store.KindMCP, AgentID: rc.ID, Name: "agentonly", Enabled: true,
+		Data: map[string]interface{}{"type": "http", "url": "https://agentonly.example/mcp"},
+	}); err != nil {
+		t.Fatalf("save agent agentonly row: %v", err)
+	}
+
+	if err := overlayAgentScopeMCP(ctx, db, rc); err != nil {
+		t.Fatalf("overlayAgentScopeMCP: %v", err)
+	}
+	if got := rc.MCPServers["sysonly"].URL; got != "https://sysonly.example/mcp" {
+		t.Fatalf("system row should be injected, got %q", got)
+	}
+	if got := rc.MCPServers["agentonly"].URL; got != "https://agentonly.example/mcp" {
+		t.Fatalf("agent row should be injected, got %q", got)
+	}
+	if got := rc.MCPServers["shared"].URL; got != "https://agent.example/mcp" {
+		t.Fatalf("agent row should shadow same-name system row, got %q", got)
+	}
+}
+
 func TestReadUserScopeAgentDefaults(t *testing.T) {
 	db, err := store.NewDBStore("sqlite", "file::memory:?cache=shared")
 	if err != nil {

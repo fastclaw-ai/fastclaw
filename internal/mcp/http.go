@@ -2,13 +2,16 @@ package mcp
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"strings"
 	"sync"
+	"time"
 )
 
 // HTTPClient implements the MCP client for HTTP (Streamable HTTP) servers.
@@ -24,25 +27,13 @@ type HTTPClient struct {
 func NewHTTPClient(url string, headers map[string]string) *HTTPClient {
 	return &HTTPClient{
 		url:     url,
-		headers: expandHeaders(headers),
-		client:  &http.Client{},
+		headers: maps.Clone(headers),
+		client:  &http.Client{Timeout: 15 * time.Second},
 		nextID:  1,
 	}
 }
 
-func expandHeaders(headers map[string]string) map[string]string {
-	expanded := make(map[string]string, len(headers))
-	for k, v := range headers {
-		if strings.HasPrefix(v, "$") {
-			expanded[k] = os.Getenv(v[1:])
-		} else {
-			expanded[k] = v
-		}
-	}
-	return expanded
-}
-
-func (c *HTTPClient) sendRequest(method string, params interface{}) (*jsonRPCResponse, error) {
+func (c *HTTPClient) sendRequest(method string, params any) (*jsonRPCResponse, error) {
 	c.mu.Lock()
 	id := c.nextID
 	c.nextID++
@@ -60,13 +51,18 @@ func (c *HTTPClient) sendRequest(method string, params interface{}) (*jsonRPCRes
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequest("POST", c.url, bytes.NewReader(body))
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
 	for k, v := range c.headers {
+		if strings.HasPrefix(v, "$") {
+			v = os.Getenv(v[1:])
+		}
 		httpReq.Header.Set(k, v)
 	}
 
@@ -76,7 +72,7 @@ func (c *HTTPClient) sendRequest(method string, params interface{}) (*jsonRPCRes
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}

@@ -26,6 +26,7 @@ import {
   LayoutDashboardIcon,
   MessagesSquareIcon,
   PlusIcon,
+  ServerIcon,
   SettingsIcon,
   SparklesIcon,
   UsersIcon,
@@ -51,7 +52,7 @@ import {
 // the sidebar showing the platform nav for /agents/<id>/project/...
 function extractAgentId(pathname: string): string | null {
   const match = pathname.match(
-    /^\/agents\/([^/]+)\/(chat|customize|skills|models|sessions|channels|chats|scheduler|project)/,
+    /^\/agents\/([^/]+)\/(chat|customize|skills|models|sessions|channels|mcp|chats|scheduler|project)/,
   );
   return match ? match[1] : null;
 }
@@ -94,6 +95,7 @@ const USER_USER_GROUP: NavItem[] = [
 const ADMIN_USER_GROUP: NavItem[] = [
   { title: "Users", url: "/admin/users/", icon: UsersIcon },
   { title: "Chats", url: "/admin/chats/", icon: MessagesSquareIcon },
+  { title: "MCP", url: "/admin/mcp/", icon: ServerIcon },
   { title: "Token Usage", url: "/admin/usage/", icon: CoinsIcon },
   { title: "API Keys", url: "/apikeys/", icon: KeyRoundIcon },
 ];

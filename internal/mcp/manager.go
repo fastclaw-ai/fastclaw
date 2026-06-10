@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/url"
 	"strings"
 
+	"github.com/fastclaw-ai/fastclaw/internal/buildinfo"
 	"github.com/fastclaw-ai/fastclaw/internal/config"
 )
 
@@ -34,8 +37,16 @@ func NewManager(servers map[string]config.MCPServerConfig) *Manager {
 		var client Client
 		switch cfg.Type {
 		case "http":
+			if buildinfo.IsHostedDeploy() && isBlockedHostedHTTPMCPURL(cfg.URL) {
+				slog.Warn("HTTP MCP server target disabled on hosted deployment, skipping", "server", name, "url", cfg.URL)
+				continue
+			}
 			client = NewHTTPClient(cfg.URL, cfg.Headers)
 		case "stdio":
+			if buildinfo.IsHostedDeploy() {
+				slog.Warn("stdio MCP server disabled on hosted deployment, skipping", "server", name)
+				continue
+			}
 			client = NewStdioClient(cfg.Command, cfg.Args, cfg.Env)
 		default:
 			slog.Warn("unknown MCP server type, skipping", "server", name, "type", cfg.Type)
@@ -117,6 +128,22 @@ func (m *Manager) Close() {
 			slog.Warn("error closing MCP server", "server", name, "error", err)
 		}
 	}
+}
+
+func isBlockedHostedHTTPMCPURL(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Hostname() == "" {
+		return true
+	}
+	host := strings.TrimSpace(strings.ToLower(u.Hostname()))
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
 }
 
 func prefixToolName(serverName, toolName string) string {

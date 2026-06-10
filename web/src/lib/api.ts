@@ -1734,6 +1734,120 @@ export async function toggleAgentCronJob(
   return res.json();
 }
 
+export type MCPServerType = "http" | "stdio";
+
+export interface AgentMCPServer {
+  name: string;
+  type: MCPServerType;
+  enabled: boolean;
+  url?: string;
+  headers?: Record<string, string>;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  updatedAt?: string;
+}
+
+export interface AgentMCPServerInput {
+  name: string;
+  type: MCPServerType;
+  enabled?: boolean;
+  url?: string;
+  headers?: Record<string, string>;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+}
+
+export async function listAgentMCPServers(agentId: string): Promise<AgentMCPServer[]> {
+  const res = await apiFetch(`/api/agents/${encodeURIComponent(agentId)}/mcp`);
+  if (!res.ok) throw new Error(await readError(res, "load MCP servers failed"));
+  const data = await res.json();
+  return data.servers || [];
+}
+
+export async function createAgentMCPServer(
+  agentId: string,
+  input: AgentMCPServerInput,
+): Promise<{ ok: boolean; server?: AgentMCPServer; error?: string }> {
+  const res = await apiFetch(`/api/agents/${encodeURIComponent(agentId)}/mcp`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return res.json();
+}
+
+export async function updateAgentMCPServer(
+  agentId: string,
+  name: string,
+  input: AgentMCPServerInput,
+): Promise<{ ok: boolean; server?: AgentMCPServer; error?: string }> {
+  const res = await apiFetch(
+    `/api/agents/${encodeURIComponent(agentId)}/mcp/${encodeURIComponent(name)}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    },
+  );
+  return res.json();
+}
+
+export async function deleteAgentMCPServer(
+  agentId: string,
+  name: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await apiFetch(
+    `/api/agents/${encodeURIComponent(agentId)}/mcp/${encodeURIComponent(name)}`,
+    { method: "DELETE" },
+  );
+  return res.json();
+}
+
+// Scope-neutral aliases shared by the per-agent and system MCP managers.
+export type MCPServer = AgentMCPServer;
+export type MCPServerInput = AgentMCPServerInput;
+
+export async function listSystemMCPServers(): Promise<MCPServer[]> {
+  const res = await apiFetch(`/api/admin/mcp`);
+  if (!res.ok) throw new Error(await readError(res, "load system MCP servers failed"));
+  const data = await res.json();
+  return data.servers || [];
+}
+
+export async function createSystemMCPServer(
+  input: MCPServerInput,
+): Promise<{ ok: boolean; server?: MCPServer; error?: string }> {
+  const res = await apiFetch(`/api/admin/mcp`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return res.json();
+}
+
+export async function updateSystemMCPServer(
+  name: string,
+  input: MCPServerInput,
+): Promise<{ ok: boolean; server?: MCPServer; error?: string }> {
+  const res = await apiFetch(`/api/admin/mcp/${encodeURIComponent(name)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return res.json();
+}
+
+export async function deleteSystemMCPServer(
+  name: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await apiFetch(`/api/admin/mcp/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+  });
+  return res.json();
+}
+
 export async function listAgentChannels(agentId: string): Promise<AgentChannel[]> {
   const res = await apiFetch(`/api/agents/${agentId}/channels`);
   if (!res.ok) return [];
