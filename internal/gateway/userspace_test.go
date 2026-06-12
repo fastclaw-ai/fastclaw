@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/fastclaw-ai/fastclaw/internal/bus"
+	"github.com/fastclaw-ai/fastclaw/internal/config"
 	"github.com/fastclaw-ai/fastclaw/internal/scope"
 	"github.com/fastclaw-ai/fastclaw/internal/store"
 	"github.com/fastclaw-ai/fastclaw/internal/users"
@@ -137,5 +138,59 @@ func TestResolveChatterSeparatesIMSendersForRegularOwner(t *testing.T) {
 	}
 	if aliceAccount.ExternalID != "telegram:bot-a:111" {
 		t.Fatalf("unexpected external id: %q", aliceAccount.ExternalID)
+	}
+}
+
+// ModelFallbacks ride the same agents.defaults override row as Model.
+// Pin the whole data path the loadUserSpace / EnsureAgent overlays
+// rely on: row data (map[string]interface{}) → AgentDefaults's
+// modelFallbacks JSON key → ResolvedAgent via MergedAgentConfig. A
+// silent break anywhere here means a configured fallback chain never
+// reaches the agent and the first provider outage goes user-visible
+// again.
+func TestAgentScopeModelFallbacksMerge(t *testing.T) {
+	db, err := store.NewDBStore("sqlite", "file::memory:?cache=shared")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+	if err := db.Migrate(context.Background()); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	ctx := context.Background()
+
+	if err := scope.SaveSetting(ctx, db, "", "agent-x", NSAgentDefaults,
+		map[string]interface{}{
+			"model":          "openai/gpt-5.5",
+			"modelFallbacks": []interface{}{"anthropic/claude-fable-5", "openrouter/llama-4"},
+		}); err != nil {
+		t.Fatalf("save agent row: %v", err)
+	}
+
+	cfg, err := assembleConfig(ctx, db, "", "agent-x")
+	if err != nil {
+		t.Fatalf("assemble config: %v", err)
+	}
+	want := []string{"anthropic/claude-fable-5", "openrouter/llama-4"}
+	got := cfg.Agents.Defaults.ModelFallbacks
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("defaults fallbacks = %v, want %v", got, want)
+	}
+
+	// The defaults must carry through to the per-agent resolved view —
+	// that's what fallbacksForAgent reads at agent build time.
+	rc := cfg.MergedAgentConfig(config.AgentEntry{ID: "agent-x"})
+	got = rc.ModelFallbacks
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("resolved fallbacks = %v, want %v", got, want)
+	}
+
+	// A row without the key must not invent a chain for other agents.
+	cfgOther, err := assembleConfig(ctx, db, "", "agent-y")
+	if err != nil {
+		t.Fatalf("assemble config (other agent): %v", err)
+	}
+	if n := len(cfgOther.Agents.Defaults.ModelFallbacks); n != 0 {
+		t.Fatalf("agent without override row should have no fallbacks, got %d", n)
 	}
 }

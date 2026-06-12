@@ -290,7 +290,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(respBody))
+		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(respBody)}
 	}
 
 	return p.parseSSE(resp.Body)
@@ -311,7 +311,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(respBody))
+		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(respBody)}
 	}
 
 	ch := make(chan StreamChunk, 64)
