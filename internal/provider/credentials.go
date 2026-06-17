@@ -26,11 +26,11 @@ type CredentialEntry struct {
 
 // CredentialManager handles secure credential storage and retrieval.
 type CredentialManager struct {
-	masterKey     []byte
-	entries       map[string]*CredentialEntry
-	storePath     string
+	masterKey      []byte
+	entries        map[string]*CredentialEntry
+	storePath      string
 	needsReencrypt bool // true after legacy-key fallback decrypt
-	mu            sync.RWMutex
+	mu             sync.RWMutex
 }
 
 // NewCredentialManagerForUser creates a credential manager scoped to a specific
@@ -157,6 +157,7 @@ var knownEnvVars = map[string][]string{
 	"openai":     {"OPENAI_API_KEY"},
 	"anthropic":  {"ANTHROPIC_API_KEY"},
 	"openrouter": {"OPENROUTER_API_KEY"},
+	"evolink":    {"EVOLINK_API_KEY"},
 	"google":     {"GOOGLE_API_KEY", "GEMINI_API_KEY"},
 	"mistral":    {"MISTRAL_API_KEY"},
 	"cohere":     {"COHERE_API_KEY"},

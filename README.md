@@ -287,9 +287,10 @@ fastclaw agents config alpha set provider.openai.model gpt-4o      # adds; idemp
 fastclaw agents config alpha set provider.openai.models '[]'        # explicit clear
 ```
 
-Provider presets ship for `openai`, `openrouter`, `anthropic`, `ollama`,
-`groq`, `deepseek`, `mistral` — `--api-key-env` populates `apiKey` from
-the named environment variable, the rest comes from the preset.
+Provider presets ship for `openai`, `evolink`, `openrouter`,
+`anthropic`, `ollama`, `groq`, `deepseek`, `mistral` — `--api-key-env`
+populates `apiKey` from the named environment variable, the rest comes
+from the preset.
 
 #### Agent system files
 

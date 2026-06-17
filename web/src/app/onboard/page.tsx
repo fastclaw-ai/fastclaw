@@ -52,6 +52,7 @@ const STEPS = [
 // prop on SelectValue. Keep these in sync with the SelectItem lists.
 const PROVIDER_LABELS: Record<string, string> = {
   openai: "OpenAI",
+  evolink: "EvoLink",
   openrouter: "OpenRouter",
   anthropic: "Anthropic",
   deepseek: "DeepSeek",
@@ -83,6 +84,12 @@ const PROVIDERS: Record<
     apiType: "openai-chat",
     authType: "bearer-token",
     models: ["gpt-5.5"],
+  },
+  evolink: {
+    apiBase: "https://direct.evolink.ai/v1",
+    apiType: "openai-chat",
+    authType: "bearer-token",
+    models: ["gpt-5.2"],
   },
   openrouter: {
     apiBase: "https://openrouter.ai/api/v1",
@@ -629,6 +636,7 @@ function ProviderStep(props: {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="openai">OpenAI</SelectItem>
+                <SelectItem value="evolink">EvoLink</SelectItem>
                 <SelectItem value="openrouter">OpenRouter</SelectItem>
                 <SelectItem value="anthropic">Anthropic</SelectItem>
                 <SelectItem value="deepseek">DeepSeek</SelectItem>
