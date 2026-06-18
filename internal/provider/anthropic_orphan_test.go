@@ -153,6 +153,77 @@ func TestToAnthropicMessagesOrphanAssistantRawOnly(t *testing.T) {
 	}
 }
 
+func TestToAnthropicMessagesMiniMaxCompatFlattensToolHistory(t *testing.T) {
+	msgs := []Message{
+		{Role: "system", Content: "You are concise."},
+		{Role: "user", Content: "what os"},
+		{
+			Role:    "assistant",
+			Content: "I will check.",
+			ToolCalls: []ToolCall{{
+				ID:       "t1",
+				Type:     "function",
+				Function: FunctionCall{Name: "exec", Arguments: `{"command":"cat /etc/os-release"}`},
+			}},
+		},
+		{Role: "tool", ToolCallID: "t1", Content: "Debian 12"},
+		{Role: "assistant", Content: "It is Debian 12."},
+		{Role: "user", Content: "continue"},
+	}
+
+	_, out := toAnthropicMessagesCompat(msgs, true)
+
+	if len(out) != 3 {
+		t.Fatalf("expected flattened alternating history, got %d messages: %+v", len(out), out)
+	}
+	if out[0].Role != "user" || out[1].Role != "assistant" || out[2].Role != "user" {
+		t.Fatalf("unexpected role sequence: %s, %s, %s", out[0].Role, out[1].Role, out[2].Role)
+	}
+
+	for _, am := range out {
+		var blocks []any
+		if json.Unmarshal(am.Content, &blocks) == nil {
+			for _, b := range blocks {
+				mp, ok := b.(map[string]any)
+				if !ok {
+					continue
+				}
+				if bt, _ := mp["type"].(string); bt == "tool_use" || bt == "tool_result" {
+					t.Fatalf("MiniMax compat history must not replay %s blocks: %+v", bt, mp)
+				}
+			}
+		}
+	}
+
+	got := allText(out)
+	if !strings.Contains(got, "Tool call: exec") {
+		t.Errorf("flattened assistant missing tool call summary: %q", got)
+	}
+	if !strings.Contains(got, "Debian 12") {
+		t.Errorf("flattened assistant missing tool result/final content: %q", got)
+	}
+}
+
+func TestToAnthropicMessagesMiniMaxCompatCoalescesConsecutiveUsers(t *testing.T) {
+	msgs := []Message{
+		{Role: "user", Content: "first failed turn"},
+		{Role: "user", Content: "retry"},
+	}
+
+	_, out := toAnthropicMessagesCompat(msgs, true)
+
+	if len(out) != 1 {
+		t.Fatalf("expected one coalesced user message, got %d: %+v", len(out), out)
+	}
+	if out[0].Role != "user" {
+		t.Fatalf("expected user role, got %s", out[0].Role)
+	}
+	got := allText(out)
+	if !strings.Contains(got, "first failed turn") || !strings.Contains(got, "retry") {
+		t.Fatalf("coalesced user content missing pieces: %q", got)
+	}
+}
+
 func allText(out []anthropicMessage) string {
 	var sb strings.Builder
 	for _, am := range out {

@@ -52,9 +52,17 @@ type anthropicRequest struct {
 	Tools     []anthropicTool    `json:"tools,omitempty"`
 }
 
-// toAnthropicMessages converts provider Messages to Anthropic wire format.
-// Extracts the system message and returns the rest.
 func toAnthropicMessages(msgs []Message) (string, []anthropicMessage) {
+	return toAnthropicMessagesCompat(msgs, false)
+}
+
+// toAnthropicMessagesCompat converts provider Messages to Anthropic wire format.
+// Extracts the system message and returns the rest.
+func toAnthropicMessagesCompat(msgs []Message, flattenToolHistory bool) (string, []anthropicMessage) {
+	if flattenToolHistory {
+		msgs = flattenToolHistoryForText(msgs)
+	}
+
 	var system string
 	var out []anthropicMessage
 
@@ -246,6 +254,66 @@ func toAnthropicMessages(msgs []Message) (string, []anthropicMessage) {
 	return system, out
 }
 
+func flattenToolHistoryForText(msgs []Message) []Message {
+	out := make([]Message, 0, len(msgs))
+	appendMsg := func(m Message) {
+		if m.Role != "system" && m.Content != "" && len(m.ContentParts) == 0 && len(out) > 0 {
+			last := &out[len(out)-1]
+			if last.Role == m.Role && last.Content != "" && len(last.ContentParts) == 0 {
+				last.Content = strings.TrimSpace(last.Content) + "\n\n" + strings.TrimSpace(m.Content)
+				return
+			}
+		}
+		out = append(out, m)
+	}
+
+	for _, m := range msgs {
+		switch m.Role {
+		case "assistant":
+			if len(m.ToolCalls) > 0 {
+				appendMsg(Message{Role: "assistant", Content: flattenAssistantToolCallsText(m)})
+				continue
+			}
+		case "tool":
+			appendMsg(Message{Role: "assistant", Content: flattenToolResultText(m)})
+			continue
+		}
+		appendMsg(m)
+	}
+	return out
+}
+
+func flattenAssistantToolCallsText(m Message) string {
+	var b strings.Builder
+	if strings.TrimSpace(m.Content) != "" {
+		b.WriteString(strings.TrimSpace(m.Content))
+	}
+	for _, tc := range m.ToolCalls {
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		fmt.Fprintf(&b, "Tool call: %s", tc.Function.Name)
+		if strings.TrimSpace(tc.Function.Arguments) != "" {
+			fmt.Fprintf(&b, "\nArguments: %s", strings.TrimSpace(tc.Function.Arguments))
+		}
+	}
+	return b.String()
+}
+
+func flattenToolResultText(m Message) string {
+	label := strings.TrimSpace(m.Name)
+	if label == "" {
+		label = strings.TrimSpace(m.ToolCallID)
+	}
+	if label == "" {
+		label = "tool"
+	}
+	if strings.TrimSpace(m.Content) == "" {
+		return "Tool result: " + label
+	}
+	return "Tool result: " + label + "\n" + strings.TrimSpace(m.Content)
+}
+
 // parseToolInput decodes a stored tool_use Arguments string into the
 // JSON object Anthropic's wire format requires. Anything that isn't
 // an object — empty string, null, JSON array, bare value — gets
@@ -303,7 +371,7 @@ func thinkingBlockFor(m Message) map[string]interface{} {
 }
 
 func (p *AnthropicProvider) buildRequest(ctx context.Context, messages []Message, tools []Tool, model string, maxTokens int, temperature float64, stream bool) (*http.Request, error) {
-	system, anthropicMsgs := toAnthropicMessages(messages)
+	system, anthropicMsgs := toAnthropicMessagesCompat(messages, p.flattenToolHistoryForCompat(model))
 
 	if maxTokens <= 0 {
 		maxTokens = 4096
@@ -348,6 +416,14 @@ func (p *AnthropicProvider) buildRequest(ctx context.Context, messages []Message
 	httpReq.Header.Set("x-api-key", p.apiKey)
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
 	return httpReq, nil
+}
+
+func (p *AnthropicProvider) flattenToolHistoryForCompat(model string) bool {
+	base := strings.ToLower(p.apiBase)
+	mdl := strings.ToLower(model)
+	return strings.Contains(base, "minimax") ||
+		strings.Contains(base, "minimaxi") ||
+		strings.Contains(mdl, "minimax")
 }
 
 // Anthropic SSE event types
