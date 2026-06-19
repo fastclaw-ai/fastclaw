@@ -18,6 +18,15 @@ func TestSessionChannelTriple(t *testing.T) {
 	const userID = "u-test"
 	const agentID = "agt-test"
 
+	// ListSessions now scopes results to rows whose user_id exists in
+	// the users table (the query joins sessions → users to surface a
+	// caller's own + their app_users' threads). Seed the owner so the
+	// sessions saved below are visible. (Upstream's version of this test
+	// omitted this and fails the final ListSessions assertion.)
+	if err := db.CreateUser(ctx, &UserRecord{ID: userID, Username: userID, Email: userID + "@test.local", Role: "user"}); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+
 	// Two sessions sharing the same wechat (account, openid) triple —
 	// the older "v1" thread plus a newer "v2" minted after a /new.
 	older := &SessionRecord{
