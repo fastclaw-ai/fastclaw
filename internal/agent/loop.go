@@ -32,8 +32,17 @@ import (
 
 // Agent is the ReAct agent loop.
 type Agent struct {
-	name                 string
-	provider             provider.Provider
+	name     string
+	provider provider.Provider
+	// modelFallbacks are pre-built (model, provider) pairs tried in
+	// order when the primary model's initial ChatStream call fails
+	// with an availability error (5xx / 429 / transport) — see
+	// chatStreamWithFallback. Resolved once from rc.ModelFallbacks at
+	// construction (fallbacksForAgent); empty for agents without the
+	// config, which keeps the failover wrapper on the zero-overhead
+	// path. Note /model only rewrites a.model — a session-switched
+	// primary keeps the statically configured fallback chain.
+	modelFallbacks       []fallbackClient
 	registry             *tools.Registry
 	sessions             *session.Manager
 	memory               *Memory
@@ -327,6 +336,7 @@ func NewAgentWithSkillsCfg(rc config.ResolvedAgent, prov provider.Provider, mb *
 	ag := &Agent{
 		name:                 rc.ID,
 		provider:             prov,
+		modelFallbacks:       fallbacksForAgent(rc),
 		registry:             registry,
 		sessions:             session.NewManager(rc.Home + "/sessions"),
 		memory:               memory,
@@ -702,6 +712,38 @@ func (a *Agent) meterTokens(ctx context.Context, sessionKey string, u provider.U
 	}
 }
 
+// chatStreamWithFallback opens the turn's LLM stream: the primary model
+// first, then each configured fallback in order. Failover triggers only
+// on availability errors — 5xx / 429 / transport failures, see
+// provider.IsAvailabilityError — from the *initial* call. Once a stream
+// is open, mid-stream failures keep surfacing through StreamReader.Err
+// as before: re-driving a half-delivered answer through a different
+// model would duplicate output the user already saw.
+//
+// Returns the model that actually served the stream alongside the
+// reader; callers that don't need it ignore it (a.model stays the
+// display/session truth — fallbacks are a per-call retry, not a model
+// switch). When every fallback fails, the LAST error is returned — by
+// then the primary's cause has already been logged once per attempted
+// fallback. With no fallbacks configured this is exactly the old direct
+// ChatStream call: no extra allocations, no log lines.
+func (a *Agent) chatStreamWithFallback(ctx context.Context, messages []provider.Message, tools []provider.Tool) (*provider.StreamReader, string, error) {
+	sr, err := a.provider.ChatStream(ctx, messages, tools, a.model, a.maxTokens, a.temperature)
+	if err == nil || len(a.modelFallbacks) == 0 || !provider.IsAvailabilityError(err) {
+		return sr, a.model, err
+	}
+	from := a.model
+	for _, fb := range a.modelFallbacks {
+		slog.Warn("model fallback", "agent", a.name, "from", from, "to", fb.model, "cause", err)
+		sr, err = fb.prov.ChatStream(ctx, messages, tools, fb.model, a.maxTokens, a.temperature)
+		if err == nil {
+			return sr, fb.model, nil
+		}
+		from = fb.model
+	}
+	return nil, from, err
+}
+
 // streamChatToResponse is a drop-in replacement for provider.Chat that
 // pipes text chunks to the chat-event channel in real time via
 // content_delta events. The web UI subscriber appends each delta to
@@ -719,7 +761,7 @@ func (a *Agent) meterTokens(ctx context.Context, sessionKey string, u provider.U
 // HandleMessage path. Providers that don't actually stream still work
 // — they just deliver one big chunk on Done.
 func (a *Agent) streamChatToResponse(ctx context.Context, messages []provider.Message, tools []provider.Tool) (*provider.Response, error) {
-	sr, err := a.provider.ChatStream(ctx, messages, tools, a.model, a.maxTokens, a.temperature)
+	sr, _, err := a.chatStreamWithFallback(ctx, messages, tools)
 	if err != nil {
 		return nil, err
 	}
@@ -2691,7 +2733,7 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 
 		if !resp.HasToolCalls() {
 			// Final response - use streaming
-			sr, err := a.provider.ChatStream(ctx, messages, toolDefs, a.model, a.maxTokens, a.temperature)
+			sr, _, err := a.chatStreamWithFallback(ctx, messages, toolDefs)
 			if err != nil {
 				slog.Error("LLM stream failed, falling back", "agent", a.name, "error", err)
 				sess.Append(provider.Message{Role: "assistant", Content: resp.Content})

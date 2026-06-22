@@ -418,7 +418,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(respBody))
+		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(respBody)}
 	}
 
 	return p.parseSSE(resp.Body)
@@ -438,7 +438,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(respBody))
+		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(respBody)}
 	}
 
 	ch := make(chan StreamChunk, 64)

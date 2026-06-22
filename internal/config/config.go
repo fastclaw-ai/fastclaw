@@ -347,10 +347,18 @@ type AgentsConfig struct {
 }
 
 type AgentDefaults struct {
-	Model             string  `json:"model,omitempty"`
-	MaxTokens         int     `json:"maxTokens,omitempty"`
-	Temperature       float64 `json:"temperature,omitempty"`
-	MaxToolIterations int     `json:"maxToolIterations,omitempty"`
+	Model string `json:"model,omitempty"`
+	// ModelFallbacks are tried in order when the primary Model's
+	// provider fails the initial call of a turn with an availability
+	// error (HTTP 5xx, 429, or a transport failure). Same
+	// "<providerKey>/<modelId>" format as Model; entries whose
+	// provider key has no usable credentials are skipped at agent
+	// build time. See agent.chatStreamWithFallback for the failover
+	// policy (never mid-stream, never on caller cancellation).
+	ModelFallbacks    []string `json:"modelFallbacks,omitempty"`
+	MaxTokens         int      `json:"maxTokens,omitempty"`
+	Temperature       float64  `json:"temperature,omitempty"`
+	MaxToolIterations int      `json:"maxToolIterations,omitempty"`
 	// MaxParallelToolCalls caps how many tool calls a single LLM
 	// response is allowed to execute concurrently in one round. The
 	// LLM still decides how many tools to emit; we just refuse to
@@ -599,10 +607,15 @@ type ResolvedAgent struct {
 	// operator gave the agent ("Bob", "tdj", "Sonny"). Used as a
 	// fallback identity line in the system prompt when IDENTITY.md
 	// is empty so the model doesn't introduce itself as "Claude".
-	DisplayName          string
-	Home                 string
-	Workspace            string
-	Model                string
+	DisplayName string
+	Home        string
+	Workspace   string
+	Model       string
+	// ModelFallbacks — see AgentDefaults.ModelFallbacks. Resolved into
+	// per-model provider clients at agent build time
+	// (agent.fallbacksForAgent), not here, so a bad entry degrades to
+	// a logged skip instead of failing resolution.
+	ModelFallbacks       []string
 	MaxTokens            int
 	Temperature          float64
 	MaxToolIterations    int
@@ -728,6 +741,7 @@ func (cfg *Config) MergedAgentConfig(entry AgentEntry) ResolvedAgent {
 		Home:                 home,
 		Workspace:            workspace,
 		Model:                cfg.Agents.Defaults.Model,
+		ModelFallbacks:       cfg.Agents.Defaults.ModelFallbacks,
 		MaxTokens:            cfg.Agents.Defaults.MaxTokens,
 		Temperature:          cfg.Agents.Defaults.Temperature,
 		MaxToolIterations:    cfg.Agents.Defaults.MaxToolIterations,

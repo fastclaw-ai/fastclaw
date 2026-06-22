@@ -466,6 +466,9 @@ func (sp *UserSpace) EnsureAgent(ctx context.Context, st store.Store, mb *bus.Me
 			if ovr.Model != "" {
 				rc.Model = ovr.Model
 			}
+			if len(ovr.ModelFallbacks) > 0 {
+				rc.ModelFallbacks = ovr.ModelFallbacks
+			}
 			if ovr.MaxTokens > 0 {
 				rc.MaxTokens = ovr.MaxTokens
 			}
@@ -682,6 +685,9 @@ func loadUserSpace(ctx context.Context, userID string, mb *bus.MessageBus, st st
 			_ = json.Unmarshal(blob, &agentOverride)
 			if agentOverride.Model != "" {
 				rc.Model = agentOverride.Model
+			}
+			if len(agentOverride.ModelFallbacks) > 0 {
+				rc.ModelFallbacks = agentOverride.ModelFallbacks
 			}
 			if agentOverride.MaxTokens > 0 {
 				rc.MaxTokens = agentOverride.MaxTokens

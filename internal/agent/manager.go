@@ -29,13 +29,62 @@ import (
 // builds its own provider.Provider from its own API key+base, not the
 // user-space-wide one.
 func providerForAgent(rc config.ResolvedAgent, shared provider.Provider) provider.Provider {
-	parts := strings.SplitN(rc.Model, "/", 2)
+	if p := providerForModel(rc, rc.Model); p != nil {
+		return p
+	}
+	return shared
+}
+
+// providerForModel resolves one "<providerKey>/<modelId>" string against
+// the agent's merged provider map (steps 1–2 of providerForAgent).
+// Returns nil when the model has no provider prefix, the prefix isn't in
+// rc.Providers, or the entry has no API key — callers pick the fallback
+// behavior (shared provider for the primary model, skip-with-warning for
+// fallback models).
+func providerForModel(rc config.ResolvedAgent, model string) provider.Provider {
+	parts := strings.SplitN(model, "/", 2)
 	if len(parts) == 2 {
 		if pc, ok := rc.Providers[parts[0]]; ok && pc.APIKey != "" {
 			return provider.NewProvider(pc.APIKey, pc.APIBase, pc.APIType)
 		}
 	}
-	return shared
+	return nil
+}
+
+// fallbackClient pairs a fallback model with the provider instance built
+// to serve it. Resolved once at agent construction — same lifecycle as
+// the primary provider — so chatStreamWithFallback never touches config
+// on the hot path.
+type fallbackClient struct {
+	model string
+	prov  provider.Provider
+}
+
+// fallbacksForAgent resolves rc.ModelFallbacks into ready-to-call
+// clients. Unresolvable entries are skipped with a warning instead of
+// failing agent construction: a typo'd fallback shouldn't take down an
+// agent whose primary model works. Unlike providerForAgent there is no
+// shared-provider fallback here — firing a fallback model id at
+// whatever base URL the shared provider points at would turn every
+// failover into a confusing 400 from the wrong vendor.
+func fallbacksForAgent(rc config.ResolvedAgent) []fallbackClient {
+	if len(rc.ModelFallbacks) == 0 {
+		return nil
+	}
+	out := make([]fallbackClient, 0, len(rc.ModelFallbacks))
+	for _, m := range rc.ModelFallbacks {
+		if m == rc.Model {
+			slog.Warn("model fallback skipped", "agent", rc.ID, "model", m, "reason", "same as primary model")
+			continue
+		}
+		prov := providerForModel(rc, m)
+		if prov == nil {
+			slog.Warn("model fallback skipped", "agent", rc.ID, "model", m, "reason", "no provider with an API key for prefix")
+			continue
+		}
+		out = append(out, fallbackClient{model: m, prov: prov})
+	}
+	return out
 }
 
 // ManagerOption configures optional Manager behavior.
