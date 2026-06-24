@@ -2002,7 +2002,8 @@ func (d *DBStore) DeleteUser(ctx context.Context, id string) error {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx,
-			fmt.Sprintf("DELETE FROM configs WHERE agent_id = %s", d.ph(1)), aid); err != nil {
+			fmt.Sprintf(`DELETE FROM configs WHERE (scope = 'agent' AND scope_id = %s) OR (scope = 'user-agent' AND scope_id LIKE %s)`,
+				d.ph(1), d.ph(2)), aid, "%/"+aid); err != nil {
 			return err
 		}
 	}
@@ -2017,11 +2018,14 @@ func (d *DBStore) DeleteUser(ctx context.Context, id string) error {
 			return err
 		}
 	}
-	// Drop every config row owned by this user — both their own
-	// ('user_id=X, agent_id="') and any per-agent overrides they
-	// authored on someone else's agent ('user_id=X, agent_id=Y').
+	// Drop every config row owned by this user. After the configs
+	// refactor user identity lives in scope_id, not a dedicated
+	// user_id column: a user's own rows are (scope='user', scope_id=X);
+	// per-agent overrides they authored are (scope='user-agent',
+	// scope_id='X/<agent>'). Match both.
 	if _, err := tx.ExecContext(ctx,
-		fmt.Sprintf("DELETE FROM configs WHERE user_id = %s", d.ph(1)), id); err != nil {
+		fmt.Sprintf(`DELETE FROM configs WHERE (scope = 'user' AND scope_id = %s) OR (scope = 'user-agent' AND scope_id LIKE %s)`,
+			d.ph(1), d.ph(2)), id, id+"/%"); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx,
@@ -2282,12 +2286,14 @@ func (d *DBStore) DeleteAgent(ctx context.Context, agentID string) error {
 		fmt.Sprintf(`DELETE FROM apikey_agents WHERE agent_id = %s`, d.ph(1)), agentID); err != nil {
 		return err
 	}
-	// Drop every config row pointing at this agent — owner's official
-	// rows (user_id='', agent_id=X), agent owner's per-agent overrides
-	// (user_id=owner, agent_id=X), and any non-owner per-agent
-	// overrides (user_id=other, agent_id=X).
+	// Drop every config row pointing at this agent. After the configs
+	// refactor agent identity lives in scope_id, not a dedicated
+	// agent_id column: official agent rows are (scope='agent',
+	// scope_id=X); per-user overrides are (scope='user-agent',
+	// scope_id='<user>/X'). Match both.
 	if _, err := tx.ExecContext(ctx,
-		fmt.Sprintf(`DELETE FROM configs WHERE agent_id = %s`, d.ph(1)), agentID); err != nil {
+		fmt.Sprintf(`DELETE FROM configs WHERE (scope = 'agent' AND scope_id = %s) OR (scope = 'user-agent' AND scope_id LIKE %s)`,
+			d.ph(1), d.ph(2)), agentID, "%/"+agentID); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx,
