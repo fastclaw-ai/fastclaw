@@ -12,6 +12,15 @@ package tools
 //   - tail-only observation; no send-keys / paste / interactive control
 //     (those use cases route through tmux invoked from regular `exec`)
 //   - sessions are agent-private and live until killed or Registry.Close
+//
+// Multi-tenant isolation: every session is stamped with the ownerKey passed
+// to Start (a deterministic fold of agentID + chatterUserID + sessionKey —
+// the same identity tuple workspace.Store namespaces by). Get then refuses
+// cross-owner reads/writes, so a chatter who guesses another's bash_id
+// (the ids are a monotonic sequence bash_1, bash_2, …) cannot read that
+// session's stdout/stderr or kill its process. An empty ownerKey means
+// "no tenancy boundary enforced" — used by boot/admin paths that run
+// outside any chat (no chatter to isolate against) and by legacy tests.
 
 import (
 	"context"
@@ -89,6 +98,7 @@ func (b *outputBuffer) readSince(since int) (out []byte, dropped bool, newSince 
 // needed to observe and terminate it.
 type bashSession struct {
 	id        string
+	owner     string // ownerKey stamped at Start; Get refuses mismatched callers
 	command   string
 	startedAt time.Time
 
@@ -167,7 +177,14 @@ func newShellManager() *shellManager {
 // session lives until kill or natural exit; the caller's ctx does NOT
 // propagate to the child — that ctx dies at turn end and would take
 // every backgrounded process with it.
-func (m *shellManager) Start(command string, env []string) (*bashSession, error) {
+//
+// ownerKey is stamped onto the session so Get can refuse cross-owner
+// access (multi-tenant isolation). Pass "" only when there is no chat-
+// level chatter to isolate against — boot/admin paths and tests that
+// don't model tenancy. Every chat-driven exec call must pass a real key
+// derived from (agentID, chatterUserID, sessionKey); see OwnerKeyFor in
+// turnctx.go for the canonical constructor.
+func (m *shellManager) Start(command string, env []string, ownerKey string) (*bashSession, error) {
 	if command == "" {
 		return nil, errors.New("command is required")
 	}
@@ -231,6 +248,7 @@ func (m *shellManager) Start(command string, env []string) (*bashSession, error)
 	id := fmt.Sprintf("bash_%d", m.counter)
 	s := &bashSession{
 		id:        id,
+		owner:     ownerKey,
 		command:   command,
 		startedAt: time.Now(),
 		cmd:       cmd,
@@ -266,11 +284,22 @@ func (m *shellManager) Start(command string, env []string) (*bashSession, error)
 	return s, nil
 }
 
-// Get fetches a session by bash_id, or nil if not found.
-func (m *shellManager) Get(id string) *bashSession {
+// Get fetches a session by bash_id. It returns nil — indistinguishable
+// from "no such id" — when ownerKey is non-empty and does not match the
+// session's owner, so a caller cannot probe whether a guessed bash_id
+// exists for someone else. An empty ownerKey skips the check (boot/admin
+// paths and legacy tests that run outside any chat tenancy).
+func (m *shellManager) Get(id, ownerKey string) *bashSession {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.shells[id]
+	s := m.shells[id]
+	if s == nil {
+		return nil
+	}
+	if ownerKey != "" && s.owner != ownerKey {
+		return nil
+	}
+	return s
 }
 
 // Close kills every live session, clears the registry, and refuses any

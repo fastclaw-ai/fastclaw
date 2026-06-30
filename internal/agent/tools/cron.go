@@ -99,12 +99,13 @@ func makeCreateCronJob(st store.Store, r *Registry, userID, agentID string) Tool
 			jobType = "cron"
 		}
 
-		// Read the originating bus address at execute time — bindSession
-		// stamps it on every turn, so this captures the channel/chatID
-		// the user was on when they asked for the reminder.
-		channel := r.MessageChannel()
-		accountID := r.MessageAccountID()
-		chatID := r.MessageChatID()
+		// Read the originating bus address at execute time — the loop
+		// stamps it on every turn's TurnContext, so this captures the
+		// channel/chatID the user was on when they asked for the reminder.
+		tc := turnOrZero(ctx)
+		channel := tc.Channel
+		accountID := tc.AccountID
+		chatID := tc.ChatID
 
 		// The chatter's effective timezone governs how the schedule is
 		// read: zone-less 'once' datetimes and cron wall-clock fields
@@ -112,7 +113,7 @@ func makeCreateCronJob(st store.Store, r *Registry, userID, agentID string) Tool
 		// prompt's date line is rendered in), not the server's. The
 		// resolved name is frozen onto the row so the scheduler keeps
 		// evaluating recurrences in it even if the chatter later moves.
-		tzName := scope.Timezone(ctx, st, r.ChatterUserID(), agentID)
+		tzName := scope.Timezone(ctx, st, r.chatterFromCtx(ctx), agentID)
 		loc := scope.LoadLocationOrLocal(tzName)
 
 		id := generateUUID()

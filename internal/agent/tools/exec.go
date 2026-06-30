@@ -169,7 +169,16 @@ func makeExecToolFull(r *Registry, sbCfg *SandboxConfig, envProvider SkillEnvPro
 				skillEnv = resolveSkillEnv(args.Command, envProvider, skillDirs)
 			}
 			sessEnv := buildSubprocessEnv(skillEnv)
-			s, err := r.shellMgr.Start(command, sessEnv)
+			// Stamp the shell with the calling chat's identity so
+			// bash_output / kill_shell from a different chat can't
+			// read or kill it (cross-tenant isolation). Falls back to
+			// "" (no isolation) when no TurnContext is attached — i.e.
+			// boot/admin paths with no chatter in flight.
+			ownerKey := ""
+			if tc := FromContext(ctx); tc != nil {
+				ownerKey = OwnerKeyFor(r.agentID, tc.ChatterUserID, tc.SessionID)
+			}
+			s, err := r.shellMgr.Start(command, sessEnv, ownerKey)
 			if err != nil {
 				return "", err
 			}

@@ -485,19 +485,20 @@ func makeReadFile(r *Registry) ToolFunc {
 
 		// Identity-file confidentiality gate. A chatter who asks "show me
 		// your SOUL.md" must not get the verbatim persona spec back.
-		if r.identityFileBlocked(args.Path) {
+		if r.identityFileBlocked(ctx, args.Path) {
 			return IdentityFileRefusal, nil
 		}
 		// Skill-manifest gate. Same rationale for a bundled SKILL.md —
 		// the agent's IP, not for a chatter to pull verbatim.
-		if r.skillManifestBlocked(args.Path) {
+		if r.skillManifestBlocked(ctx, args.Path) {
 			return SkillManifestRefusal, nil
 		}
 
 		// Mirror makeWriteFile's routing: userRoot-destined paths go to the
 		// workspace store when one is configured.
 		if r.workspaceStore != nil && r.agentID != "" && r.isWorkspacePath(args.Path) {
-			rc, err := r.workspaceStore.Get(ctx, r.agentID, r.projectID, r.scopeSessionID(), r.wsPath(args.Path))
+			tc := turnOrZero(ctx)
+			rc, err := r.workspaceStore.Get(ctx, r.agentID, tc.ProjectID, r.scopeSessionID(ctx), r.wsPath(ctx, args.Path))
 			if err != nil {
 				return "", fmt.Errorf("workspace get: %w", err)
 			}
@@ -521,7 +522,7 @@ func makeReadFile(r *Registry) ToolFunc {
 		// reading from a workspace dir where identity files don't live.
 		if r.systemFileStore != nil && r.agentID != "" && basenameIsSystemFile(args.Path) {
 			name := filepath.Base(filepath.Clean(args.Path))
-			if data, err := r.readSystemFileForUser(ctx, r.systemFileUserID(name), name); err == nil {
+			if data, err := r.readSystemFileForUser(ctx, r.systemFileUserID(ctx, name), name); err == nil {
 				return string(data), nil
 			}
 			// Store miss: try the agent's systemRoot on disk directly,
@@ -581,7 +582,7 @@ func makeWriteFile(r *Registry) ToolFunc {
 
 		// Identity-file confidentiality gate — also blocks a chatter
 		// from REWRITING the agent's persona via prompt injection.
-		if r.identityFileBlocked(args.Path) {
+		if r.identityFileBlocked(ctx, args.Path) {
 			return IdentityFileRefusal, nil
 		}
 
@@ -590,7 +591,7 @@ func makeWriteFile(r *Registry) ToolFunc {
 		// filesystem because the memory store already covers their
 		// durability via a separate path.
 		if r.workspaceStore != nil && r.agentID != "" && r.isWorkspacePath(args.Path) {
-			if err := r.workspaceStore.Put(ctx, r.agentID, r.projectID, r.scopeSessionID(), r.wsPath(args.Path),
+			if err := r.workspaceStore.Put(ctx, r.agentID, turnOrZero(ctx).ProjectID, r.scopeSessionID(ctx), r.wsPath(ctx, args.Path),
 				strings.NewReader(args.Content), int64(len(args.Content)), ""); err != nil {
 				if friendly := asIsDirToolError("write_file", args.Path, err); friendly != nil {
 					return "", friendly
@@ -607,7 +608,7 @@ func makeWriteFile(r *Registry) ToolFunc {
 		// systemFileStore when available.
 		if r.systemFileStore != nil && r.agentID != "" && isSingleSegmentSystemFile(args.Path) {
 			name := filepath.Clean(args.Path)
-			if err := r.systemFileStore.SaveWorkspaceFile(ctx, r.agentID, r.systemFileUserID(name), name, []byte(args.Content)); err != nil {
+			if err := r.systemFileStore.SaveWorkspaceFile(ctx, r.agentID, r.systemFileUserID(ctx, name), name, []byte(args.Content)); err != nil {
 				return "", fmt.Errorf("system file save: %w", err)
 			}
 			// Keep a filesystem mirror so the agent runtime (context
@@ -669,13 +670,13 @@ func makeEditFile(r *Registry) ToolFunc {
 		}
 
 		// Identity-file confidentiality gate.
-		if r.identityFileBlocked(args.Path) {
+		if r.identityFileBlocked(ctx, args.Path) {
 			return IdentityFileRefusal, nil
 		}
 		// Skill-manifest gate — block edits to a bundled SKILL.md for
 		// non-admin chatters (editing returns surrounding content + lets
 		// them tamper with the agent's IP). Owner edits skills via the UI.
-		if r.skillManifestBlocked(args.Path) {
+		if r.skillManifestBlocked(ctx, args.Path) {
 			return SkillManifestRefusal, nil
 		}
 
@@ -685,7 +686,7 @@ func makeEditFile(r *Registry) ToolFunc {
 		// the same backend or an edit could silently land in a different
 		// store than the one the agent later reads from.
 		if r.workspaceStore != nil && r.agentID != "" && r.isWorkspacePath(args.Path) {
-			rc, err := r.workspaceStore.Get(ctx, r.agentID, r.projectID, r.scopeSessionID(), r.wsPath(args.Path))
+			rc, err := r.workspaceStore.Get(ctx, r.agentID, turnOrZero(ctx).ProjectID, r.scopeSessionID(ctx), r.wsPath(ctx, args.Path))
 			if err != nil {
 				return "", fmt.Errorf("workspace get: %w", err)
 			}
@@ -701,7 +702,7 @@ func makeEditFile(r *Registry) ToolFunc {
 			if err != nil {
 				return "", err
 			}
-			if err := r.workspaceStore.Put(ctx, r.agentID, r.projectID, r.scopeSessionID(), r.wsPath(args.Path),
+			if err := r.workspaceStore.Put(ctx, r.agentID, turnOrZero(ctx).ProjectID, r.scopeSessionID(ctx), r.wsPath(ctx, args.Path),
 				strings.NewReader(updated), int64(len(updated)), ""); err != nil {
 				if friendly := asIsDirToolError("edit_file", args.Path, err); friendly != nil {
 					return "", friendly
@@ -713,7 +714,7 @@ func makeEditFile(r *Registry) ToolFunc {
 
 		if r.systemFileStore != nil && r.agentID != "" && isSingleSegmentSystemFile(args.Path) {
 			name := filepath.Clean(args.Path)
-			uid := r.systemFileUserID(name)
+			uid := r.systemFileUserID(ctx, name)
 			data, err := r.readSystemFileForUser(ctx, uid, name)
 			if err != nil {
 				return "", fmt.Errorf("system file get: %w", err)
@@ -803,7 +804,7 @@ func makeListDir(r *Registry) ToolFunc {
 		// listing" by filtering List output to entries whose agent-relative
 		// path sits under args.Path's prefix.
 		if r.workspaceStore != nil && r.agentID != "" && r.isWorkspacePath(args.Path) {
-			objs, err := r.workspaceStore.List(ctx, r.agentID, r.projectID, r.scopeSessionID())
+			objs, err := r.workspaceStore.List(ctx, r.agentID, turnOrZero(ctx).ProjectID, r.scopeSessionID(ctx))
 			if err != nil {
 				return "", fmt.Errorf("workspace list: %w", err)
 			}
@@ -885,7 +886,7 @@ func makeListDir(r *Registry) ToolFunc {
 // dev server serves the sandbox /workspace root and envd resolves a bare
 // path against $HOME, not /workspace.
 func (r *Registry) mirrorCodingWriteToSandbox(ctx context.Context, path, content string) {
-	if r.codingSubdir == "" || r.executor == nil {
+	if turnOrZero(ctx).CodingSubdir == "" || r.executor == nil {
 		return
 	}
 	if _, ok := r.executor.(sandbox.RemoteWorkspace); !ok {
@@ -915,12 +916,12 @@ func registerSandboxedFile(r *Registry, ex sandbox.Executor) {
 		// Identity-file confidentiality gate — same as the host path.
 		// Runs BEFORE the systemFileStore lookup so a chatter never
 		// reaches the DB row at all.
-		if r.identityFileBlocked(args.Path) {
+		if r.identityFileBlocked(ctx, args.Path) {
 			return IdentityFileRefusal, nil
 		}
 		// Skill-manifest gate — refuse before any routing so a chatter
 		// can't read a bundled `/skills/<name>/SKILL.md` off the mount.
-		if r.skillManifestBlocked(args.Path) {
+		if r.skillManifestBlocked(ctx, args.Path) {
 			return SkillManifestRefusal, nil
 		}
 		// Identity files (SOUL.md, IDENTITY.md, …) are routed by basename
@@ -930,14 +931,14 @@ func registerSandboxedFile(r *Registry, ex sandbox.Executor) {
 		// /data/.fastclaw/workspaces/<id>/IDENTITY.md still hits the DB.
 		if r.systemFileStore != nil && r.agentID != "" && basenameIsSystemFile(args.Path) {
 			name := filepath.Base(filepath.Clean(args.Path))
-			if data, err := r.readSystemFileForUser(ctx, r.systemFileUserID(name), name); err == nil {
+			if data, err := r.readSystemFileForUser(ctx, r.systemFileUserID(ctx, name), name); err == nil {
 				return string(data), nil
 			}
 			return "", nil // miss → treat as unset (fresh agent)
 		}
 		switch r.routeFor(args.Path, OpRead) {
 		case RouteWorkspaceStore:
-			rc, err := r.workspaceStore.Get(ctx, r.agentID, r.projectID, r.scopeSessionID(), r.wsPath(args.Path))
+			rc, err := r.workspaceStore.Get(ctx, r.agentID, turnOrZero(ctx).ProjectID, r.scopeSessionID(ctx), r.wsPath(ctx, args.Path))
 			if err == nil {
 				defer rc.Close()
 				data, readErr := io.ReadAll(rc)
@@ -1016,18 +1017,18 @@ func registerSandboxedFile(r *Registry, ex sandbox.Executor) {
 		if err := validateFileTargetPath(args.Path); err != nil {
 			return "", fmt.Errorf("write_file: %w", err)
 		}
-		if r.identityFileBlocked(args.Path) {
+		if r.identityFileBlocked(ctx, args.Path) {
 			return IdentityFileRefusal, nil
 		}
 		switch r.routeFor(args.Path, OpWrite) {
 		case RouteSystemStore:
 			name := filepath.Clean(args.Path)
-			if err := r.systemFileStore.SaveWorkspaceFile(ctx, r.agentID, r.systemFileUserID(name), name, []byte(args.Content)); err != nil {
+			if err := r.systemFileStore.SaveWorkspaceFile(ctx, r.agentID, r.systemFileUserID(ctx, name), name, []byte(args.Content)); err != nil {
 				return "", fmt.Errorf("system file save: %w", err)
 			}
 			return fmt.Sprintf("Written %d bytes to %s", len(args.Content), name), nil
 		case RouteWorkspaceStore:
-			if err := r.workspaceStore.Put(ctx, r.agentID, r.projectID, r.scopeSessionID(), r.wsPath(args.Path),
+			if err := r.workspaceStore.Put(ctx, r.agentID, turnOrZero(ctx).ProjectID, r.scopeSessionID(ctx), r.wsPath(ctx, args.Path),
 				strings.NewReader(args.Content), int64(len(args.Content)), ""); err != nil {
 				if friendly := asIsDirToolError("write_file", args.Path, err); friendly != nil {
 					return "", friendly
@@ -1081,7 +1082,7 @@ func registerSandboxedFile(r *Registry, ex sandbox.Executor) {
 		}
 		switch r.routeFor(args.Path, OpList) {
 		case RouteWorkspaceStore:
-			objs, err := r.workspaceStore.List(ctx, r.agentID, r.projectID, r.scopeSessionID())
+			objs, err := r.workspaceStore.List(ctx, r.agentID, turnOrZero(ctx).ProjectID, r.scopeSessionID(ctx))
 			if err == nil {
 				prefix := strings.Trim(filepath.ToSlash(filepath.Clean(args.Path)), "/")
 				if prefix == "." {
@@ -1154,10 +1155,10 @@ func registerSandboxedFile(r *Registry, ex sandbox.Executor) {
 		if err := validateFileTargetPath(args.Path); err != nil {
 			return "", fmt.Errorf("edit_file: %w", err)
 		}
-		if r.identityFileBlocked(args.Path) {
+		if r.identityFileBlocked(ctx, args.Path) {
 			return IdentityFileRefusal, nil
 		}
-		if r.skillManifestBlocked(args.Path) {
+		if r.skillManifestBlocked(ctx, args.Path) {
 			return SkillManifestRefusal, nil
 		}
 
@@ -1185,7 +1186,7 @@ func registerSandboxedFile(r *Registry, ex sandbox.Executor) {
 		switch r.routeFor(args.Path, OpWrite) {
 		case RouteSystemStore:
 			name := filepath.Clean(args.Path)
-			uid := r.systemFileUserID(name)
+			uid := r.systemFileUserID(ctx, name)
 			data, err := r.readSystemFileForUser(ctx, uid, name)
 			if err != nil {
 				return "", fmt.Errorf("system file get: %w", err)
@@ -1199,7 +1200,7 @@ func registerSandboxedFile(r *Registry, ex sandbox.Executor) {
 			}
 			return fmt.Sprintf("Edited %s (%d replacement(s))", name, count), nil
 		case RouteWorkspaceStore:
-			rc, err := r.workspaceStore.Get(ctx, r.agentID, r.projectID, r.scopeSessionID(), r.wsPath(args.Path))
+			rc, err := r.workspaceStore.Get(ctx, r.agentID, turnOrZero(ctx).ProjectID, r.scopeSessionID(ctx), r.wsPath(ctx, args.Path))
 			if err == nil {
 				data, readErr := io.ReadAll(rc)
 				rc.Close()
@@ -1211,7 +1212,7 @@ func registerSandboxedFile(r *Registry, ex sandbox.Executor) {
 					if err != nil {
 						return "", err
 					}
-					if err := r.workspaceStore.Put(ctx, r.agentID, r.projectID, r.scopeSessionID(), r.wsPath(args.Path),
+					if err := r.workspaceStore.Put(ctx, r.agentID, turnOrZero(ctx).ProjectID, r.scopeSessionID(ctx), r.wsPath(ctx, args.Path),
 						strings.NewReader(updated), int64(len(updated)), ""); err != nil {
 						if friendly := asIsDirToolError("edit_file", args.Path, err); friendly != nil {
 							return "", friendly

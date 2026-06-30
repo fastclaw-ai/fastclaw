@@ -61,7 +61,14 @@ func registerBashOutput(r *Registry) {
 		if r.shellMgr == nil {
 			return "", fmt.Errorf("bash_output: shell manager not initialised")
 		}
-		s := r.shellMgr.Get(args.BashID)
+		// Enforce the same chat-tenancy boundary Start stamped: a shell
+		// started by one chatter is invisible to another. No TurnContext
+		// (boot/admin) → ownerKey "" skips the check, matching legacy.
+		ownerKey := ""
+		if tc := FromContext(ctx); tc != nil {
+			ownerKey = OwnerKeyFor(r.agentID, tc.ChatterUserID, tc.SessionID)
+		}
+		s := r.shellMgr.Get(args.BashID, ownerKey)
 		if s == nil {
 			return "", fmt.Errorf("bash_output: no such bash_id %q (call exec(run_in_background=true) first; ids are valid only within the same agent process)", args.BashID)
 		}
@@ -140,7 +147,13 @@ func registerKillShell(r *Registry) {
 		if r.shellMgr == nil {
 			return "", fmt.Errorf("kill_shell: shell manager not initialised")
 		}
-		s := r.shellMgr.Get(args.BashID)
+		// Same tenancy gate as bash_output — a chatter can only kill
+		// shells their own chat started. No TurnContext → no gate.
+		ownerKey := ""
+		if tc := FromContext(ctx); tc != nil {
+			ownerKey = OwnerKeyFor(r.agentID, tc.ChatterUserID, tc.SessionID)
+		}
+		s := r.shellMgr.Get(args.BashID, ownerKey)
 		if s == nil {
 			return "", fmt.Errorf("kill_shell: no such bash_id %q", args.BashID)
 		}

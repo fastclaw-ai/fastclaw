@@ -21,9 +21,17 @@ func TestCreateCronJobPersistsMessageAccountID(t *testing.T) {
 
 	r := NewRegistry(t.TempDir(), t.TempDir())
 	r.SetOwnerUserID("user-1")
-	r.SetChatterUserID("user-1")
-	r.SetMessageContext("telegram", "dclaw_official_bot", "8169894742")
 	RegisterCronTools(r, db, "user-1", "agent-1")
+
+	// Per-turn message context (channel/account/chatID) + chatter now
+	// flow through TurnContext on ctx — the same path the agent loop
+	// uses — instead of shared registry fields.
+	ctx := WithTurnContext(context.Background(), &TurnContext{
+		Channel:       "telegram",
+		AccountID:     "dclaw_official_bot",
+		ChatID:        "8169894742",
+		ChatterUserID: "user-1",
+	})
 
 	args, err := json.Marshal(createCronJobArgs{
 		Name:     "telegram reminder",
@@ -35,7 +43,7 @@ func TestCreateCronJobPersistsMessageAccountID(t *testing.T) {
 		t.Fatalf("marshal args: %v", err)
 	}
 
-	if _, err := r.Execute(context.Background(), "create_cron_job", string(args)); err != nil {
+	if _, err := r.Execute(ctx, "create_cron_job", string(args)); err != nil {
 		t.Fatalf("create cron job: %v", err)
 	}
 
