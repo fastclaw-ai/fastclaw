@@ -490,11 +490,11 @@ type applyPatchArgs struct {
 // -----------------------------------------------------------------------------
 
 func (r *Registry) readForPatch(ctx context.Context, path string) (string, error) {
-	if r.identityFileBlocked(path) {
+	if r.identityFileBlocked(ctx, path) {
 		return "", fmt.Errorf("%s", IdentityFileRefusal)
 	}
 	if r.workspaceStore != nil && r.agentID != "" && r.isWorkspacePath(path) {
-		rc, err := r.workspaceStore.Get(ctx, r.agentID, r.projectID, r.sessionID, path)
+		rc, err := r.workspaceStore.Get(ctx, r.agentID, turnOrZero(ctx).ProjectID, r.scopeSessionID(ctx), path)
 		if err != nil {
 			return "", fmt.Errorf("workspace get: %w", err)
 		}
@@ -507,7 +507,7 @@ func (r *Registry) readForPatch(ctx context.Context, path string) (string, error
 	}
 	if r.systemFileStore != nil && r.agentID != "" && basenameIsSystemFile(path) {
 		name := filepath.Base(filepath.Clean(path))
-		if data, err := r.readSystemFileForUser(ctx, r.systemFileUserID(name), name); err == nil {
+		if data, err := r.readSystemFileForUser(ctx, r.systemFileUserID(ctx, name), name); err == nil {
 			return string(data), nil
 		}
 		if r.systemRoot != "" {
@@ -533,16 +533,16 @@ func (r *Registry) readForPatch(ctx context.Context, path string) (string, error
 }
 
 func (r *Registry) writeForPatch(ctx context.Context, path, content string) error {
-	if r.identityFileBlocked(path) {
+	if r.identityFileBlocked(ctx, path) {
 		return fmt.Errorf("%s", IdentityFileRefusal)
 	}
 	if r.workspaceStore != nil && r.agentID != "" && r.isWorkspacePath(path) {
-		return r.workspaceStore.Put(ctx, r.agentID, r.projectID, r.sessionID, path,
+		return r.workspaceStore.Put(ctx, r.agentID, turnOrZero(ctx).ProjectID, r.scopeSessionID(ctx), path,
 			strings.NewReader(content), int64(len(content)), "")
 	}
 	if r.systemFileStore != nil && r.agentID != "" && isSingleSegmentSystemFile(path) {
 		name := filepath.Clean(path)
-		if err := r.systemFileStore.SaveWorkspaceFile(ctx, r.agentID, r.systemFileUserID(name), name, []byte(content)); err != nil {
+		if err := r.systemFileStore.SaveWorkspaceFile(ctx, r.agentID, r.systemFileUserID(ctx, name), name, []byte(content)); err != nil {
 			return err
 		}
 		// Mirror to disk so this pod's in-process readers (context builder,
@@ -578,7 +578,7 @@ func (r *Registry) deleteForPatch(ctx context.Context, path string) error {
 		return fmt.Errorf("apply_patch: refusing to delete identity file %q (use Update File with empty content instead)", path)
 	}
 	if r.workspaceStore != nil && r.agentID != "" && r.isWorkspacePath(path) {
-		return r.workspaceStore.Delete(ctx, r.agentID, r.projectID, r.sessionID, path)
+		return r.workspaceStore.Delete(ctx, r.agentID, turnOrZero(ctx).ProjectID, r.scopeSessionID(ctx), path)
 	}
 	root := r.rootForPath(path)
 	full, err := resolvePathSandboxed(root, r.effectiveSandboxRoot(root), path)
@@ -598,13 +598,13 @@ func (r *Registry) deleteForPatch(ctx context.Context, path string) error {
 func (r *Registry) readForPatchSandbox(ctx context.Context, ex sandbox.Executor, path string) (string, error) {
 	if r.systemFileStore != nil && r.agentID != "" && basenameIsSystemFile(path) {
 		name := filepath.Base(filepath.Clean(path))
-		if data, err := r.readSystemFileForUser(ctx, r.systemFileUserID(name), name); err == nil {
+		if data, err := r.readSystemFileForUser(ctx, r.systemFileUserID(ctx, name), name); err == nil {
 			return string(data), nil
 		}
 		return "", nil
 	}
 	if r.workspaceStore != nil && r.agentID != "" && r.isWorkspacePath(path) {
-		rc, err := r.workspaceStore.Get(ctx, r.agentID, r.projectID, r.sessionID, path)
+		rc, err := r.workspaceStore.Get(ctx, r.agentID, turnOrZero(ctx).ProjectID, r.scopeSessionID(ctx), path)
 		if err == nil {
 			defer rc.Close()
 			data, readErr := io.ReadAll(rc)
@@ -620,10 +620,10 @@ func (r *Registry) readForPatchSandbox(ctx context.Context, ex sandbox.Executor,
 func (r *Registry) writeForPatchSandbox(ctx context.Context, ex sandbox.Executor, path, content string) error {
 	if r.systemFileStore != nil && r.agentID != "" && isSingleSegmentSystemFile(path) {
 		name := filepath.Clean(path)
-		return r.systemFileStore.SaveWorkspaceFile(ctx, r.agentID, r.systemFileUserID(name), name, []byte(content))
+		return r.systemFileStore.SaveWorkspaceFile(ctx, r.agentID, r.systemFileUserID(ctx, name), name, []byte(content))
 	}
 	if r.workspaceStore != nil && r.agentID != "" && r.isWorkspacePath(path) {
-		return r.workspaceStore.Put(ctx, r.agentID, r.projectID, r.sessionID, path,
+		return r.workspaceStore.Put(ctx, r.agentID, turnOrZero(ctx).ProjectID, r.scopeSessionID(ctx), path,
 			strings.NewReader(content), int64(len(content)), "")
 	}
 	_, err := ex.WriteFile(ctx, path, content)
@@ -635,7 +635,7 @@ func (r *Registry) deleteForPatchSandbox(ctx context.Context, ex sandbox.Executo
 		return fmt.Errorf("apply_patch: refusing to delete identity file %q (use Update File with empty content instead)", path)
 	}
 	if r.workspaceStore != nil && r.agentID != "" && r.isWorkspacePath(path) {
-		return r.workspaceStore.Delete(ctx, r.agentID, r.projectID, r.sessionID, path)
+		return r.workspaceStore.Delete(ctx, r.agentID, turnOrZero(ctx).ProjectID, r.scopeSessionID(ctx), path)
 	}
 	// Sandbox executor exposes no Delete API; fall back to `rm`. Single-quote
 	// the path and escape embedded single quotes so a pathological filename

@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -39,8 +40,12 @@ func TestIdentityFileBlockedRespectsCallerFlag(t *testing.T) {
 		{"", false, false},
 	}
 	for _, c := range cases {
-		r := &Registry{callerIsAdmin: c.admin}
-		got := r.identityFileBlocked(c.path)
+		// callerIsAdmin now lives on TurnContext (per-turn), not the
+		// shared registry field — mirror the production path by attaching
+		// it to ctx.
+		ctx := WithTurnContext(context.Background(), &TurnContext{CallerIsAdmin: c.admin})
+		r := &Registry{}
+		got := r.identityFileBlocked(ctx, c.path)
 		if got != c.want {
 			t.Errorf("identityFileBlocked(%q) admin=%v = %v, want %v",
 				c.path, c.admin, got, c.want)
@@ -67,8 +72,9 @@ func TestNestedIdentityNameIsNotBlocked(t *testing.T) {
 	// "notes/SOUL.md" is a workspace artifact named like an identity
 	// file — it's the chatter's own note, not the agent's persona. The
 	// gate must not block it.
-	r := &Registry{callerIsAdmin: false}
-	if r.identityFileBlocked("notes/SOUL.md") {
+	ctx := WithTurnContext(context.Background(), &TurnContext{CallerIsAdmin: false})
+	r := &Registry{}
+	if r.identityFileBlocked(ctx, "notes/SOUL.md") {
 		t.Errorf("nested SOUL.md must not be gated as the agent's identity")
 	}
 }

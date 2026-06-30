@@ -29,15 +29,19 @@ func RegisterBillingTools(r *Registry, meter usage.Meter, quotaStore usage.Quota
 
 func makeGetBillingUsage(meter usage.Meter, quotaStore usage.QuotaStore, r *Registry) ToolFunc {
 	return func(ctx context.Context, _ json.RawMessage) (string, error) {
+		// Billing is charged to the account owner (boot-stable r.userID);
+		// the per-turn chatter (resolved from ctx) is reported for
+		// attribution. On IM channels with per-sender app_users these two
+		// differ, which is exactly why billing must NOT race on a shared
+		// per-turn field — each turn resolves its own chatter from ctx.
 		billingUserID := r.OwnerUserID()
+		chatterUserID := r.chatterFromCtx(ctx)
 		if billingUserID == "" {
-			billingUserID = r.EffectiveUserID()
+			billingUserID = chatterUserID
 		}
 		if billingUserID == "" {
 			return "", fmt.Errorf("billing user is not available in this chat context")
 		}
-
-		chatterUserID := r.ChatterUserID()
 		out := map[string]any{
 			"billingUserId": billingUserID,
 			"chatterUserId": chatterUserID,

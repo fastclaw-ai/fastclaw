@@ -164,53 +164,59 @@ func (a *Agent) SetSandboxPool(p sandbox.ExecutorPool) {
 	}
 }
 
-// bindSession wires per-turn session state into the tool registry: the
-// session-scoped sandbox executor (when a pool is configured), the
-// sessionID workspace.Store calls use to namespace artifacts, and the
-// (channel, accountID, chatID) bus address so deferred-work tools (create_cron_job)
-// can stamp it onto persisted rows for later replay. Called at the top
-// of HandleMessage / HandleMessageStream before any tool runs.
+// bindSession computes the per-turn scoping values (session/project ids,
+// coding-root/subdir) and binds a session-scoped sandbox executor when a
+// pool is configured. It returns a partially-populated TurnContext that
+// the caller enriches with chatter/admin/goalKey and attaches to ctx via
+// tools.WithTurnContext.
 //
-// Mutating the shared registry across concurrent chats would race, but
-// the current invariant is one chat-in-flight per agent — the gateway
-// serializes per-agent turns. Documenting it here in case that changes.
-func (a *Agent) bindSession(ctx context.Context, channel, accountID, sessionID, projectID string) {
-	a.registry.SetSessionID(sessionID)
-	a.registry.SetProjectID(projectID)
-	// Coding agents (those with a project runtime wired) treat a project
-	// as ONE shared app tree: file tools address the project root so the
-	// agent's edits land where the dev server serves. Only when actually
-	// inside a project; loose chats and non-coding agents are unaffected.
-	a.registry.SetCodingRootScope(a.projectRuntime != nil && projectID != "")
+// Per-turn state is NO LONGER written to shared Registry fields — that
+// was the race surface when two turns overlapped on one agent (public
+// agents, cron + live chat, …). The sandbox executor bind still goes
+// through SetExecutor because it re-registers the sandboxed tool closures
+// with the session's container; those closures read their per-turn
+// scoping from ctx at call time, so the bind itself is safe to keep on
+// the registry.
+func (a *Agent) bindSession(ctx context.Context, channel, accountID, sessionID, projectID string) *tools.TurnContext {
+	tc := &tools.TurnContext{
+		SessionID: sessionID,
+		ProjectID: projectID,
+		// Coding agents (those with a project runtime wired) treat a
+		// project as ONE shared app tree: file tools address the project
+		// root so the agent's edits land where the dev server serves.
+		// Only when actually inside a project; loose chats and non-coding
+		// agents are unaffected.
+		CodingRootScope: a.projectRuntime != nil && projectID != "",
+		Channel:         channel,
+		AccountID:       accountID,
+		ChatID:          sessionID,
+	}
 	// If this scope already has a running app (a runtime record exists),
 	// redirect file tools into its app subfolder so edits keep landing
 	// where the dev server serves — across turns, not just the turn that
-	// called start_app_preview. EffectiveUserID is the owner here
-	// (chatter is bound later), which is correct for the web-direct case.
-	a.registry.SetCodingSubdir("")
-	if a.projectRuntime != nil {
-		if uid := a.registry.EffectiveUserID(); uid != "" {
-			if _, err := a.projectRuntime.Get(ctx, uid, a.name, projectID, sessionID); err == nil {
-				a.registry.SetCodingSubdir(coderuntime.AppSubdir)
-			}
+	// called start_app_preview. The owner id (a.ownerUserID) is the right
+	// scope key here; chatter is bound later but the project runtime is
+	// owned by the agent owner regardless of who's chatting.
+	if a.projectRuntime != nil && a.ownerUserID != "" {
+		if _, err := a.projectRuntime.Get(ctx, a.ownerUserID, a.name, projectID, sessionID); err == nil {
+			tc.CodingSubdir = coderuntime.AppSubdir
 		}
 	}
-	a.registry.SetMessageContext(channel, accountID, sessionID)
-	if a.sandboxPool == nil {
-		return
+	if a.sandboxPool != nil {
+		ex, err := a.sandboxPool.Get(ctx, a.name, projectID, sessionID)
+		if err != nil {
+			// Error level (not warn) — when sandbox is required and we
+			// can't bind, the next exec call will refuse with the
+			// "sandboxRequired but no executor" message; log here so the
+			// upstream cause (docker daemon down, image pull failed, …) is
+			// captured next to the user-facing error.
+			slog.Error("sandbox executor unavailable; exec will refuse host fallback",
+				"agent", a.name, "session", sessionID, "error", err)
+		} else {
+			a.registry.SetExecutor(ex)
+		}
 	}
-	ex, err := a.sandboxPool.Get(ctx, a.name, projectID, sessionID)
-	if err != nil {
-		// Error level (not warn) — when sandbox is required and we
-		// can't bind, the next exec call will refuse with the
-		// "sandboxRequired but no executor" message; log here so the
-		// upstream cause (docker daemon down, image pull failed, …) is
-		// captured next to the user-facing error.
-		slog.Error("sandbox executor unavailable; exec will refuse host fallback",
-			"agent", a.name, "session", sessionID, "error", err)
-		return
-	}
-	a.registry.SetExecutor(ex)
+	return tc
 }
 
 // NewAgent creates a new Agent from a resolved config.
@@ -1914,21 +1920,26 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 	// + writes get session-scoped paths and (when a sandbox pool is
 	// wired) the executor used by exec/read_file/list_dir is tied to a
 	// session-private container.
-	a.bindSession(ctx, msg.Channel, msg.AccountID, msg.ChatID, msg.ProjectID)
-	// Flag whether this turn's chatter is the agent owner / channel
-	// admin. File tools use this to refuse identity-file reads from
-	// regular chatters (SOUL/IDENTITY/BOOTSTRAP/... leak as verbatim
-	// chat replies otherwise).
-	a.registry.SetCallerIsAdmin(a.isAdminChatter(msg))
-	// Plumb the persistent session_key for goal-scoped tools.
-	// SetSessionID above uses msg.ChatID (the channel-level chat
-	// identifier); goal tools need the durable session.Session.SessionKey
-	// to address rows in agent_goals.
-	a.registry.SetGoalSessionKey(sess.SessionKey())
+	// Build the per-turn TurnContext and attach it to ctx. All per-turn
+	// tool state (session/project scoping, message address for cron
+	// replay, chatter for per-user files, admin flag for identity-file
+	// gates, goal session key) now flows through ctx instead of mutating
+	// shared Registry fields — so two concurrent turns on the same agent
+	// (public agents, cron + live chat, …) cannot race on that state.
+	// Named `turn` (not `tc`) to avoid shadowing the loop-local `tc`
+	// iteration variable used for provider.ToolCall throughout the ReAct
+	// loop below.
+	turn := a.bindSession(ctx, msg.Channel, msg.AccountID, msg.ChatID, msg.ProjectID)
+	turn.CallerIsAdmin = a.isAdminChatter(msg)
+	// Goal tools need the durable session.Session.SessionKey (distinct
+	// from msg.ChatID, the channel-level chat identifier) to address rows
+	// in agent_goals.
+	turn.GoalSessionKey = sess.SessionKey()
 	// Per-user file writes (USER.md / MEMORY.md) need to land in the
 	// per-turn chatter's row, not the UserSpace owner — see
 	// Registry.systemFileUserID for the routing rule.
-	a.registry.SetChatterUserID(chatterUID)
+	turn.ChatterUserID = chatterUID
+	ctx = tools.WithTurnContext(ctx, turn)
 
 	// Steering: mark a turn in-flight so messages arriving mid-run are
 	// buffered onto the session (drained between tool iterations below)
@@ -2089,7 +2100,7 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 		})
 
 		// Hook: AfterModelCall
-		hcAfter := &HookContext{AgentName: a.name, Point: AfterModelCall, Messages: messages, Response: resp, Error: err, StartTime: hcBefore.StartTime, Channel: msg.Channel, AccountID: msg.AccountID, ChatID: msg.ChatID, UserID: a.ownerUserID, GoalSessionKey: a.registry.GoalSessionKey()}
+		hcAfter := &HookContext{AgentName: a.name, Point: AfterModelCall, Messages: messages, Response: resp, Error: err, StartTime: hcBefore.StartTime, Channel: msg.Channel, AccountID: msg.AccountID, ChatID: msg.ChatID, UserID: a.ownerUserID, GoalSessionKey: turn.GoalSessionKey}
 		a.hooks.Run(ctx, hcAfter)
 
 		if err != nil {
@@ -2294,7 +2305,7 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 				AccountID:      msg.AccountID,
 				ChatID:         msg.ChatID,
 				UserID:         a.ownerUserID,
-				GoalSessionKey: a.registry.GoalSessionKey(),
+				GoalSessionKey: turn.GoalSessionKey,
 				IsPlanMode:     isPlanMode(msg.Params),
 				Source:         msg.Source,
 			})
@@ -2568,7 +2579,7 @@ func (a *Agent) runPostTurn(ctx context.Context, msg bus.InboundMessage, message
 		AccountID:      msg.AccountID,
 		ChatID:         msg.ChatID,
 		Source:         msg.Source,
-		GoalSessionKey: a.registry.GoalSessionKey(),
+		GoalSessionKey: a.registry.GoalSessionKeyFromCtx(ctx),
 		IsPlanMode:     isPlanMode(msg.Params),
 	})
 
@@ -2668,13 +2679,16 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 		prov, mdl := provider.SplitProviderModel(a.model)
 		sess.SetProviderModel(prov, mdl)
 	}
-	a.bindSession(ctx, msg.Channel, msg.AccountID, msg.ChatID, msg.ProjectID)
-	a.registry.SetCallerIsAdmin(a.isAdminChatter(msg))
-	a.registry.SetGoalSessionKey(sess.SessionKey())
-	// Per-user file writes (USER.md / MEMORY.md) need to land in the
-	// per-turn chatter's row, not the UserSpace owner — see
-	// Registry.systemFileUserID for the routing rule.
-	a.registry.SetChatterUserID(chatterUID)
+	// Build the per-turn TurnContext and attach it to ctx (mirrors
+	// HandleMessage): per-turn tool state flows through ctx, not shared
+	// Registry fields, so concurrent turns on the same agent can't race.
+	// Named `turn` (not `tc`) to avoid shadowing the loop-local `tc`
+	// iteration variable used for provider.ToolCall in the streaming loop.
+	turn := a.bindSession(ctx, msg.Channel, msg.AccountID, msg.ChatID, msg.ProjectID)
+	turn.CallerIsAdmin = a.isAdminChatter(msg)
+	turn.GoalSessionKey = sess.SessionKey()
+	turn.ChatterUserID = chatterUID
+	ctx = tools.WithTurnContext(ctx, turn)
 
 	// Same orphan-tool_use safety net as HandleMessage. The streaming path
 	// previously lacked this, so loop detection (which appends an assistant
@@ -2744,7 +2758,7 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 			return a.provider.Chat(ctx, messages, toolDefs, a.model, a.maxTokens, a.temperature)
 		})
 
-		hcAfter := &HookContext{AgentName: a.name, Point: AfterModelCall, Messages: messages, Response: resp, Error: err, StartTime: hcBefore.StartTime, Channel: msg.Channel, AccountID: msg.AccountID, ChatID: msg.ChatID, UserID: a.ownerUserID, GoalSessionKey: a.registry.GoalSessionKey()}
+		hcAfter := &HookContext{AgentName: a.name, Point: AfterModelCall, Messages: messages, Response: resp, Error: err, StartTime: hcBefore.StartTime, Channel: msg.Channel, AccountID: msg.AccountID, ChatID: msg.ChatID, UserID: a.ownerUserID, GoalSessionKey: turn.GoalSessionKey}
 		a.hooks.Run(ctx, hcAfter)
 
 		if err != nil {
@@ -2891,7 +2905,7 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 		for idx, r := range results {
 			tc := resp.ToolCalls[idx]
 			resultContent, meta := extractToolMeta(r.result)
-			a.hooks.Run(ctx, &HookContext{AgentName: a.name, Point: AfterToolCall, ToolName: r.toolName, ToolResult: resultContent, Error: r.err, Channel: msg.Channel, AccountID: msg.AccountID, ChatID: msg.ChatID, UserID: a.ownerUserID, GoalSessionKey: a.registry.GoalSessionKey(), IsPlanMode: isPlanMode(msg.Params), Source: msg.Source})
+			a.hooks.Run(ctx, &HookContext{AgentName: a.name, Point: AfterToolCall, ToolName: r.toolName, ToolResult: resultContent, Error: r.err, Channel: msg.Channel, AccountID: msg.AccountID, ChatID: msg.ChatID, UserID: a.ownerUserID, GoalSessionKey: turn.GoalSessionKey, IsPlanMode: isPlanMode(msg.Params), Source: msg.Source})
 
 			if r.err != nil {
 				slog.Warn("tool execution error", "agent", a.name, "name", r.toolName, "error", r.err)

@@ -61,7 +61,7 @@ func makeSetPreference(st store.Store, r *Registry) ToolFunc {
 			return "", fmt.Errorf("value is required")
 		}
 
-		chatterUID := r.ChatterUserID()
+		chatterUID := r.chatterFromCtx(ctx)
 		if chatterUID == "" {
 			return "", fmt.Errorf("no chatter identity on this turn — cannot persist preference")
 		}

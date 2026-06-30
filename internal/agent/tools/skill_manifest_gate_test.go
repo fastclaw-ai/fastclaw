@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -37,8 +38,11 @@ func TestSkillManifestBlockedRespectsCallerFlag(t *testing.T) {
 		{"empty", "", false, "", false},
 	}
 	for _, c := range cases {
-		r := &Registry{callerIsAdmin: c.admin, userSkillsRoot: c.userSkillsRoot}
-		if got := r.skillManifestBlocked(c.path); got != c.want {
+		// callerIsAdmin is per-turn (TurnContext on ctx); userSkillsRoot
+		// is boot-stable (stays on the registry).
+		ctx := WithTurnContext(context.Background(), &TurnContext{CallerIsAdmin: c.admin})
+		r := &Registry{userSkillsRoot: c.userSkillsRoot}
+		if got := r.skillManifestBlocked(ctx, c.path); got != c.want {
 			t.Errorf("%s: skillManifestBlocked(%q) admin=%v userRoot=%q = %v, want %v",
 				c.name, c.path, c.admin, c.userSkillsRoot, got, c.want)
 		}

@@ -64,21 +64,28 @@ func (m *memGoalStore) DeleteGoal(context.Context, string) error { return nil }
 func fixture(t *testing.T) (*Registry, *memGoalStore) {
 	t.Helper()
 	r := NewRegistry("", "")
-	r.SetGoalSessionKey("s-fixture-1")
 	st := newMemGoalStore()
 	RegisterGoalTools(r, st, "agent-A")
 	return r, st
 }
 
+// goalFixtureSessionKey is the per-turn goal session key attached to ctx
+// in tests — the same value the old r.SetGoalSessionKey wired. Kept as a
+// constant so seedGoal and callTool agree on it.
+const goalFixtureSessionKey = "s-fixture-1"
+
 // callTool runs the named tool with the given args JSON and returns
-// (result, err).
+// (result, err). It attaches a TurnContext carrying the fixture session
+// key so update_goal can resolve its goal row — mirroring how the agent
+// loop threads per-turn state through ctx instead of registry fields.
 func callTool(t *testing.T, r *Registry, name, argsJSON string) (string, error) {
 	t.Helper()
 	fn := r.GetFunc(name)
 	if fn == nil {
 		t.Fatalf("tool %q not registered", name)
 	}
-	return fn(context.Background(), json.RawMessage(argsJSON))
+	ctx := WithTurnContext(context.Background(), &TurnContext{GoalSessionKey: goalFixtureSessionKey})
+	return fn(ctx, json.RawMessage(argsJSON))
 }
 
 // seedGoal directly inserts an Active goal into the store, bypassing
@@ -169,16 +176,20 @@ func TestUpdateGoalRegistered(t *testing.T) {
 }
 
 // TestUpdateGoalNoSessionContext: when the tool fires outside a chat
-// turn (registry never got SetGoalSessionKey), it must surface a
-// recoverable error instead of dereferencing a nil session. This is
-// the boot-time / out-of-context path.
+// turn (no TurnContext attached to ctx), it must surface a recoverable
+// error instead of dereferencing a nil session. This is the boot-time /
+// out-of-context path.
 func TestUpdateGoalNoSessionContext(t *testing.T) {
 	r := NewRegistry("", "")
-	// Deliberately skip SetGoalSessionKey.
+	// Deliberately use a bare background ctx — no TurnContext attached.
 	st := newMemGoalStore()
 	RegisterGoalTools(r, st, "agent-A")
 
-	_, err := callTool(t, r, "update_goal", `{"status":"complete"}`)
+	fn := r.GetFunc("update_goal")
+	if fn == nil {
+		t.Fatalf("update_goal not registered")
+	}
+	_, err := fn(context.Background(), json.RawMessage(`{"status":"complete"}`))
 	if err == nil || !strings.Contains(err.Error(), "no active session") {
 		t.Fatalf("expected no-session error, got %v", err)
 	}

@@ -26,8 +26,11 @@ func TestGetBillingUsageWithQuota(t *testing.T) {
 
 	r := NewRegistry("", "")
 	r.SetOwnerUserID("owner-1")
-	r.SetChatterUserID("chatter-1")
 	RegisterBillingTools(r, meter, quota)
+
+	// Per-turn chatter now flows through TurnContext on ctx (the same
+	// path the agent loop uses), not a shared registry field.
+	ctx = WithTurnContext(ctx, &TurnContext{ChatterUserID: "chatter-1"})
 
 	got, err := r.Execute(ctx, "get_billing_usage", `{}`)
 	if err != nil {

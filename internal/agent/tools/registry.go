@@ -78,11 +78,16 @@ const IdentityFileRefusal = "[refused: this file is part of the agent's private 
 // identityFileBlocked reports whether the current caller should be
 // refused access to an identity file at `path`. Returns true only
 // when the path resolves to one of the protected basenames AND the
-// per-turn caller flag says the chatter is not the owner / admin.
-// Callers should `return IdentityFileRefusal, nil` so the model sees
-// a tool-shaped, model-readable refusal instead of an opaque error.
-func (r *Registry) identityFileBlocked(path string) bool {
-	return !r.callerIsAdmin && isIdentityFilePath(path)
+// per-turn caller flag (read from ctx) says the chatter is not the
+// owner / admin. Callers should `return IdentityFileRefusal, nil` so
+// the model sees a tool-shaped, model-readable refusal instead of an
+// opaque error.
+func (r *Registry) identityFileBlocked(ctx context.Context, path string) bool {
+	isAdmin := false
+	if tc := FromContext(ctx); tc != nil {
+		isAdmin = tc.CallerIsAdmin
+	}
+	return !isAdmin && isIdentityFilePath(path)
 }
 
 // SkillManifestRefusal is the read/edit refusal for a bundled skill's
@@ -132,8 +137,16 @@ func (r *Registry) isProtectedSkillManifestPath(path string) bool {
 // left open so a chatter can still author their OWN skills via the
 // skill-creator flow (those land in the per-user bucket, and writes to
 // the agent's bundled `/skills` mount fail anyway — it's read-only).
-func (r *Registry) skillManifestBlocked(path string) bool {
-	return !r.callerIsAdmin && r.isProtectedSkillManifestPath(path)
+//
+// callerIsAdmin is read from ctx (per-turn), so concurrent turns don't
+// race on a shared field — a non-admin chatter can never briefly inherit
+// an admin's flag mid-turn.
+func (r *Registry) skillManifestBlocked(ctx context.Context, path string) bool {
+	isAdmin := false
+	if tc := FromContext(ctx); tc != nil {
+		isAdmin = tc.CallerIsAdmin
+	}
+	return !isAdmin && r.isProtectedSkillManifestPath(path)
 }
 
 // ToolFunc is a function that executes a tool with JSON arguments and returns a result string.
@@ -411,16 +424,68 @@ func (r *Registry) SetUserSkillsRoot(dir string) {
 // to. Identity files (SOUL/IDENTITY/AGENTS/BOOTSTRAP/TOOLS/HEARTBEAT/
 // agent.json) route to agentOwnerUserID so the "shared template" lives
 // under a single, owner-keyed row; per-user files (USER.md, MEMORY.md)
-// route to the per-turn chatter (chatterUserID when set, otherwise the
-// UserSpace owner userID). Falls back to userID when the agent owner
-// isn't set — that's the single-user / legacy case where they coincide
-// anyway.
-func (r *Registry) systemFileUserID(filename string) string {
+// route to the per-turn chatter (read from ctx via TurnContext, falling
+// back to the UserSpace owner userID when no per-turn chatter is set).
+// Falls back to userID when the agent owner isn't set — that's the
+// single-user / legacy case where they coincide anyway.
+//
+// The per-turn chatter is taken from ctx, NOT r.chatterUserID, so two
+// concurrent turns on the same agent can't race on the field — each
+// tool call resolves its own chatter from the ctx the loop attached at
+// turn start.
+func (r *Registry) systemFileUserID(ctx context.Context, filename string) string {
 	if r.agentOwnerUserID != "" && identityFiles[filepath.Base(filepath.Clean(filename))] {
 		return r.agentOwnerUserID
 	}
-	if r.chatterUserID != "" {
-		return r.chatterUserID
+	if tc := FromContext(ctx); tc != nil && tc.ChatterUserID != "" {
+		return tc.ChatterUserID
+	}
+	return r.userID
+}
+
+// chatterFromCtx resolves the per-turn chatter userID: the TurnContext
+// value (set by the loop from the resolved chatter) when present, else
+// the boot-time UserSpace owner (r.userID) as the legacy / single-user
+// fallback. Tools that key per-chatter state (cron jobs, timezone, prefs)
+// should read through this so concurrent turns don't race on a shared
+// registry field.
+func (r *Registry) chatterFromCtx(ctx context.Context) string {
+	if tc := FromContext(ctx); tc != nil && tc.ChatterUserID != "" {
+		return tc.ChatterUserID
+	}
+	return r.userID
+}
+
+// SessionIDFromCtx returns the per-turn chat session id (the channel-level
+// chatID) from TurnContext, or "" when no TurnContext is attached. Callers
+// in other packages (e.g. internal/agent runtime tools) that can't use the
+// unexported turnOrZero helper read through this so they also resolve
+// their own per-turn scoping from ctx instead of a shared field.
+func (r *Registry) SessionIDFromCtx(ctx context.Context) string {
+	return turnOrZero(ctx).SessionID
+}
+
+// ProjectIDFromCtx returns the per-turn project id from TurnContext, or "".
+func (r *Registry) ProjectIDFromCtx(ctx context.Context) string {
+	return turnOrZero(ctx).ProjectID
+}
+
+// GoalSessionKeyFromCtx returns the per-turn goal session key from
+// TurnContext, or "". Loop code in other packages (e.g. runPostTurn, which
+// builds HookContexts outside the turn function that owns the TurnContext
+// local) reads through this so it resolves the right value from ctx instead
+// of a stale shared field.
+func (r *Registry) GoalSessionKeyFromCtx(ctx context.Context) string {
+	return turnOrZero(ctx).GoalSessionKey
+}
+
+// EffectiveUserIDFromCtx mirrors EffectiveUserID but resolves the per-turn
+// chatter from ctx: the TurnContext chatter when set, else the boot-time
+// UserSpace owner (r.userID). This is the ctx-aware variant runtime tools
+// should use so concurrent turns don't race on a shared registry field.
+func (r *Registry) EffectiveUserIDFromCtx(ctx context.Context) string {
+	if tc := FromContext(ctx); tc != nil && tc.ChatterUserID != "" {
+		return tc.ChatterUserID
 	}
 	return r.userID
 }
@@ -458,10 +523,30 @@ func (r *Registry) SetSandboxRequired(required bool) {
 	r.sandboxRequired = required
 }
 
+// The per-turn setters and getters below (SetSessionID, SetProjectID,
+// SetCodingRootScope, SetCodingSubdir, SetMessageContext, SetCallerIsAdmin,
+// SetGoalSessionKey, SetChatterUserID, and the matching *ID/Channel/Admin/
+// GoalSessionKey/ChatterUserID getters) are LEGACY: they mutate shared
+// Registry fields that the agent loop used to set per-turn. That mutation
+// was a data race when two turns overlapped on one agent (public agents,
+// cron + live chat, …).
+//
+// Per-turn state now flows through TurnContext on ctx (see turnctx.go,
+// FromContext, and the *FromCtx helpers). Tool implementations read it via
+// turnOrZero(ctx) / FromContext(ctx); the agent loop attaches it in
+// bindSession. These setters/getters remain ONLY for boot/admin paths that
+// run outside any chat turn and for tests that model a single turn — do NOT
+// call them from per-turn (HandleMessage / tool) code, and prefer the
+// ctx-aware helpers (chatterFromCtx, SessionIDFromCtx, ProjectIDFromCtx,
+// EffectiveUserIDFromCtx, GoalSessionKeyFromCtx) when you have a ctx.
+
 // SetSessionID scopes the registry's workspace.Store calls (write_file /
 // read_file / list_dir) to a single chat session. The agent loop calls
 // this at the top of each turn with msg.ChatID. An empty session falls
 // back to the agent-shared scope (no session isolation).
+//
+// Deprecated per the LEGACY note above: per-turn callers must attach a
+// TurnContext to ctx instead. Retained for boot/admin/test paths.
 func (r *Registry) SetSessionID(sessionID string) {
 	r.sessionID = sessionID
 }
@@ -530,12 +615,15 @@ func (r *Registry) SetCodingRootScope(v bool) {
 
 // scopeSessionID is the session segment the file tools pass to the
 // workspace store. It collapses to "" in coding-root-scope mode so writes
-// land at the project root the dev server serves.
-func (r *Registry) scopeSessionID() string {
-	if r.codingRootScope {
+// land at the project root the dev server serves. Both codingRootScope and
+// sessionID are per-turn values read from ctx, so concurrent turns on the
+// same agent each resolve their own scoping.
+func (r *Registry) scopeSessionID(ctx context.Context) string {
+	tc := turnOrZero(ctx)
+	if tc.CodingRootScope {
 		return ""
 	}
-	return r.sessionID
+	return tc.SessionID
 }
 
 // SetCodingSubdir redirects the file tools into a subfolder of the scope
@@ -555,16 +643,18 @@ func (r *Registry) CodingSubdir() string { return r.codingSubdir }
 // wsPath maps a tool-supplied path into the active coding subdir. It is
 // idempotent: a path already under the subdir (e.g. one the agent copied
 // from a list_dir result) is returned unchanged, so the agent can use
-// either "src/x" or "app/src/x" and both resolve to the same file.
-func (r *Registry) wsPath(p string) string {
-	if r.codingSubdir == "" {
+// either "src/x" or "app/src/x" and both resolve to the same file. The
+// subdir is a per-turn value read from ctx.
+func (r *Registry) wsPath(ctx context.Context, p string) string {
+	sub := turnOrZero(ctx).CodingSubdir
+	if sub == "" {
 		return p
 	}
 	clean := strings.TrimLeft(filepath.ToSlash(p), "/")
-	if clean == r.codingSubdir || strings.HasPrefix(clean, r.codingSubdir+"/") {
+	if clean == sub || strings.HasPrefix(clean, sub+"/") {
 		return clean
 	}
-	return r.codingSubdir + "/" + clean
+	return sub + "/" + clean
 }
 
 // SetMessageContext records the bus address of the in-flight turn so
