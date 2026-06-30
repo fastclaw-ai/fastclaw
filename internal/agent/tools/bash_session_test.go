@@ -118,7 +118,7 @@ func TestShellManager_EchoExitsZero(t *testing.T) {
 	m := newShellManager()
 	defer m.Close()
 
-	s, err := m.Start("echo hello", nil)
+	s, err := m.Start("echo hello", nil, "")
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestShellManager_EchoExitsZero(t *testing.T) {
 func TestShellManager_NonZeroExitCodePreserved(t *testing.T) {
 	m := newShellManager()
 	defer m.Close()
-	s, err := m.Start("exit 42", nil)
+	s, err := m.Start("exit 42", nil, "")
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestShellManager_NonZeroExitCodePreserved(t *testing.T) {
 func TestShellManager_KillTerminatesRunning(t *testing.T) {
 	m := newShellManager()
 	defer m.Close()
-	s, err := m.Start("sleep 10", nil)
+	s, err := m.Start("sleep 10", nil, "")
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestShellManager_KillReachesGrandchildren(t *testing.T) {
 	// `sh -c "sleep 30 & wait"` — the shell forks `sleep`, then waits
 	// on it. Without group kill, killing the shell leaves `sleep`
 	// behind. With group kill, both go.
-	s, err := m.Start("sleep 30 & echo started; wait", nil)
+	s, err := m.Start("sleep 30 & echo started; wait", nil, "")
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -225,7 +225,7 @@ func TestShellManager_KillReachesGrandchildren(t *testing.T) {
 func TestShellManager_KillIsIdempotentOnExited(t *testing.T) {
 	m := newShellManager()
 	defer m.Close()
-	s, err := m.Start("true", nil)
+	s, err := m.Start("true", nil, "")
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -239,7 +239,7 @@ func TestShellManager_IncrementalReadAdvancesCursor(t *testing.T) {
 	m := newShellManager()
 	defer m.Close()
 	// Two outputs separated by a sleep so we can read between them.
-	s, err := m.Start("echo first; sleep 0.15; echo second", nil)
+	s, err := m.Start("echo first; sleep 0.15; echo second", nil, "")
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -281,7 +281,7 @@ func TestShellManager_CloseKillsAllSessions(t *testing.T) {
 	// and pass the assertion regardless of whether kills actually fired.
 	captured := make([]*bashSession, 0, 3)
 	for i := 0; i < 3; i++ {
-		s, err := m.Start("sleep 30", nil)
+		s, err := m.Start("sleep 30", nil, "")
 		if err != nil {
 			t.Fatalf("start: %v", err)
 		}
@@ -315,7 +315,7 @@ func TestShellManager_CloseKillsAllSessions(t *testing.T) {
 func TestShellManager_StartAfterCloseRefuses(t *testing.T) {
 	m := newShellManager()
 	m.Close()
-	s, err := m.Start("echo nope", nil)
+	s, err := m.Start("echo nope", nil, "")
 	if err == nil {
 		t.Errorf("Start after Close should error, got session %v", s)
 	}
@@ -334,7 +334,7 @@ func TestBashOutputTool_DrainsTailOnExit(t *testing.T) {
 	// Print a sentinel just before exit so we can detect the loss case
 	// directly: a successful drain MUST yield the sentinel together
 	// with the "exited" status line.
-	s, err := r.shellMgr.Start("printf 'tail-sentinel\\n'", nil)
+	s, err := r.shellMgr.Start("printf 'tail-sentinel\\n'", nil, "")
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -361,7 +361,7 @@ func TestBashOutputTool_FilterRegex(t *testing.T) {
 	r := NewRegistry(t.TempDir(), t.TempDir())
 	defer r.Close()
 
-	s, err := r.shellMgr.Start("printf 'INFO: ok\\nERROR: boom\\nINFO: done\\n'", nil)
+	s, err := r.shellMgr.Start("printf 'INFO: ok\\nERROR: boom\\nINFO: done\\n'", nil, "")
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -396,7 +396,7 @@ func TestBashOutputTool_UnknownIDErrors(t *testing.T) {
 func TestKillShellTool_AlreadyExited(t *testing.T) {
 	r := NewRegistry(t.TempDir(), t.TempDir())
 	defer r.Close()
-	s, err := r.shellMgr.Start("true", nil)
+	s, err := r.shellMgr.Start("true", nil, "")
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -415,7 +415,7 @@ func TestKillShellTool_AlreadyExited(t *testing.T) {
 func TestKillShellTool_TerminatesRunning(t *testing.T) {
 	r := NewRegistry(t.TempDir(), t.TempDir())
 	defer r.Close()
-	s, err := r.shellMgr.Start("sleep 30", nil)
+	s, err := r.shellMgr.Start("sleep 30", nil, "")
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
