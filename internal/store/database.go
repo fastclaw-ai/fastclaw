@@ -169,6 +169,13 @@ func (d *DBStore) Migrate(ctx context.Context) error {
 	if err := d.migrateConfigsDropLegacyColumns(ctx); err != nil {
 		return fmt.Errorf("migrate configs drop legacy columns: %w", err)
 	}
+	// Promote cron_jobs time columns to timestamptz. Runs last among the
+	// cron_jobs migrations so the table has its final column shape before
+	// the type conversion (ADD COLUMN works on any column type, so the
+	// earlier failure_count / user_id steps don't depend on this one).
+	if err := d.migrateCronJobsTimestampTZ(ctx); err != nil {
+		return fmt.Errorf("migrate cron_jobs timestamptz: %w", err)
+	}
 	return nil
 }
 
@@ -949,6 +956,110 @@ func (d *DBStore) migrateCronJobsFailureCount(ctx context.Context) error {
 		return fmt.Errorf("add failure_count: %w", err)
 	}
 	return nil
+}
+
+// migrateCronJobsTimestampTZ fixes the timezone bug on the cron schedule
+// columns. The time columns (next_run, last_run, locked_at, created_at)
+// were declared TIMESTAMP without time zone. lib/pq sends each Go
+// time.Time to the server carrying its original zone offset
+// ("2006-01-02 15:04:05.999999999Z07:00"), but a TIMESTAMP-without-tz
+// column silently drops the offset and keeps only the wall-clock text.
+// Reading it back yields a UTC instant whose wall-clock equals the
+// chatter's local wall-clock — so a "09:00 Asia/Shanghai" job is stored
+// as 09:00 and reinterpreted as 09:00 UTC = 17:00 Beijing, firing 8h
+// late. SQLite is unaffected (its driver stores the full instant).
+//
+// Fix: promote the columns to timestamptz. That type preserves the
+// instant across write/read regardless of offset or session TimeZone
+// (verified end-to-end against lib/pq). This is Postgres-only; SQLite
+// has no separate timestamptz type and already stores instants losslessly.
+//
+// Existing rows are wiped rather than converted: their stored
+// wall-clocks are wrong (offset already dropped), so any conversion
+// would just freeze the bug into the new type. Truncating is safe here
+// because cron rows are ephemeral schedule state, not history — the
+// scheduler rewrites next_run on every fire and deletes "once" rows
+// after firing, so a clean reschedule is the correct recovery and
+// cheaper than per-row guesswork.
+//
+// Idempotent: the probe on pg_catalog.format_type short-circuits once a
+// column is already timestamptz, so re-runs and fresh installs are no-ops.
+// On SQLite the tableHasColumnType probe returns (false, nil) and the
+// whole step is skipped.
+func (d *DBStore) migrateCronJobsTimestampTZ(ctx context.Context) error {
+	if d.dialect != "postgres" {
+		return nil
+	}
+	cols := []string{"next_run", "last_run", "locked_at", "created_at"}
+	needConvert := false
+	for _, col := range cols {
+		isTZ, err := d.columnIsTimestampTZ(ctx, "cron_jobs", col)
+		if err != nil {
+			return fmt.Errorf("probe cron_jobs.%s type: %w", col, err)
+		}
+		if !isTZ {
+			needConvert = true
+			break
+		}
+	}
+	if !needConvert {
+		return nil
+	}
+	// Count first so the upgrade is observable: a non-zero count tells an
+	// operator that existing schedule state is about to be wiped and must be
+	// recreated (see CHANGELOG). The count is logged before the TRUNCATE so
+	// it survives even if the type conversion that follows were to fail.
+	var wiping int
+	if err := d.db.QueryRowContext(ctx, `SELECT count(*) FROM cron_jobs`).Scan(&wiping); err != nil {
+		return fmt.Errorf("count cron_jobs before tz migration: %w", err)
+	}
+	if wiping > 0 {
+		slog.Warn("resetting cron schedule state for timestamptz migration — existing jobs must be recreated",
+			"rows", wiping,
+			"reason", "stored next_run values carry the pre-fix wrong timezone; see CHANGELOG")
+	}
+	// Wipe the schedule state in place, then widen the columns. Doing the
+	// DELETE before the ALTER means the type change is instant on an empty
+	// table (no heap rewrite), and there are no stale rows to convert.
+	if _, err := d.db.ExecContext(ctx, `TRUNCATE TABLE cron_jobs`); err != nil {
+		return fmt.Errorf("truncate cron_jobs: %w", err)
+	}
+	for _, col := range cols {
+		// AT TIME ZONE 'UTC' is a no-op type-wise but documents intent: the
+		// emptied column is interpreted in UTC when repopulated. The column
+		// type becomes timestamptz in all cases.
+		stmt := fmt.Sprintf(
+			`ALTER TABLE cron_jobs ALTER COLUMN %s TYPE timestamptz USING %s AT TIME ZONE 'UTC'`,
+			col, col)
+		if _, err := d.db.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("convert cron_jobs.%s to timestamptz: %w\nSQL: %s", col, err, stmt)
+		}
+	}
+	return nil
+}
+
+// columnIsTimestampTZ reports whether the column's Postgres type is
+// timestamptz (timestamp with time zone). Used by migrations that need
+// to promote a TIMESTAMP-without-tz column and stay idempotent. Returns
+// (false, nil) on SQLite — callers must gate on dialect themselves.
+func (d *DBStore) columnIsTimestampTZ(ctx context.Context, table, column string) (bool, error) {
+	if d.dialect != "postgres" {
+		return false, nil
+	}
+	var dataType string
+	err := d.db.QueryRowContext(ctx,
+		`SELECT format_type(a.atttypid, a.atttypmod)
+		   FROM pg_attribute a
+		   JOIN pg_class c ON c.oid = a.attrelid
+		  WHERE c.relname = $1 AND a.attname = $2 AND a.attnum > 0`,
+		table, column).Scan(&dataType)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return dataType == "timestamp with time zone", nil
 }
 
 // migrateUsersAvatarURL retrofits the avatar_url column onto pre-feature
