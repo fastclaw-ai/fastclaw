@@ -16,7 +16,16 @@ type loadSkillArgs struct {
 }
 
 // RegisterLoadSkill registers the load_skill tool that reads full SKILL.md content.
-func RegisterLoadSkill(r *Registry, skillDirs []string) {
+//
+// userSkillsHostDir is the chatter's per-user skills host directory
+// (~/.fastclaw/users/<uid>/skills), or "" when there is no per-user layer.
+// It lets makeLoadSkill map a per-user skill's {baseDir} placeholder to its
+// in-container path /root/.agents/skills/<name> (the read-write mount used by
+// `npx skills add -g -y`), instead of the default /skills/<name> used by the
+// per-agent / managed layers. Without this, a skill referenced via {baseDir}
+// resolves to a host path that does not exist inside the sandbox and the
+// script can't be found.
+func RegisterLoadSkill(r *Registry, skillDirs []string, userSkillsHostDir string) {
 	r.Register("load_skill", "Load the full content of a skill by name. Use this when you need detailed instructions for a specific skill.", map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -26,10 +35,10 @@ func RegisterLoadSkill(r *Registry, skillDirs []string) {
 			},
 		},
 		"required": []string{"name"},
-	}, makeLoadSkill(skillDirs))
+	}, makeLoadSkill(skillDirs, userSkillsHostDir))
 }
 
-func makeLoadSkill(skillDirs []string) ToolFunc {
+func makeLoadSkill(skillDirs []string, userSkillsHostDir string) ToolFunc {
 	return func(ctx context.Context, rawArgs json.RawMessage) (string, error) {
 		var args loadSkillArgs
 		if err := json.Unmarshal(rawArgs, &args); err != nil {
@@ -48,8 +57,16 @@ func makeLoadSkill(skillDirs []string) ToolFunc {
 			skillPath := filepath.Join(dir, args.Name, "SKILL.md")
 			data, err := os.ReadFile(skillPath)
 			if err == nil {
-				skillDir, _ := filepath.Abs(filepath.Join(dir, args.Name))
-				content := strings.ReplaceAll(string(data), "{baseDir}", skillDir)
+				// {baseDir} must resolve to the script's IN-CONTAINER path, not the
+				// host path. The sandbox bind-mounts each skill folder:
+				//   per-agent / managed layers → /skills/<name>/          (read-only)
+				//   per-user layer             → /root/.agents/skills/<name>/  (read-write)
+				// Replacing {baseDir} with the host path (the old behavior) produced
+				// "/home/<user>/.fastclaw/.../scripts/render.py" — a path that does
+				// NOT exist inside the container, so every skill that referenced its
+				// scripts via {baseDir} failed at exec time.
+				containerBase := containerBaseDir(dir, userSkillsHostDir, args.Name)
+				content := strings.ReplaceAll(string(data), "{baseDir}", containerBase)
 				if reason := unavailableReason(data); reason != "" {
 					content = "[SKILL CURRENTLY UNAVAILABLE: " + reason +
 						". Explain this to the user and ask an administrator to configure the missing requirement before using authenticated operations.]\n\n" +
@@ -61,6 +78,24 @@ func makeLoadSkill(skillDirs []string) ToolFunc {
 
 		return "", fmt.Errorf("skill %q not found", args.Name)
 	}
+}
+
+// containerBaseDir maps a skill's host layer directory to the path where its
+// scripts are visible INSIDE the sandbox container. The match against
+// userSkillsHostDir is exact: the per-user mount is a single whole-directory
+// bind (<base>/users/<uid>/skills → /root/.agents/skills), so only the layer
+// dir itself maps to that container path — every other layer (per-agent,
+// managed, team, extra) is enumerated and mounted under /skills/<name>.
+//
+// Team / extra dirs are not currently mounted into the container at all
+// (skillDirsForAgent only returns per-agent + managed), but we still return
+// /skills/<name> for them: it matches the documented convention and avoids
+// fabricating a host path that is definitely wrong.
+func containerBaseDir(hostSkillLayerDir, userSkillsHostDir, skillName string) string {
+	if userSkillsHostDir != "" && hostSkillLayerDir == userSkillsHostDir {
+		return "/root/.agents/skills/" + skillName
+	}
+	return "/skills/" + skillName
 }
 
 // wrapSkillContentInternal prefixes SKILL.md content with an explicit
