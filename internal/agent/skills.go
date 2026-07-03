@@ -478,6 +478,15 @@ func (sl *SkillsLoader) allSkillDirs() []string {
 	return dirs
 }
 
+// UserSkillsDir returns the chatter's per-user skills host directory
+// (~/.fastclaw/users/<uid>/skills), or "" when there is no per-user layer.
+// Exported so load_skill can map a per-user skill's {baseDir} placeholder to
+// its in-container mount path /root/.agents/skills/<name> instead of the
+// default /skills/<name> used by per-agent / managed skills.
+func (sl *SkillsLoader) UserSkillsDir() string {
+	return sl.userSkillsDir()
+}
+
 // userSkillsDir returns ~/.fastclaw/users/<uid>/skills (FASTCLAW_HOME-aware).
 // Empty when no userID is set so the loader skips the layer entirely on
 // single-user installs / legacy paths.

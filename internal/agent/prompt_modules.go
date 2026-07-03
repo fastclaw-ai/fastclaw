@@ -498,6 +498,13 @@ You have access to a sandbox environment for executing code. Key rules:
                                     so the next sandbox start picks it up). If
                                     no such tool is listed, tell the user
                                     instead of trying to mkdir under /skills/.
+- /root/.agents/skills/<name>/    ← your PER-USER skills live here. When a skill
+                                    was created by you mid-chat (or installed via
+                                    ` + "`npx skills add -g -y`" + `), its scripts are mounted HERE,
+                                    read-write — NOT under /skills/. So if you
+                                    cannot find a skill's scripts under /skills/<name>/,
+                                    look under /root/.agents/skills/<name>/ before
+                                    concluding they are missing.
 - Host paths (anything starting with /Users/, /home/, /var/, etc.) DO NOT EXIST in the sandbox. Never reference them.
 
 ## Shell quirks

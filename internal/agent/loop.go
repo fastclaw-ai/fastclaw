@@ -311,7 +311,7 @@ func NewAgentWithSkillsCfg(rc config.ResolvedAgent, prov provider.Provider, mb *
 	// executor-pool failure would silently fall through to /bin/sh on the
 	// host, defeating the security boundary the user asked for.
 	skillDirs := loader.AllSkillDirs()
-	tools.RegisterLoadSkill(registry, skillDirs)
+	tools.RegisterLoadSkill(registry, skillDirs, loader.UserSkillsDir())
 	var sbCfg *tools.SandboxConfig
 	if rc.Sandbox.Enabled {
 		sbCfg = &tools.SandboxConfig{Enabled: true}
@@ -3322,7 +3322,7 @@ func (a *Agent) refreshSkillsFromStore(userID string) {
 	skills := loader.LoadSkills()
 	summary := loader.BuildSkillsSummary(skills)
 	a.ctxBuilder.SetSkillsSummary(summary)
-	tools.RegisterLoadSkill(a.registry, loader.AllSkillDirs())
+	tools.RegisterLoadSkill(a.registry, loader.AllSkillDirs(), loader.UserSkillsDir())
 	// Per-turn fingerprint of the skill set the system prompt will
 	// ship. Lets us diff IM vs web for the same (agent, chatter) and
 	// confirm — or rule out — that agent-scope skills are reaching
@@ -3356,7 +3356,7 @@ func (a *Agent) ReloadWorkspaceFiles() {
 	}
 	skills := loader.LoadSkills()
 	skillsSummary := loader.BuildSkillsSummary(skills)
-	tools.RegisterLoadSkill(a.registry, loader.AllSkillDirs())
+	tools.RegisterLoadSkill(a.registry, loader.AllSkillDirs(), loader.UserSkillsDir())
 	a.ctxBuilder = NewContextBuilder(a.homePath, a.memory, skillsSummary)
 	a.ctxBuilder.SetWorkspace(a.workspacePath)
 	a.ctxBuilder.SetPromptMode(a.promptMode)
