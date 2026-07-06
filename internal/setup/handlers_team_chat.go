@@ -200,11 +200,22 @@ func (s *Server) runTeamAgentTurn(w http.ResponseWriter, flusher http.Flusher, r
 	keepalive := time.NewTicker(30 * time.Second)
 	defer keepalive.Stop()
 	clientGone := r.Context().Done()
+	// clientDropped mirrors handleChatStream: when the receiving SSE goes
+	// away (refresh / switch / blip) we must NOT return here — returning
+	// fires `defer cancel()` and kills this member's in-flight agentCtx
+	// (and its sub-agents), the exact stopped bug. Latch the flag, stop
+	// writing to the dead response, and keep looping so the running turn
+	// finishes and persists to session_events. Once it reaches a natural
+	// terminal we return false so the caller stops the team loop instead
+	// of spinning up the NEXT member's turn for a client that's gone.
+	clientDropped := false
 	turnPending := false
 	for {
 		select {
 		case <-clientGone:
-			return false
+			clientDropped = true
+			clientGone = nil
+			keepalive.Stop()
 		case <-agentDone:
 		drain:
 			for {
@@ -218,9 +229,11 @@ func (s *Server) runTeamAgentTurn(w http.ResponseWriter, flusher http.Flusher, r
 						continue
 					}
 					if env.Event.Type == "done" {
-						return true
+						return !clientDropped
 					}
-					forwardTeamEvent(w, flusher, member.AgentID, env)
+					if !clientDropped {
+						forwardTeamEvent(w, flusher, member.AgentID, env)
+					}
 				default:
 					break drain
 				}
@@ -229,10 +242,13 @@ func (s *Server) runTeamAgentTurn(w http.ResponseWriter, flusher http.Flusher, r
 				agentDone = nil
 				continue
 			}
-			return true
+			return !clientDropped
 		case <-agentCtx.Done():
 			return false
 		case <-keepalive.C:
+			if clientDropped {
+				continue
+			}
 			fmt.Fprintf(w, ": ping\n\n")
 			flusher.Flush()
 		case env, ok := <-sub:
@@ -244,9 +260,11 @@ func (s *Server) runTeamAgentTurn(w http.ResponseWriter, flusher http.Flusher, r
 				continue
 			}
 			if env.Event.Type == "done" {
-				return true
+				return !clientDropped
 			}
-			forwardTeamEvent(w, flusher, member.AgentID, env)
+			if !clientDropped {
+				forwardTeamEvent(w, flusher, member.AgentID, env)
+			}
 		}
 	}
 }

@@ -1153,13 +1153,25 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	// Detach the agent's ctx from the request: when the browser tab
 	// disconnects (refresh, close, network blip) we want the agent to
 	// keep running so its already-paid-for LLM call finishes and the
-	// reply lands in session_events. The 15-minute cap is the only thing
-	// that can kill it.
+	// reply lands in session_events. The agentTurnTimeout cap is the only
+	// thing that can kill it.
+	//
+	// WithoutCancel severs the request→agent cancel propagation, but that
+	// alone is not enough: this handler also owns `cancel`, and the
+	// clientGone branch below used to `return` on disconnect, which fired
+	// `defer cancel()` and killed the agent anyway. The detach is only
+	// real because clientGone no longer returns — it parks the handler
+	// until the turn ends naturally. Do NOT reintroduce an early return on
+	// client disconnect; that is exactly the "工具调用莫名其妙 stopped" bug.
 	agentCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), agentTurnTimeout)
-	// cancel lives on the handler, not the agent goroutine: when a slash
-	// queues a continuation we keep the SSE open past HandleMessage's
-	// return, and inner-scope cancel would tear down agentCtx before the
-	// continuation's events can reach this handler's safety-net check.
+	// cancel stays on the handler defer (not a per-goroutine scope) on
+	// purpose: a slash that queues a continuation keeps the SSE open past
+	// HandleMessage's return, and the loop reuses agentCtx.Done() as the
+	// upper bound of that wait. Cancelling the moment HandleMessage returns
+	// would tear agentCtx down before the continuation's events reach this
+	// handler's safety-net check. The handler only returns — and thus only
+	// cancels — at a true turn terminal (`done` / agentDone-without-
+	// continuation / the timeout).
 	defer cancel()
 	agentCtx = agent.ContextWithStream(agentCtx, nil, s.dataStore, hub, uid, agentID, req.SessionID)
 
@@ -1180,6 +1192,11 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 
 	clientGone := r.Context().Done()
 	forwardedAny := false
+	// clientDropped latches when the receiving SSE goes away (tab refresh,
+	// conversation switch, network blip). Once set, we stop touching the
+	// dead response writer but keep this handler parked — see the
+	// clientGone case for why returning here would kill the agent.
+	clientDropped := false
 	// turnPending flips on when the slash handler reports it queued a
 	// continuation via bus.Inbound (`turn_pending` event). The POST
 	// goroutine's HandleMessage has already returned, but the real
@@ -1192,11 +1209,20 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-clientGone:
-			// Client dropped; the agent goroutine keeps running on
-			// its detached ctx and persists every event it emits.
-			// User reloading the chat page will pick up the rest via
-			// /api/chat/subscribe?since=N.
-			return
+			// The client dropped the receiving stream. This must NOT
+			// cancel the agent: returning here would fire `defer cancel()`
+			// and tear down agentCtx mid-turn, killing in-flight tool
+			// calls / sub-agents and losing the rest of the reply. Instead
+			// latch clientDropped and keep looping until the turn ends
+			// naturally (`done` / agentDone / the agentCtx timeout). The
+			// agent's events still persist to session_events via the stream
+			// ctx, so a reloaded page picks up the full reply through
+			// /api/chat/subscribe?since=N. Nil the channel so this case
+			// stops selecting (r.Context().Done() stays closed forever) and
+			// stop the keepalive — nothing is listening on the wire.
+			clientDropped = true
+			clientGone = nil
+			keepalive.Stop()
 		case <-agentDone:
 			// Race: HandleMessage publishes `turn_pending` to the hub
 			// AND `defer close(agentDone)` fires from the same goroutine.
@@ -1216,11 +1242,15 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 						continue
 					}
 					if env.Event.Type == "done" {
-						forwardEvent(w, flusher, env)
+						if !clientDropped {
+							forwardEvent(w, flusher, env)
+						}
 						forwardedAny = true
 						return
 					}
-					forwardEvent(w, flusher, env)
+					if !clientDropped {
+						forwardEvent(w, flusher, env)
+					}
 					forwardedAny = true
 				default:
 					break drain
@@ -1230,11 +1260,11 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 				// HandleMessage returned silent after queueing a
 				// continuation. Don't close; wait for the continuation's
 				// `done` event over the hub instead. agentCtx.Done()
-				// (15-min timeout) is the upper bound if it never lands.
+				// (agentTurnTimeout) is the upper bound if it never lands.
 				agentDone = nil
 				continue
 			}
-			if !forwardedAny {
+			if !forwardedAny && !clientDropped {
 				forwardSyntheticEvent(w, flusher, agent.ChatEvent{
 					Type: "error",
 					Data: map[string]any{"message": "agent finished without emitting a response"},
@@ -1247,6 +1277,11 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 			// ever arrives.
 			return
 		case <-keepalive.C:
+			// keepalive.Stop() was called once the client dropped, but a
+			// tick may already be buffered — skip the write either way.
+			if clientDropped {
+				continue
+			}
 			fmt.Fprintf(w, ": ping\n\n")
 			flusher.Flush()
 		case env, ok := <-sub:
@@ -1257,7 +1292,9 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 				turnPending = true
 				continue
 			}
-			forwardEvent(w, flusher, env)
+			if !clientDropped {
+				forwardEvent(w, flusher, env)
+			}
 			forwardedAny = true
 			if env.Event.Type == "done" {
 				return
