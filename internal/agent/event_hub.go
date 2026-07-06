@@ -62,12 +62,23 @@ func (h *EventHub) Subscribe(userID, agentID, sessionKey string) (<-chan EventEn
 // Publish fans an envelope out to every current subscriber. Slow
 // consumers (full buffer) are skipped, not blocked — a stuck client
 // can't stall the agent loop.
+//
+// The send runs UNDER the write lock, not the read lock over a snapshot.
+// That closes a send-on-closed-channel race: the old code RLocked, copied
+// the slice, unlocked, then sent — so a concurrent unsubscribe (which
+// takes the write lock and close()s the channel) could slot in between the
+// copy and the send, making Publish send on an already-closed channel and
+// panic the process. SSE churns subscriptions constantly (every refresh /
+// reconnect), so that window is not hypothetical. Because every send is
+// non-blocking (`default` arm), holding the write lock here never blocks on
+// a slow consumer; the critical section stays O(subscribers) of buffered
+// enqueues. unsubscribe's close() and this send are now mutually excluded
+// by h.mu, so a closed channel is always already absent from h.subs[key].
 func (h *EventHub) Publish(userID, agentID, sessionKey string, env EventEnvelope) {
 	key := hubKey(userID, agentID, sessionKey)
-	h.mu.RLock()
-	subs := append([]chan EventEnvelope(nil), h.subs[key]...)
-	h.mu.RUnlock()
-	for _, ch := range subs {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, ch := range h.subs[key] {
 		select {
 		case ch <- env:
 		default:
