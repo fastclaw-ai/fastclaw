@@ -470,6 +470,18 @@ func New(env *config.EnvConfig) (*Gateway, error) {
 		// path stability, files overwritten in place, etc.).
 		turnStart := time.Now()
 
+		// Snapshot the workspace's existing file set BEFORE the turn so
+		// the post-turn media fallback (appendRecentWorkspaceMedia) can
+		// tell "genuinely new file this turn" from "stale file the
+		// sandbox sync just rewrote and gave a fresh mtime." Without this
+		// an old media artifact (e.g. an mp3 generated days ago) gets
+		// re-attached to unrelated replies whenever the sandbox rewrites
+		// it — see appendRecentWorkspaceMedia for why path-diff is the
+		// primary signal and mtime is only the fallback. Best-effort: a
+		// List error degrades to nil and the mtime fallback stays in
+		// effect, preserving the original robustness guarantee.
+		preTurnFiles := snapshotWorkspaceFiles(ctx, g.workspace, task.AgentID, task.Message.ProjectID, task.Message.ChatID)
+
 		// Attach a stream pipeline for web-channel bus-fired turns so
 		// events reach the same SSE hub the user-typed path uses. No-op
 		// when the hub isn't wired (e.g. CLI/test harness) or the
@@ -503,7 +515,7 @@ func New(env *config.EnvConfig) (*Gateway, error) {
 		// the time-based scan can pick up stale files whose mtime
 		// was refreshed by sandbox mount/restart.
 		if len(items) == 0 {
-			items = appendRecentWorkspaceMedia(ctx, g.workspace, task.AgentID, task.Message.ProjectID, task.Message.ChatID, turnStart, items)
+			items = appendRecentWorkspaceMedia(ctx, g.workspace, task.AgentID, task.Message.ProjectID, task.Message.ChatID, turnStart, preTurnFiles, items)
 		}
 		// Web-streamed turns already delivered the reply via the hub.
 		// Skip the outbound push entirely when there's no media; with
@@ -1059,21 +1071,34 @@ func decodeBase64Tolerant(s string) ([]byte, error) {
 const maxAttachmentBytes = 25 * 1024 * 1024
 
 // appendRecentWorkspaceMedia lists the session's workspace and attaches
-// every shippable file modified at or after `turnStart`. This is the
-// IM-side guarantee that "if a tool wrote a deliverable this turn, the
-// user receives it" — independent of whether the LLM's reply markdown
-// referenced it correctly (broken data URLs, missing refs, hallucinated
-// filenames all bypass this path).
+// every shippable file the turn produced — independent of whether the
+// LLM's reply markdown referenced it correctly (broken data URLs,
+// missing refs, hallucinated filenames all bypass this path).
 //
-// Filter rules:
+// What counts as "produced this turn" is decided in two layers:
+//
+//  1. Primary — path-diff against `preTurnFiles` (the snapshot of
+//     filenames that already existed when the turn started; see
+//     snapshotWorkspaceFiles). A file NOT in preTurnFiles is new this
+//     turn and gets attached. This is the signal that matters: it's
+//     immune to the sandbox's per-turn syncSnapshot rewriting files and
+//     stamping fresh mtimes on artifacts from prior turns (which made a
+//     days-old mp3 re-attach to unrelated replies whenever its size in
+//     the sandbox drifted from the workspace copy). When preTurnFiles is
+//     nil (the pre-turn List failed), we fall through to layer 2.
+//
+//  2. Fallback — mtime-based: ModTime >= turnStart - 1s. Kept because
+//     the original design chose time over path-diff to tolerate store
+//     backends that don't preserve path stability (see the comment at
+//     turnStart in the task handler). Only used when the path-diff
+//     signal is unavailable.
+//
+// Other filter rules (both layers):
 //   - extension is in the deliverable allowlist (see isShippableExt):
 //     images / video / audio / common document containers. Notably
 //     EXCLUDES .md / .txt / .csv / .json / source files — those are
 //     usually agent scratchpads (todo.md, plans, intermediate output)
 //     and auto-shipping them would be noise, not value.
-//   - ModTime >= turnStart - 1s (back-buffer for stores with second-
-//     granularity mtimes — better to over-send than drop a borderline
-//     file).
 //   - size <= maxAttachmentBytes (skipped + logged otherwise; we'd
 //     blow channel limits or timeout the CDN upload).
 //   - filename not already in `existing` (dedupe — splitMediaFromReply
@@ -1081,7 +1106,7 @@ const maxAttachmentBytes = 25 * 1024 * 1024
 //
 // Logs counts at every filter stage so a future "no file attached"
 // report can be diagnosed from logs alone.
-func appendRecentWorkspaceMedia(ctx context.Context, ws workspace.Store, agentID, projectID, sessionID string, turnStart time.Time, existing []bus.MediaItem) []bus.MediaItem {
+func appendRecentWorkspaceMedia(ctx context.Context, ws workspace.Store, agentID, projectID, sessionID string, turnStart time.Time, preTurnFiles map[string]bool, existing []bus.MediaItem) []bus.MediaItem {
 	if ws == nil {
 		return existing
 	}
@@ -1097,9 +1122,15 @@ func appendRecentWorkspaceMedia(ctx context.Context, ws workspace.Store, agentID
 		have[it.Filename] = true
 	}
 
+	// usePathDiff selects the primary "new this turn" signal. When false
+	// (preTurnFiles unavailable — the pre-turn List failed) we fall back
+	// to the mtime window below.
+	usePathDiff := preTurnFiles != nil
+
 	// 1-second back-buffer: some store backends round mtime to
 	// whole seconds, which can leave a file written 0.4s into the
-	// turn with a mtime stamp 0.6s before turnStart.
+	// turn with a mtime stamp 0.6s before turnStart. Only consulted
+	// on the mtime fallback path.
 	cutoff := turnStart.Add(-1 * time.Second)
 
 	candidateCount := 0
@@ -1111,11 +1142,19 @@ func appendRecentWorkspaceMedia(ctx context.Context, ws workspace.Store, agentID
 			continue
 		}
 		candidateCount++
-		if obj.ModTime.Before(cutoff) {
-			continue
+		base := filepath.Base(obj.Path)
+		// "Produced this turn?" — primary path-diff signal when
+		// available, mtime window as the fallback.
+		if usePathDiff {
+			if preTurnFiles[base] {
+				continue
+			}
+		} else {
+			if obj.ModTime.Before(cutoff) {
+				continue
+			}
 		}
 		recentCount++
-		base := filepath.Base(obj.Path)
 		if have[base] {
 			continue
 		}
@@ -1159,9 +1198,39 @@ func appendRecentWorkspaceMedia(ctx context.Context, ws workspace.Store, agentID
 		"agent", agentID, "session", sessionID,
 		"total_objs", len(objs), "candidates", candidateCount,
 		"recent", recentCount, "oversize", oversizeCount,
-		"attached", attached,
+		"attached", attached, "path_diff", usePathDiff,
 		"turn_start", turnStart.Format(time.RFC3339Nano))
 	return existing
+}
+
+// snapshotWorkspaceFiles returns the set of basenames already present in
+// the session's workspace at call time. Used to seed appendRecentWorkspaceMedia's
+// path-diff signal so files that existed before the turn — but whose mtime
+// the sandbox sync later refreshed — aren't mistaken for turn output.
+//
+// Returns nil on any error so the caller falls back to the mtime-based
+// heuristic (best-effort: the original robustness guarantee is preserved).
+func snapshotWorkspaceFiles(ctx context.Context, ws workspace.Store, agentID, projectID, sessionID string) map[string]bool {
+	if ws == nil {
+		return nil
+	}
+	objs, err := ws.List(ctx, agentID, projectID, sessionID)
+	if err != nil {
+		slog.Debug("workspace pre-turn snapshot list failed — falling back to mtime media heuristic",
+			"agent", agentID, "project", projectID, "session", sessionID, "error", err)
+		return nil
+	}
+	if len(objs) == 0 {
+		// Distinct from nil: an empty-but-known set still lets the
+		// path-diff path run (every file is "new"). A length-0 map
+		// expresses that without the nil → fallback conflation.
+		return map[string]bool{}
+	}
+	out := make(map[string]bool, len(objs))
+	for _, obj := range objs {
+		out[filepath.Base(obj.Path)] = true
+	}
+	return out
 }
 
 // isShippableExt is the "is this a deliverable" allowlist used by the
