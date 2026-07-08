@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -37,31 +38,48 @@ import { useAgentName } from "@/hooks/use-agent-name";
 // you said in chat ("每分钟讲笑话", "5 分钟后提醒我睡觉") shows up as a
 // row. Disable to pause without losing the job; delete to remove it.
 
-function fmtSchedule(job: AgentCronJob): string {
+type SchedulerTranslator = ReturnType<typeof useTranslations<"scheduler">>;
+
+function fmtSchedule(job: AgentCronJob, t: SchedulerTranslator): string {
   switch (job.type) {
     case "interval":
-      return `every ${job.schedule}`;
+      return t("scheduleEvery", { schedule: job.schedule });
     case "once":
-      return `at ${job.schedule}`;
+      return t("scheduleAt", { schedule: job.schedule });
     case "cron":
     default:
       return job.schedule;
   }
 }
 
-function fmtRelative(iso?: string): string {
+function fmtRelative(iso: string | undefined, t: SchedulerTranslator): string {
   if (!iso) return "—";
-  const t = new Date(iso).getTime();
-  if (Number.isNaN(t)) return iso;
-  const diff = t - Date.now();
+  const ts = new Date(iso).getTime();
+  if (Number.isNaN(ts)) return iso;
+  const diff = ts - Date.now();
   const abs = Math.abs(diff);
   const mins = Math.round(abs / 60_000);
-  if (mins < 1) return diff > 0 ? "in <1m" : "just now";
-  if (mins < 60) return diff > 0 ? `in ${mins}m` : `${mins}m ago`;
+  if (mins < 1) return diff > 0 ? t("inLessThanOneMinute") : t("justNow");
+  if (mins < 60)
+    return diff > 0 ? t("inMinutes", { count: mins }) : t("minutesAgo", { count: mins });
   const hours = Math.round(mins / 60);
-  if (hours < 48) return diff > 0 ? `in ${hours}h` : `${hours}h ago`;
+  if (hours < 48)
+    return diff > 0 ? t("inHours", { count: hours }) : t("hoursAgo", { count: hours });
   const days = Math.round(hours / 24);
-  return diff > 0 ? `in ${days}d` : `${days}d ago`;
+  return diff > 0 ? t("inDays", { count: days }) : t("daysAgo", { count: days });
+}
+
+function typeLabel(type: string, t: SchedulerTranslator): string {
+  switch (type) {
+    case "interval":
+      return t("typeInterval");
+    case "once":
+      return t("typeOnce");
+    case "cron":
+      return t("typeCron");
+    default:
+      return type;
+  }
 }
 
 function typeIcon(type: string) {
@@ -77,6 +95,8 @@ function typeIcon(type: string) {
 }
 
 export default function AgentSchedulerPage() {
+  const t = useTranslations("scheduler");
+  const tc = useTranslations("common");
   const agentId = useAgentIdFromURL();
   const agentName = useAgentName(agentId);
 
@@ -96,9 +116,9 @@ export default function AgentSchedulerPage() {
         setJobs(list);
         setError("");
       })
-      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load jobs"))
+      .catch((e) => setError(e instanceof Error ? e.message : t("errorLoadJobs")))
       .finally(() => setLoading(false));
-  }, [agentId]);
+  }, [agentId, t]);
 
   useEffect(() => {
     refresh();
@@ -119,7 +139,7 @@ export default function AgentSchedulerPage() {
       return rest;
     });
     if (res.error || !res.ok) {
-      setError(res.error || "Failed to update job");
+      setError(res.error || t("errorUpdateJob"));
       // Revert by refetching the canonical state.
       refresh();
     }
@@ -140,10 +160,13 @@ export default function AgentSchedulerPage() {
         <div>
           <div className="flex items-center gap-2">
             <Clock className="size-5 text-muted-foreground" />
-            <h2 className="text-2xl font-semibold tracking-tight">Scheduler</h2>
+            <h2 className="text-2xl font-semibold tracking-tight">{t("title")}</h2>
           </div>
           <p className="text-sm text-muted-foreground mt-1">
-            Scheduled tasks for <strong>{agentName || "this agent"}</strong>.
+            {t.rich("subtitle", {
+              name: agentName || t("thisAgent"),
+              strong: (chunks) => <strong>{chunks}</strong>,
+            })}
           </p>
         </div>
       </div>
@@ -164,7 +187,7 @@ export default function AgentSchedulerPage() {
         <div className="rounded-lg border border-dashed border-border bg-card/50 p-10 text-center">
           <Clock className="mx-auto size-8 text-muted-foreground/50 mb-3" />
           <p className="text-sm text-muted-foreground">
-            No scheduled tasks yet.
+            {t("empty")}
           </p>
         </div>
       ) : (
@@ -187,20 +210,21 @@ export default function AgentSchedulerPage() {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete scheduled task</AlertDialogTitle>
+            <AlertDialogTitle>{t("deleteTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
-              Remove <strong>{deleteTarget?.name || deleteTarget?.id}</strong>?
-              This stops future runs and can&apos;t be undone. Existing chat
-              history is preserved.
+              {t.rich("deleteConfirm", {
+                name: deleteTarget?.name || deleteTarget?.id || "",
+                strong: (chunks) => <strong>{chunks}</strong>,
+              })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{tc("cancel")}</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleDelete}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              Delete
+              {tc("delete")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -220,6 +244,8 @@ function JobRow({
   onToggle: (enabled: boolean) => void;
   onDelete: () => void;
 }) {
+  const t = useTranslations("scheduler");
+  const tc = useTranslations("common");
   return (
     <div className="rounded-lg border border-border bg-card p-4">
       <div className="flex items-start justify-between gap-3">
@@ -231,14 +257,14 @@ function JobRow({
               className="inline-flex items-center gap-1 text-[10px]"
             >
               {typeIcon(job.type)}
-              {job.type}
+              {typeLabel(job.type, t)}
             </Badge>
             <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">
-              {fmtSchedule(job)}
+              {fmtSchedule(job, t)}
             </code>
             {job.channel && (
               <span className="text-[11px] text-muted-foreground">
-                via {job.channel}
+                {t("viaChannel", { channel: job.channel })}
               </span>
             )}
           </div>
@@ -248,12 +274,12 @@ function JobRow({
           </div>
           <div className="flex gap-4 text-[11px] text-muted-foreground/80">
             <span>
-              Last run:{" "}
-              <span className="font-mono">{fmtRelative(job.lastRun)}</span>
+              {t("lastRun")}{" "}
+              <span className="font-mono">{fmtRelative(job.lastRun, t)}</span>
             </span>
             <span>
-              Next run:{" "}
-              <span className="font-mono">{fmtRelative(job.nextRun)}</span>
+              {t("nextRun")}{" "}
+              <span className="font-mono">{fmtRelative(job.nextRun, t)}</span>
             </span>
           </div>
         </div>
@@ -262,14 +288,14 @@ function JobRow({
             checked={job.enabled}
             disabled={busy}
             onCheckedChange={(v) => onToggle(v)}
-            aria-label={job.enabled ? "Disable" : "Enable"}
+            aria-label={job.enabled ? t("disable") : t("enable")}
           />
           <Button
             size="icon"
             variant="ghost"
             className="text-destructive hover:text-destructive"
             onClick={onDelete}
-            title="Delete"
+            title={tc("delete")}
           >
             <Trash2 className="size-4" />
           </Button>

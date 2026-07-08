@@ -6,6 +6,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type WheelEvent as ReactWheelEvent,
 } from "react";
+import { useTranslations } from "next-intl";
 import { Streamdown, defaultUrlTransform, type Components, type UrlTransform } from "streamdown";
 import { createCodePlugin } from "@streamdown/code";
 import { mermaid } from "@streamdown/mermaid";
@@ -79,6 +80,7 @@ export function ChatMarkdown({
   knowledgeSources?: KnowledgeSource[];
   onKnowledgeCitationClick?: (source: KnowledgeSource) => void;
 }) {
+  const t = useTranslations("chat");
   const knowledgeByID = useMemo(() => {
     const map = new Map<string, KnowledgeSource>();
     for (const source of knowledgeSources || []) {
@@ -105,7 +107,7 @@ export function ChatMarkdown({
           <button
             type="button"
             className="rounded bg-primary/10 px-1 font-medium text-primary hover:bg-primary/15"
-            title={source ? (source.chunk ? `${source.file}, chunk ${source.chunk}` : source.file) : id}
+            title={source ? (source.chunk ? t("citationTooltip", { file: source.file, chunk: source.chunk }) : source.file) : id}
             onClick={(event) => {
               event.preventDefault();
               if (source) onKnowledgeCitationClick?.(source);
@@ -117,7 +119,7 @@ export function ChatMarkdown({
       }
       return <ExternalAnchor {...props} />;
     },
-  }), [knowledgeByID, onKnowledgeCitationClick]);
+  }), [knowledgeByID, onKnowledgeCitationClick, t]);
 
   // Build the URL transform once per agent/session. A stable identity keeps
   // Streamdown (a memo component) from re-rendering on every streamed keystroke,

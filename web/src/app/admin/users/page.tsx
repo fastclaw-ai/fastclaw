@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import {
   adminListUsers,
   adminCreateUser,
@@ -60,6 +61,8 @@ interface UserRow {
 }
 
 export default function AdminUsersPage() {
+  const t = useTranslations("adminUsers");
+  const tc = useTranslations("common");
   const [users, setUsers] = useState<UserRow[]>([]);
   const [error, setError] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
@@ -98,7 +101,7 @@ export default function AdminUsersPage() {
       setRegOpen(!!r.open);
     } catch {
       setRegOpen(!next);
-      setError("Failed to update registration setting");
+      setError(t("errorRegistrationUpdate"));
     }
   }
 
@@ -157,14 +160,14 @@ export default function AdminUsersPage() {
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight">Users</h2>
+          <h2 className="text-2xl font-semibold tracking-tight">{t("title")}</h2>
           <p className="text-sm text-muted-foreground mt-1">
-            Manage platform members. Each user gets isolated agents, sessions, and keys.
+            {t("subtitle")}
           </p>
         </div>
         <Button onClick={openCreateDialog}>
           <Plus className="h-4 w-4 mr-2" />
-          Add User
+          {t("addUser")}
         </Button>
       </div>
 
@@ -172,17 +175,16 @@ export default function AdminUsersPage() {
         <CardContent>
           <div className="flex items-center justify-between gap-4">
             <div className="space-y-1">
-              <p className="text-sm font-medium">Open registration</p>
+              <p className="text-sm font-medium">{t("openRegistrationLabel")}</p>
               <p className="text-xs text-muted-foreground">
-                When on, anyone with the URL can create an account via /signup.
-                When off, only you can add users from this page.
+                {t("openRegistrationHint")}
               </p>
             </div>
             <Switch
               checked={!!regOpen}
               onCheckedChange={toggleRegistration}
               disabled={regOpen === null}
-              aria-label="Toggle public registration"
+              aria-label={t("toggleRegistrationAria")}
             />
           </div>
         </CardContent>
@@ -202,13 +204,13 @@ export default function AdminUsersPage() {
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 mb-4">
               <Users className="h-7 w-7 text-primary" />
             </div>
-            <p className="text-sm text-muted-foreground mb-1">No users yet</p>
+            <p className="text-sm text-muted-foreground mb-1">{t("empty")}</p>
             <p className="text-xs text-muted-foreground/60 mb-4">
-              Add a user to give them their own scoped workspace
+              {t("emptyHint")}
             </p>
             <Button variant="outline" size="sm" onClick={openCreateDialog}>
               <Plus className="h-4 w-4 mr-2" />
-              Add User
+              {t("addUser")}
             </Button>
           </div>
         </div>
@@ -217,11 +219,11 @@ export default function AdminUsersPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Username</TableHead>
-                <TableHead>Email</TableHead>
-                <TableHead>Role</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
+                <TableHead>{t("colUsername")}</TableHead>
+                <TableHead>{t("colEmail")}</TableHead>
+                <TableHead>{t("colRole")}</TableHead>
+                <TableHead>{t("colStatus")}</TableHead>
+                <TableHead className="text-right">{t("colActions")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -237,22 +239,30 @@ export default function AdminUsersPage() {
                   <TableCell>
                     <Select value={u.role} onValueChange={(v) => v && setRole(u, v)}>
                       <SelectTrigger size="sm" className="w-36">
-                        <SelectValue />
+                        <SelectValue>
+                          {(v: unknown) =>
+                            v === "super_admin" ? t("roleSuperAdmin") : t("roleUser")
+                          }
+                        </SelectValue>
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="user">user</SelectItem>
-                        <SelectItem value="super_admin">super_admin</SelectItem>
+                        <SelectItem value="user">{t("roleUser")}</SelectItem>
+                        <SelectItem value="super_admin">{t("roleSuperAdmin")}</SelectItem>
                       </SelectContent>
                     </Select>
                   </TableCell>
                   <TableCell>
                     <Select value={u.status} onValueChange={(v) => v && setStatus(u, v)}>
                       <SelectTrigger size="sm" className="w-32">
-                        <SelectValue />
+                        <SelectValue>
+                          {(v: unknown) =>
+                            v === "disabled" ? t("statusDisabled") : t("statusActive")
+                          }
+                        </SelectValue>
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="active">active</SelectItem>
-                        <SelectItem value="disabled">disabled</SelectItem>
+                        <SelectItem value="active">{t("statusActive")}</SelectItem>
+                        <SelectItem value="disabled">{t("statusDisabled")}</SelectItem>
                       </SelectContent>
                     </Select>
                   </TableCell>
@@ -265,7 +275,7 @@ export default function AdminUsersPage() {
                           setResetPwd("");
                           setResetTarget(u);
                         }}
-                        title="Reset password"
+                        title={t("resetPasswordTitle")}
                       >
                         <KeyRound className="size-4" />
                       </Button>
@@ -274,7 +284,7 @@ export default function AdminUsersPage() {
                         variant="ghost"
                         className="text-destructive hover:text-destructive"
                         onClick={() => setDeleteTarget(u)}
-                        title="Delete"
+                        title={tc("delete")}
                       >
                         <Trash2 className="size-4" />
                       </Button>
@@ -290,26 +300,26 @@ export default function AdminUsersPage() {
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>Add User</DialogTitle>
+            <DialogTitle>{t("addUser")}</DialogTitle>
             <DialogDescription>
-              Create a new platform member. They&apos;ll get their own scoped agents, sessions, and keys.
+              {t("createDescription")}
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleCreate} className="space-y-4 py-2">
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label htmlFor="user-username">Username</Label>
+                <Label htmlFor="user-username">{t("usernameLabel")}</Label>
                 <Input
                   id="user-username"
                   required
                   value={form.username}
                   onChange={(e) => setForm({ ...form, username: e.target.value })}
-                  placeholder="e.g. alice"
+                  placeholder={t("usernamePlaceholder")}
                   autoFocus
                 />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="user-email">Email</Label>
+                <Label htmlFor="user-email">{t("emailLabel")}</Label>
                 <Input
                   id="user-email"
                   required
@@ -321,51 +331,55 @@ export default function AdminUsersPage() {
               </div>
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="user-password">Password</Label>
+              <Label htmlFor="user-password">{t("passwordLabel")}</Label>
               <Input
                 id="user-password"
                 required
                 type="password"
                 value={form.password}
                 onChange={(e) => setForm({ ...form, password: e.target.value })}
-                placeholder="Initial password"
+                placeholder={t("passwordPlaceholder")}
               />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label htmlFor="user-display">Display name</Label>
+                <Label htmlFor="user-display">{t("displayNameLabel")}</Label>
                 <Input
                   id="user-display"
                   value={form.displayName}
                   onChange={(e) => setForm({ ...form, displayName: e.target.value })}
-                  placeholder="Optional"
+                  placeholder={t("displayNamePlaceholder")}
                 />
               </div>
               <div className="space-y-1.5">
-                <Label>Role</Label>
+                <Label>{t("roleLabel")}</Label>
                 <Select
                   value={form.role}
                   onValueChange={(v) => v && setForm({ ...form, role: v })}
                 >
                   <SelectTrigger>
-                    <SelectValue />
+                    <SelectValue>
+                      {(v: unknown) =>
+                        v === "super_admin" ? t("roleSuperAdmin") : t("roleUser")
+                      }
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="user">user</SelectItem>
-                    <SelectItem value="super_admin">super_admin</SelectItem>
+                    <SelectItem value="user">{t("roleUser")}</SelectItem>
+                    <SelectItem value="super_admin">{t("roleSuperAdmin")}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
             </div>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setCreateOpen(false)}>
-                Cancel
+                {tc("cancel")}
               </Button>
               <Button
                 type="submit"
                 disabled={!form.username.trim() || !form.email.trim() || !form.password.trim()}
               >
-                Create user
+                {t("createUser")}
               </Button>
             </DialogFooter>
           </form>
@@ -383,17 +397,18 @@ export default function AdminUsersPage() {
       >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Reset password</DialogTitle>
+            <DialogTitle>{t("resetPasswordTitle")}</DialogTitle>
             <DialogDescription>
-              Set a new password for{" "}
-              <code className="rounded bg-muted px-1.5 py-0.5 text-xs">
-                {resetTarget?.username}
-              </code>
-              . They&apos;ll need this to log in next time.
+              {t.rich("resetPasswordDescription", {
+                username: resetTarget?.username ?? "",
+                code: (chunks) => (
+                  <code className="rounded bg-muted px-1.5 py-0.5 text-xs">{chunks}</code>
+                ),
+              })}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-1.5 py-2">
-            <Label htmlFor="reset-pwd">New password</Label>
+            <Label htmlFor="reset-pwd">{t("newPasswordLabel")}</Label>
             <Input
               id="reset-pwd"
               type="password"
@@ -411,10 +426,10 @@ export default function AdminUsersPage() {
                 setResetPwd("");
               }}
             >
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button onClick={handleResetPassword} disabled={!resetPwd.trim()}>
-              Reset password
+              {t("resetPasswordTitle")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -426,18 +441,20 @@ export default function AdminUsersPage() {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete user?</AlertDialogTitle>
+            <AlertDialogTitle>{t("deleteTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
-              <code className="rounded bg-muted px-1.5 py-0.5 text-xs">
-                {deleteTarget?.username}
-              </code>{" "}
-              will be removed along with all of their agents, sessions, and API keys. This cannot be undone.
+              {t.rich("deleteConfirm", {
+                username: deleteTarget?.username ?? "",
+                code: (chunks) => (
+                  <code className="rounded bg-muted px-1.5 py-0.5 text-xs">{chunks}</code>
+                ),
+              })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{tc("cancel")}</AlertDialogCancel>
             <AlertDialogAction onClick={() => deleteTarget && handleDelete(deleteTarget)}>
-              Delete
+              {tc("delete")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

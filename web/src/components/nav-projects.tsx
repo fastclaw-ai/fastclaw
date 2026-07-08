@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { usePathname, useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import {
   SidebarGroup,
   SidebarGroupLabel,
@@ -49,6 +50,7 @@ export function NavSessions({
 }) {
   const pathname = usePathname();
   const router = useRouter();
+  const t = useTranslations("sessions");
   // Drop-zone state for "drag a project chat back out into Chats".
   // The whole group acts as a target — we only highlight when the
   // drag carries a CHAT_DRAG_MIME payload AND the source chat is
@@ -117,7 +119,7 @@ export function NavSessions({
       // so a console error + alert keeps the user from silently losing
       // the action.
       console.error("move chat to loose failed:", res.error);
-      window.alert(`Failed to move chat: ${res.error}`);
+      window.alert(t("errorMoveChat", { error: res.error }));
       return;
     }
     broadcastChange();
@@ -141,7 +143,7 @@ export function NavSessions({
               (sectionCollapsed ? "rotate-0" : "rotate-90")
             }
           />
-          Chats
+          {t("chats")}
         </SidebarGroupLabel>
         {!sectionCollapsed && (
         <SidebarMenu
@@ -175,18 +177,18 @@ export function NavSessions({
             <SidebarMenuItem>
               <SidebarMenuButton
                 onClick={() => navigateOnce(`/agents/${agentId}/chats`)}
-                tooltip="See all chats"
+                tooltip={t("seeAllChats")}
                 className="text-muted-foreground"
               >
                 <MoreHorizontal className="size-4" />
-                <span>More</span>
+                <span>{t("more")}</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
           )}
           {sessions.length === 0 && (
             <SidebarMenuItem>
               <div className="px-2 py-1.5 text-xs text-muted-foreground">
-                No chats yet
+                {t("emptyState")}
               </div>
             </SidebarMenuItem>
           )}

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -30,6 +31,8 @@ const channelColors: Record<string, string> = {
 };
 
 export default function ChannelsPage() {
+  const t = useTranslations("channelsAdmin");
+  const tc = useTranslations("common");
   const [channels, setChannels] = useState<ChannelInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [editChannel, setEditChannel] = useState<ChannelInfo | null>(null);
@@ -49,9 +52,9 @@ export default function ChannelsPage() {
   return (
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
       <div>
-        <h2 className="text-2xl font-semibold tracking-tight">Channels</h2>
+        <h2 className="text-2xl font-semibold tracking-tight">{t("title")}</h2>
         <p className="text-sm text-muted-foreground mt-1">
-          Manage messaging platform connections
+          {t("subtitle")}
         </p>
       </div>
 
@@ -67,9 +70,9 @@ export default function ChannelsPage() {
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-500/10 mb-4">
               <Radio className="h-7 w-7 text-blue-500" />
             </div>
-            <p className="text-sm text-muted-foreground mb-1">No channels configured</p>
+            <p className="text-sm text-muted-foreground mb-1">{t("emptyTitle")}</p>
             <p className="text-xs text-muted-foreground/60">
-              Configure channels in Settings or fastclaw.json
+              {t("emptyHint")}
             </p>
           </div>
         </div>
@@ -103,7 +106,7 @@ export default function ChannelsPage() {
                         isConnected ? "bg-emerald-500" : "bg-muted-foreground"
                       }`}
                     />
-                    {isConnected ? "Connected" : "Disconnected"}
+                    {isConnected ? t("connected") : t("disconnected")}
                   </Badge>
                 </div>
                 <p className="text-base font-medium capitalize mb-1">
@@ -112,7 +115,7 @@ export default function ChannelsPage() {
                 <p className="text-sm text-muted-foreground">
                   {channel.botUsername
                     ? `@${channel.botUsername}`
-                    : "Click to configure"}
+                    : t("clickToConfigure")}
                 </p>
               </div>
             );
@@ -125,15 +128,15 @@ export default function ChannelsPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="capitalize">
-              {editChannel?.type} Configuration
+              {t("configTitle", { type: editChannel?.type ?? "" })}
             </DialogTitle>
             <DialogDescription>
-              Update channel connection settings
+              {t("configDescription")}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-2">
-              <Label>Bot Token</Label>
+              <Label>{t("botTokenLabel")}</Label>
               <Input
                 type="password"
                 defaultValue="••••••••••••"
@@ -142,7 +145,7 @@ export default function ChannelsPage() {
             </div>
             {editChannel?.botUsername && (
               <div className="space-y-2">
-                <Label>Bot Username</Label>
+                <Label>{t("botUsernameLabel")}</Label>
                 <Input
                   value={editChannel.botUsername}
                   disabled
@@ -153,9 +156,9 @@ export default function ChannelsPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditChannel(null)}>
-              Cancel
+              {tc("cancel")}
             </Button>
-            <Button>Save</Button>
+            <Button>{tc("save")}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

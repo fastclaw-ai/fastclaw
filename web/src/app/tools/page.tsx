@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -39,6 +40,8 @@ import RuntimeSettingsPage from "@/app/settings/runtime/page";
 const RUNTIME_ACTIVE = "__runtime__";
 
 export default function ToolsPage() {
+  const t = useTranslations("tools");
+  const tc = useTranslations("common");
   const [cfg, setCfg] = useState<ToolsConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -58,8 +61,9 @@ export default function ToolsPage() {
         setTools(data.tools || {});
         if (data.categories.length > 0) setActive(data.categories[0].name);
       })
-      .catch((e) => setError(e instanceof Error ? e.message : "load failed"))
+      .catch((e) => setError(e instanceof Error ? e.message : t("errorLoadFailed")))
       .finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const updateProvider = (name: string, patch: Partial<ToolProviderSettings>) => {
@@ -84,13 +88,13 @@ export default function ToolsPage() {
       }
       const resp = await saveTools({ toolProviders: cleaned, tools });
       if (!resp.ok) {
-        setError(resp.error || "save failed");
+        setError(resp.error || t("errorSaveFailed"));
       } else {
         setSaved(true);
         setTimeout(() => setSaved(false), 2000);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "save failed");
+      setError(e instanceof Error ? e.message : t("errorSaveFailed"));
     } finally {
       setSaving(false);
     }
@@ -116,7 +120,7 @@ export default function ToolsPage() {
   return (
     <div className="flex flex-col md:flex-row md:gap-8 p-4 md:p-6 max-w-6xl mx-auto md:min-h-[calc(100vh-3.5rem)]">
       <aside className="md:w-48 md:shrink-0 mb-4 md:mb-0">
-        <h2 className="text-lg font-semibold tracking-tight mb-3 md:mb-4">Tools</h2>
+        <h2 className="text-lg font-semibold tracking-tight mb-3 md:mb-4">{t("title")}</h2>
         <CategoryRail
           categories={cfg?.categories || []}
           active={active}
@@ -140,7 +144,7 @@ export default function ToolsPage() {
           <div className="rounded-lg border border-border bg-card p-8 text-center">
             <Wrench className="h-8 w-8 text-muted-foreground/40 mx-auto mb-3" />
             <p className="text-sm text-muted-foreground">
-              No tool categories available in this build.
+              {t("emptyCategories")}
             </p>
           </div>
         ) : activeCat ? (
@@ -154,11 +158,11 @@ export default function ToolsPage() {
             saveButton={
               <Button onClick={handleSave} disabled={saving} variant={saved ? "outline" : "default"}>
                 {saved ? (
-                  <><Check className="h-4 w-4 mr-2" /> Saved</>
+                  <><Check className="h-4 w-4 mr-2" /> {t("saved")}</>
                 ) : saving ? (
-                  <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Saving…</>
+                  <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> {tc("saving")}</>
                 ) : (
-                  <><Save className="h-4 w-4 mr-2" /> Save</>
+                  <><Save className="h-4 w-4 mr-2" /> {tc("save")}</>
                 )}
               </Button>
             }
@@ -178,6 +182,7 @@ function CategoryRail({
   active: string;
   onSelect: (name: string) => void;
 }) {
+  const t = useTranslations("tools");
   const itemClass = (isActive: boolean) =>
     "shrink-0 md:shrink-0 whitespace-nowrap rounded-md px-3 py-2 text-sm text-left transition " +
     (isActive
@@ -206,7 +211,7 @@ function CategoryRail({
         onClick={() => onSelect(RUNTIME_ACTIVE)}
         className={itemClass(active === RUNTIME_ACTIVE)}
       >
-        Runtime
+        {t("runtime")}
       </button>
     </nav>
   );
@@ -227,6 +232,7 @@ function CategoryPanel({
   setTools: (patch: Partial<ToolCategorySettings>) => void;
   saveButton?: React.ReactNode;
 }) {
+  const t = useTranslations("tools");
   // Which provider's config to render. Default: the first one that
   // already has a value, else the first provider in the catalog. The
   // selector only swaps the visible config — every provider's state
@@ -247,7 +253,7 @@ function CategoryPanel({
         <div>
           <h3 className="text-xl font-semibold tracking-tight">{catalog.label}</h3>
           <p className="text-sm text-muted-foreground mt-1">
-            Configure provider API keys and fallback order. Tools with no configured provider are hidden from agents.
+            {t("categoryHint")}
           </p>
         </div>
         {saveButton}
@@ -257,13 +263,13 @@ function CategoryPanel({
         <div className="rounded-lg border border-border bg-card">
           <div className="p-5 space-y-4">
             <div className="space-y-2">
-              <Label>Provider</Label>
+              <Label>{t("providerLabel")}</Label>
               <Select
                 value={selectedProvider}
                 onValueChange={(v) => v && setSelectedProvider(v)}
               >
                 <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Pick a provider">
+                  <SelectValue placeholder={t("providerPlaceholder")}>
                     {(v: unknown) =>
                       catalog.providers.find((p) => p.name === v)?.label ??
                       (v as string) ??
@@ -282,11 +288,10 @@ function CategoryPanel({
             </div>
             {selected && selected.name === "none" ? (
               <p className="text-xs text-muted-foreground pt-1">
-                No external backend. To take effect, make{" "}
-                <code className="font-mono">none/default</code> the only entry
-                in the fallback chain below — the <code className="font-mono">{catalog.name}</code>{" "}
-                tool will then be hidden from agents, and the model will fall
-                back to whatever native search capability it has (or do without).
+                {t.rich("noneProviderHint", {
+                  name: catalog.name,
+                  code: (chunks) => <code className="font-mono">{chunks}</code>,
+                })}
               </p>
             ) : selected && (
               <ProviderFields
@@ -314,6 +319,7 @@ function ProviderFields({
   settings: ToolProviderSettings;
   onChange: (patch: Partial<ToolProviderSettings>) => void;
 }) {
+  const t = useTranslations("tools");
   const [showAdvanced, setShowAdvanced] = useState(false);
   const defaultModel = settings.options?.model || "";
 
@@ -328,7 +334,7 @@ function ProviderFields({
     <div className="space-y-3 pt-1">
       {provider.needsKey && (
         <div className="space-y-2">
-          <Label>API key</Label>
+          <Label>{t("apiKeyLabel")}</Label>
           <Input
             type="password"
             placeholder="sk-…"
@@ -340,7 +346,7 @@ function ProviderFields({
       )}
       {provider.needsUrl && (
         <div className="space-y-2">
-          <Label>Endpoint</Label>
+          <Label>{t("endpointLabel")}</Label>
           <Input
             type="url"
             placeholder="https://searxng.example.com"
@@ -352,7 +358,7 @@ function ProviderFields({
       )}
       {provider.models.length > 1 && (
         <div className="space-y-2">
-          <Label>Default model</Label>
+          <Label>{t("defaultModelLabel")}</Label>
           <Input
             value={defaultModel}
             onChange={(e) => setOption("model", e.target.value)}
@@ -360,15 +366,17 @@ function ProviderFields({
             className="font-mono text-sm"
           />
           <p className="text-[10px] text-muted-foreground">
-            Used when the chain reference omits a model (e.g. just{" "}
-            <code className="font-mono">{provider.name}</code>). Suggested:{" "}
+            {t.rich("defaultModelHint", {
+              name: provider.name,
+              code: (chunks) => <code className="font-mono">{chunks}</code>,
+            })}{" "}
+            {t("suggestedModels")}{" "}
             {provider.models.map((m, i) => (
               <span key={m}>
                 {i > 0 && ", "}
                 <code className="font-mono">{m}</code>
               </span>
             ))}
-            .
           </p>
         </div>
       )}
@@ -377,7 +385,7 @@ function ProviderFields({
         onClick={() => setShowAdvanced((v) => !v)}
         className="text-[11px] text-muted-foreground hover:text-foreground transition-colors"
       >
-        {showAdvanced ? "Hide" : "Show"} advanced options
+        {showAdvanced ? t("hideAdvanced") : t("showAdvanced")}
       </button>
 
       {showAdvanced && (
@@ -397,6 +405,7 @@ function AdvancedOptionsEditor({
   options: Record<string, string>;
   onChange: (next: Record<string, string>) => void;
 }) {
+  const t = useTranslations("tools");
   const [newKey, setNewKey] = useState("");
   const [newVal, setNewVal] = useState("");
 
@@ -418,11 +427,11 @@ function AdvancedOptionsEditor({
   return (
     <div className="rounded-md border border-border/70 bg-muted/20 p-3 space-y-2">
       <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-        Provider-specific options
+        {t("providerOptions")}
       </p>
       {entries.length === 0 && (
         <p className="text-[11px] text-muted-foreground italic">
-          No custom options. Provider uses its defaults.
+          {t("noCustomOptions")}
         </p>
       )}
       {entries.map(([k, v]) => (
@@ -449,13 +458,13 @@ function AdvancedOptionsEditor({
       ))}
       <div className="flex items-center gap-2 pt-1">
         <Input
-          placeholder="key"
+          placeholder={t("optionKeyPlaceholder")}
           value={newKey}
           onChange={(e) => setNewKey(e.target.value)}
           className="h-8 text-xs font-mono w-40"
         />
         <Input
-          placeholder="value"
+          placeholder={t("optionValuePlaceholder")}
           value={newVal}
           onChange={(e) => setNewVal(e.target.value)}
           className="h-8 text-xs font-mono flex-1"
@@ -479,6 +488,7 @@ function ChainEditor({
   tools: ToolCategorySettings;
   setTools: (patch: Partial<ToolCategorySettings>) => void;
 }) {
+  const t = useTranslations("tools");
   // Each provider contributes at most one chain option, using whichever
   // model the admin actually configured in the Default model input.
   // Providers with a single catalog model (e.g. the None sentinel, or
@@ -536,10 +546,10 @@ function ChainEditor({
     <div className="rounded-lg border border-border bg-card p-5">
       <div className="flex items-center justify-between mb-3">
         <Label className="text-xs uppercase tracking-wider text-muted-foreground">
-          Fallback chain (top → bottom)
+          {t("fallbackChainLabel")}
         </Label>
         <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">Auto fallback</span>
+          <span className="text-xs text-muted-foreground">{t("autoFallback")}</span>
           <Switch
             checked={autoFallback}
             onCheckedChange={(v) => setTools({ autoFallback: v })}
@@ -550,8 +560,10 @@ function ChainEditor({
       <div className="space-y-1.5">
         {chain.length === 0 ? (
           <p className="text-xs text-muted-foreground italic px-2 py-4">
-            No providers selected. The <code className="font-mono">{catalog.name}</code> tool
-            won&apos;t be available to agents until you add at least one.
+            {t.rich("emptyChain", {
+              name: catalog.name,
+              code: (chunks) => <code className="font-mono">{chunks}</code>,
+            })}
           </p>
         ) : (
           chain.map((ref, i) => {
@@ -588,7 +600,7 @@ function ChainEditor({
           <Plus className="h-3.5 w-3.5 text-muted-foreground" />
           <Select onValueChange={(v) => v && addToChain(v)} value="">
             <SelectTrigger className="w-64 h-8 text-xs">
-              <SelectValue placeholder="Add provider to chain…" />
+              <SelectValue placeholder={t("addProviderPlaceholder")} />
             </SelectTrigger>
             <SelectContent>
               {unusedOptions.map((o) => (

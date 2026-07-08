@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Coins, RefreshCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -22,10 +23,14 @@ import {
 } from "@/lib/api";
 import { useAgentIdFromURL } from "@/hooks/use-agent-id";
 
-const RANGES: { value: TokenUsageRange; label: string }[] = [
-  { value: "24h", label: "24h" },
-  { value: "7d", label: "7d" },
-  { value: "30d", label: "30d" },
+// Labels come from the agentUsage.* message namespace, so the range
+// list is a builder over the active translator instead of a constant.
+type UsageTranslator = ReturnType<typeof useTranslations<"agentUsage">>;
+
+const RANGES = (t: UsageTranslator): { value: TokenUsageRange; label: string }[] => [
+  { value: "24h", label: t("range24h") },
+  { value: "7d", label: t("range7d") },
+  { value: "30d", label: t("range30d") },
 ];
 
 // fmt collapses big counts into 12.3K / 4.5M for the table. Below 1000
@@ -40,7 +45,9 @@ function fmt(n: number): string {
 }
 
 export default function AgentUsagePage() {
+  const t = useTranslations("agentUsage");
   const agentId = useAgentIdFromURL();
+  const ranges = useMemo(() => RANGES(t), [t]);
   const [range, setRange] = useState<TokenUsageRange>("7d");
   const [data, setData] = useState<AgentTokenUsage | null>(null);
   const [sessions, setSessions] = useState<ChatSessionEntry[]>([]);
@@ -84,7 +91,7 @@ export default function AgentUsagePage() {
       const d = await getAgentTokenUsage(agentId, r, 50);
       setData(d);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load usage");
+      setError(e instanceof Error ? e.message : t("errorLoadFailed"));
     } finally {
       setLoading(false);
     }
@@ -96,9 +103,9 @@ export default function AgentUsagePage() {
   }, [agentId, range]);
 
   function renderSessionLabel(key: string): string {
-    if (!key) return "(untracked)";
-    const t = sessionTitles[key];
-    if (t) return t;
+    if (!key) return t("untracked");
+    const title = sessionTitles[key];
+    if (title) return title;
     // Keys are opaque hashes — truncate so the row stays readable.
     return key.length > 14 ? key.slice(0, 14) + "…" : key;
   }
@@ -109,15 +116,15 @@ export default function AgentUsagePage() {
     <div className="p-6 space-y-6 max-w-3xl">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-xl font-semibold tracking-tight">Token Usage</h2>
+          <h2 className="text-xl font-semibold tracking-tight">{t("title")}</h2>
           <p className="text-sm text-muted-foreground mt-1">
-            Token consumption per chat session for this agent.
+            {t("subtitle")}
           </p>
         </div>
         <div className="flex items-center gap-2">
           <Tabs value={range} onValueChange={(v) => setRange(v as TokenUsageRange)}>
             <TabsList>
-              {RANGES.map((r) => (
+              {ranges.map((r) => (
                 <TabsTrigger key={r.value} value={r.value}>
                   {r.label}
                 </TabsTrigger>
@@ -144,19 +151,19 @@ export default function AgentUsagePage() {
             <div className="flex flex-col items-center justify-center py-10 text-center">
               <Coins className="h-8 w-8 text-muted-foreground mb-3" />
               <p className="text-sm text-muted-foreground">
-                No token usage recorded in this window yet.
+                {t("empty")}
               </p>
             </div>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Session</TableHead>
-                  <TableHead className="text-right">Input</TableHead>
-                  <TableHead className="text-right">Output</TableHead>
-                  <TableHead className="text-right">Cache</TableHead>
-                  <TableHead className="text-right">Total</TableHead>
-                  <TableHead className="text-right">Requests</TableHead>
+                  <TableHead>{t("colSession")}</TableHead>
+                  <TableHead className="text-right">{t("colInput")}</TableHead>
+                  <TableHead className="text-right">{t("colOutput")}</TableHead>
+                  <TableHead className="text-right">{t("colCache")}</TableHead>
+                  <TableHead className="text-right">{t("colTotal")}</TableHead>
+                  <TableHead className="text-right">{t("colRequests")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>

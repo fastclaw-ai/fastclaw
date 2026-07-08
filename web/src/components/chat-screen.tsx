@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
+import { useTranslations } from "next-intl";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { useAgentIdFromURL } from "@/hooks/use-agent-id";
 import { Button } from "@/components/ui/button";
@@ -120,21 +121,32 @@ interface UserAttachment {
 // skills. Mirror of the dispatch table in internal/agent/slash.go — keep
 // in sync when commands are added/removed/renamed there.
 type SlashCommand = { name: string; description: string };
-const BUILTIN_COMMANDS: SlashCommand[] = [
-  { name: "new", description: "Clear session history" },
-  { name: "reset", description: "Clear session history" },
-  { name: "retry", description: "Re-run last message" },
-  { name: "undo", description: "Undo last turn" },
-  { name: "compact", description: "Compress context window" },
-  { name: "status", description: "Agent status & memory info" },
-  { name: "usage", description: "Billing usage and session stats" },
-  { name: "insights", description: "Activity insights (last N days)" },
-  { name: "personality", description: "List or switch personality" },
-  { name: "model", description: "Show or switch LLM model" },
-  { name: "goal", description: "Persistent multi-turn objective" },
-  { name: "help", description: "Show command help" },
-  { name: "version", description: "Show version" },
+// Descriptions come from the chat.* message namespace, so the command
+// list is a builder over the active translator (memoized in the
+// component) instead of a module constant. Command NAMES stay literal —
+// they're the wire tokens dispatched to slash.go.
+type ChatTranslator = ReturnType<typeof useTranslations<"chat">>;
+const BUILTIN_COMMANDS = (t: ChatTranslator): SlashCommand[] => [
+  { name: "new", description: t("cmdNew") },
+  { name: "reset", description: t("cmdReset") },
+  { name: "retry", description: t("cmdRetry") },
+  { name: "undo", description: t("cmdUndo") },
+  { name: "compact", description: t("cmdCompact") },
+  { name: "status", description: t("cmdStatus") },
+  { name: "usage", description: t("cmdUsage") },
+  { name: "insights", description: t("cmdInsights") },
+  { name: "personality", description: t("cmdPersonality") },
+  { name: "model", description: t("cmdModel") },
+  { name: "goal", description: t("cmdGoal") },
+  { name: "help", description: t("cmdHelp") },
+  { name: "version", description: t("cmdVersion") },
 ];
+// Locale-independent name set for the "is this a built-in?" checks —
+// keep in sync with BUILTIN_COMMANDS above.
+const BUILTIN_COMMAND_NAMES = new Set([
+  "new", "reset", "retry", "undo", "compact", "status", "usage",
+  "insights", "personality", "model", "goal", "help", "version",
+]);
 const READ_ONLY_SLASH_COMMANDS = new Set([
   "help",
   "status",
@@ -224,8 +236,11 @@ function generateSessionId() {
   return `s-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-/** Convert raw history messages into UI ChatMessages, grouping tool calls with results. */
-function buildChatMessages(history: ChatHistoryMessage[]): ChatMessage[] {
+/** Convert raw history messages into UI ChatMessages, grouping tool calls with results.
+ *  `stoppedLabel` is the localized "(stopped)" placeholder stamped onto
+ *  orphaned tool calls (passed in because this helper runs outside the
+ *  translator's React context). */
+function buildChatMessages(history: ChatHistoryMessage[], stoppedLabel: string): ChatMessage[] {
   const msgs: ChatMessage[] = [];
   let i = 0;
   while (i < history.length) {
@@ -280,7 +295,7 @@ function buildChatMessages(history: ChatHistoryMessage[]): ChatMessage[] {
       // padOrphanToolResults; this catches sessions that pre-date the fix.
       for (const c of calls) {
         if (c.result === undefined) {
-          c.result = "(stopped)";
+          c.result = stoppedLabel;
         }
       }
       // If this assistant turn produced text alongside its tool calls
@@ -364,6 +379,7 @@ function isPendingPlanContent(content: string): boolean {
 // entirely when no items exist (caller's responsibility — keeps this
 // dumb-component pure).
 function TodoPanel({ items, active }: { items: TodoItem[]; active: boolean }) {
+  const t = useTranslations("chat");
   const [open, setOpen] = useState(true);
   const total = items.length;
   const doneCount = items.filter((i) => i.done).length;
@@ -401,7 +417,7 @@ function TodoPanel({ items, active }: { items: TodoItem[]; active: boolean }) {
               {doneCount}/{total}
             </span>
             <span className="truncate flex-1">
-              {current ? current.text : "Plan checklist"}
+              {current ? current.text : t("todoFallback")}
             </span>
             {open ? (
               <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
@@ -474,6 +490,8 @@ function parseAgentRoute(pathname: string): {
 }
 
 export function ChatScreen() {
+  const t = useTranslations("chat");
+  const tc = useTranslations("common");
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -708,6 +726,10 @@ export function ChatScreen() {
     return { start: caret - match[2].length - 1, query: match[2] };
   };
 
+  // Localized built-in command list. Memoized so the array identity is
+  // stable across renders; recomputes only on locale change.
+  const builtinCommands = useMemo(() => BUILTIN_COMMANDS(t), [t]);
+
   // Merged command + skill list for the slash menu. Commands first so
   // built-ins are easy to find; query matches both name and description.
   // Cap at 8 to keep the popover from outgrowing the composer.
@@ -716,7 +738,7 @@ export function ChatScreen() {
         const q = slashQuery.toLowerCase();
         const match = (name: string, desc: string) =>
           !q || name.toLowerCase().includes(q) || desc.toLowerCase().includes(q);
-        const cmds: SlashItem[] = BUILTIN_COMMANDS
+        const cmds: SlashItem[] = builtinCommands
           .filter((c) => match(c.name, c.description))
           .map((c) => ({ kind: "command", ...c }));
         const sks: SlashItem[] = skills
@@ -754,7 +776,7 @@ export function ChatScreen() {
     const trimmed = value.trim();
     const match = /^\/([\w-]+)(?:\s|$)/.exec(trimmed);
     if (!match) return "";
-    return BUILTIN_COMMANDS.some((c) => c.name === match[1]) ? match[1] : "";
+    return BUILTIN_COMMAND_NAMES.has(match[1]) ? match[1] : "";
   }, []);
 
   const isReadOnlySafeSlashCommand = useCallback(
@@ -903,14 +925,14 @@ export function ChatScreen() {
           }
           case "error": {
             claim();
-            const msg = data.data?.message || "Unknown error";
+            const msg = data.data?.message || t("errorUnknown");
             // Older gateways persisted cancellation as an error event.
             // Ignore those on replay so Stop produces one clear status
             // instead of "(Stopped)" followed by a stale error bubble.
             if (/\bcontext canceled\b/i.test(msg)) break;
             setMessages((prev) => [
               ...prev,
-              { id: `e-${Date.now()}`, role: "agent", content: `Error: ${msg}`, timestamp: Date.now() },
+              { id: `e-${Date.now()}`, role: "agent", content: t("errorWithMessage", { message: msg }), timestamp: Date.now() },
             ]);
             break;
           }
@@ -956,7 +978,7 @@ export function ChatScreen() {
                 .then(({ history, latestEventSeq }) => {
                   if (latestEventSeq > maxSeqRef.current) maxSeqRef.current = latestEventSeq;
                   subscribeSinceRef.current = latestEventSeq;
-                  setMessages(buildChatMessages(history));
+                  setMessages(buildChatMessages(history, t("toolStopped")));
                 })
                 .catch(() => {});
             }
@@ -1099,7 +1121,7 @@ export function ChatScreen() {
       <div className="flex flex-1 items-center justify-between gap-2 min-w-0">
         <ChatHeaderTitle
           title={sessionTitle}
-          fallback={`Chat with ${agentName || selectedAgent}`}
+          fallback={t("headerFallbackTitle", { name: agentName || selectedAgent })}
           onSave={handleRenameTitle}
         />
         <button
@@ -1110,15 +1132,15 @@ export function ChatScreen() {
               ? "bg-muted text-foreground"
               : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
           }`}
-          title={filesSheetOpen ? "Hide workspace" : "Show workspace"}
+          title={filesSheetOpen ? t("workspaceHide") : t("workspaceShow")}
           aria-pressed={filesSheetOpen}
         >
           <FolderOpen className="h-4 w-4" />
-          <span className="sr-only">Toggle workspace</span>
+          <span className="sr-only">{t("workspaceToggle")}</span>
         </button>
       </div>
     ),
-    [sessionTitle, agentName, selectedAgent, handleRenameTitle, filesSheetOpen],
+    [sessionTitle, agentName, selectedAgent, handleRenameTitle, filesSheetOpen, t],
   );
   usePageHeader(headerSlot, [headerSlot]);
 
@@ -1167,7 +1189,7 @@ export function ChatScreen() {
           setLoadedSessionId(sessionId);
           return;
         }
-        const built = buildChatMessages(history);
+        const built = buildChatMessages(history, t("toolStopped"));
         try {
           // listAgentFiles(agentId, sessionId) lets the backend pick
           // the right prefix — projects/<pid>/ for project chats,
@@ -1326,7 +1348,7 @@ export function ChatScreen() {
       } catch (err) {
         setMessages((prev) => [
           ...prev,
-          { id: `e-${Date.now()}`, role: "agent", content: `File upload failed: ${err instanceof Error ? err.message : "unknown error"}`, timestamp: Date.now() },
+          { id: `e-${Date.now()}`, role: "agent", content: t("errorUploadFailed", { message: err instanceof Error ? err.message : t("errorUnknown") }), timestamp: Date.now() },
         ]);
         return;
       }
@@ -1648,11 +1670,11 @@ export function ChatScreen() {
             // turn just hangs — the model failed (provider 4xx/5xx,
             // serialization mismatch, etc.) and the only signal was a
             // gateway log line the user can't see.
-            const msg = evt.data?.message || "Unknown error";
+            const msg = evt.data?.message || t("errorUnknown");
             if (/\bcontext canceled\b/i.test(msg)) break;
             setMessages((prev) => [
               ...prev,
-              { id: `e-${Date.now()}`, role: "agent", content: `Error: ${msg}`, timestamp: Date.now() },
+              { id: `e-${Date.now()}`, role: "agent", content: t("errorWithMessage", { message: msg }), timestamp: Date.now() },
             ]);
             break;
           }
@@ -1746,7 +1768,7 @@ export function ChatScreen() {
               ? {
                   ...m,
                   toolCalls: m.toolCalls.map((tc) =>
-                    tc.result === undefined ? { ...tc, result: "(stopped)" } : tc,
+                    tc.result === undefined ? { ...tc, result: t("toolStopped") } : tc,
                   ),
                 }
               : m,
@@ -1754,7 +1776,7 @@ export function ChatScreen() {
         );
         setMessages((prev) => [
           ...prev,
-          { id: `e-${Date.now()}`, role: "agent", content: "(Stopped)", timestamp: Date.now() },
+          { id: `e-${Date.now()}`, role: "agent", content: t("stoppedMessage"), timestamp: Date.now() },
         ]);
       } else {
         setMessages((prev) => {
@@ -1767,7 +1789,7 @@ export function ChatScreen() {
           }
           const errMsg = err instanceof Error && err.message
             ? err.message
-            : "Failed to get a response. Is the gateway running?";
+            : t("errorNoResponse");
           return [
             ...prev,
             {
@@ -1791,7 +1813,7 @@ export function ChatScreen() {
       setSubagentProgress(null);
       textareaRef.current?.focus();
     }
-  }, [input, attachments, selectedAgent, sessionId, sending, isReadOnlyView, isReadOnlySafeSlashCommand, loadSessions, pathname, router, urlProjectId]);
+  }, [input, attachments, selectedAgent, sessionId, sending, isReadOnlyView, isReadOnlySafeSlashCommand, loadSessions, pathname, router, urlProjectId, t]);
 
   const handleStop = useCallback(() => {
     abortRef.current?.abort();
@@ -1820,7 +1842,7 @@ export function ChatScreen() {
     } catch (err) {
       setMessages((prev) => [
         ...prev.filter((m) => m.id !== optimisticId),
-        { id: `e-${Date.now()}`, role: "agent", content: `Steer failed: ${err instanceof Error ? err.message : "unknown error"}`, timestamp: Date.now() },
+        { id: `e-${Date.now()}`, role: "agent", content: t("errorSteerFailed", { message: err instanceof Error ? err.message : t("errorUnknown") }), timestamp: Date.now() },
       ]);
       return;
     }
@@ -1828,7 +1850,7 @@ export function ChatScreen() {
       setMessages((prev) => prev.filter((m) => m.id !== optimisticId));
       await handleSend(text, true);
     }
-  }, [input, selectedAgent, sending, sessionId, urlProjectId, handleSend]);
+  }, [input, selectedAgent, sending, sessionId, urlProjectId, handleSend, t]);
 
   const handleFilePick = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const picked = e.target.files;
@@ -1972,7 +1994,7 @@ export function ChatScreen() {
   // render a small info card UNDER the hero (folder + name + meta)
   // instead of taking over the headline, so users always know which
   // agent they're chatting with first.
-  const heroTitle = "What can I do for you?";
+  const heroTitle = t("heroTitle");
 
   return (
     <div className="flex h-[calc(100vh-3rem)] flex-row">
@@ -2192,7 +2214,7 @@ export function ChatScreen() {
                                 type="button"
                                 onClick={() => setLightboxSrc(att.previewUrl!)}
                                 className="block cursor-zoom-in"
-                                aria-label={`Preview ${att.name}`}
+                                aria-label={t("previewAttachment", { name: att.name })}
                               >
                                 {/* eslint-disable-next-line @next/next/no-img-element */}
                                 <img
@@ -2234,18 +2256,18 @@ export function ChatScreen() {
                       )}
                       {msg.role === "agent" && msg.metadata?.iterationCapReached && (
                         <div className="mt-2 flex items-start gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-900 dark:text-amber-200">
-                          <span className="font-medium">Iteration limit reached</span>
+                          <span className="font-medium">{t("iterationCapTitle")}</span>
                           <span className="opacity-80">
-                            Agent hit the {msg.metadata.iterationCapValue ?? ""} tool-call budget before finishing. The answer above was synthesized from partial results — fields may be marked unknown / partial. Continue the conversation to push further.
+                            {t("iterationCapBody", { count: msg.metadata.iterationCapValue ?? "" })}
                           </span>
                         </div>
                       )}
                       {msg.role === "agent" && msg.metadata?.planMode && (
                         <div className="mt-2 flex items-start gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-900 dark:text-amber-200">
                           <ListChecks className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                          <span className="font-medium">Plan only — review before executing.</span>
+                          <span className="font-medium">{t("planModeTitle")}</span>
                           <span className="opacity-80">
-                            Tools were disabled for this turn. Reply with &quot;go&quot; (or edits) to run it.
+                            {t("planModeBody")}
                           </span>
                         </div>
                       )}
@@ -2258,7 +2280,7 @@ export function ChatScreen() {
                             className="h-8 gap-1.5"
                           >
                             <Check className="h-3.5 w-3.5" />
-                            Run plan
+                            {t("planRun")}
                           </Button>
                           <Button
                             size="sm"
@@ -2276,10 +2298,10 @@ export function ChatScreen() {
                             className="h-8 gap-1.5"
                           >
                             <X className="h-3.5 w-3.5" />
-                            Edit
+                            {t("planEdit")}
                           </Button>
                           <span className="text-xs text-muted-foreground">
-                            Run plan to authorize the agent end-to-end, or Edit to revise below.
+                            {t("planHint")}
                           </span>
                         </div>
                       )}
@@ -2302,7 +2324,7 @@ export function ChatScreen() {
                           <button
                             onClick={() => handleCopy(msg)}
                             className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-muted text-muted-foreground/60 hover:text-muted-foreground transition-all"
-                            title="Copy"
+                            title={tc("copy")}
                           >
                             {copiedId === msg.id ? (
                               <Check className="h-3 w-3 text-emerald-500" />
@@ -2313,7 +2335,7 @@ export function ChatScreen() {
                           <button
                             onClick={() => handleRetry(msg)}
                             className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-muted text-muted-foreground/60 hover:text-muted-foreground transition-all"
-                            title="Resend (refills the composer)"
+                            title={t("retryTooltip")}
                           >
                             <RotateCcw className="h-3 w-3" />
                           </button>
@@ -2328,7 +2350,7 @@ export function ChatScreen() {
                           <button
                             onClick={() => handleCopy(msg)}
                             className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-muted text-muted-foreground/60 hover:text-muted-foreground transition-all"
-                            title="Copy"
+                            title={tc("copy")}
                           >
                             {copiedId === msg.id ? (
                               <Check className="h-3 w-3 text-emerald-500" />
@@ -2339,10 +2361,10 @@ export function ChatScreen() {
                           <button
                             onClick={() => setFilesSheetOpen(true)}
                             className="opacity-0 group-hover:opacity-100 inline-flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-muted text-[10px] text-muted-foreground/60 hover:text-muted-foreground transition-all"
-                            title="View task files"
+                            title={t("viewTaskFiles")}
                           >
                             <FolderOpen className="h-3 w-3" />
-                            <span>Files</span>
+                            <span>{t("filesLabel")}</span>
                           </button>
                         </>
                       )}
@@ -2393,14 +2415,15 @@ export function ChatScreen() {
               // Block the input outright and tell the user where to
               // reply.
               <div className="mb-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                This conversation lives on{" "}
-                <span className="font-medium text-foreground">
-                  {channelLabel(currentChannel)}
-                </span>
-                . Reply from there — slash commands like{" "}
-                <span className="font-mono text-foreground">/usage</span> can
-                run here, but normal messages typed here won&apos;t reach the user
-                on the other side.
+                {t.rich("readOnlyChannelBanner", {
+                  channel: channelLabel(currentChannel),
+                  strong: (chunks) => (
+                    <span className="font-medium text-foreground">{chunks}</span>
+                  ),
+                  code: (chunks) => (
+                    <span className="font-mono text-foreground">{chunks}</span>
+                  ),
+                })}
               </div>
             )}
             {isActAsView && !isReadOnlyChannel && (
@@ -2409,8 +2432,7 @@ export function ChatScreen() {
               // read-only for the whole request, so any send would 403
               // — disable the composer and surface why.
               <div className="mb-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-                Read-only — you&apos;re viewing another user&apos;s chat.
-                Sending messages here is disabled.
+                {t("actAsBanner")}
               </div>
             )}
             {slashOpen && filteredItems.length > 0 && (
@@ -2441,7 +2463,7 @@ export function ChatScreen() {
                             type="button"
                             onClick={() => setLightboxSrc(preview)}
                             className="block h-full w-full cursor-zoom-in"
-                            aria-label={`Preview ${f.name}`}
+                            aria-label={t("previewAttachment", { name: f.name })}
                           >
                             {/* eslint-disable-next-line @next/next/no-img-element */}
                             <img
@@ -2454,7 +2476,7 @@ export function ChatScreen() {
                             type="button"
                             onClick={() => removeAttachment(i)}
                             className="absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-background/80 text-muted-foreground opacity-0 transition group-hover:opacity-100 hover:text-foreground"
-                            aria-label="Remove attachment"
+                            aria-label={t("removeAttachment")}
                           >
                             <X className="h-3 w-3" />
                           </button>
@@ -2472,7 +2494,7 @@ export function ChatScreen() {
                           type="button"
                           onClick={() => removeAttachment(i)}
                           className="p-0.5 rounded hover:bg-muted-foreground/15 text-muted-foreground hover:text-foreground"
-                          aria-label="Remove attachment"
+                          aria-label={t("removeAttachment")}
                         >
                           <X className="h-3 w-3" />
                         </button>
@@ -2495,12 +2517,12 @@ export function ChatScreen() {
                     onBlur={() => setTimeout(() => setSlashOpen(false), 120)}
                     placeholder={
                       isActAsView
-                        ? "Read-only — viewing another user's chat"
+                        ? t("placeholderActAs")
                         : isReadOnlyChannel
-                          ? `Slash commands only — reply from ${channelLabel(currentChannel)}`
+                          ? t("placeholderReadOnlyChannel", { channel: channelLabel(currentChannel) })
                           : selectedAgent
-                            ? `Message ${agentName || selectedAgent}... ("/" to pick a skill)`
-                            : "Select an agent first"
+                            ? t("placeholderMessage", { name: agentName || selectedAgent })
+                            : t("placeholderNoAgent")
                     }
                     disabled={!canUseComposer}
                     rows={3}
@@ -2515,7 +2537,7 @@ export function ChatScreen() {
                             ? "opacity-50 cursor-not-allowed"
                             : "hover:bg-muted hover:text-foreground cursor-pointer"
                         }`}
-                        aria-label="Attach files"
+                        aria-label={t("attachFiles")}
                       >
                         <Paperclip className="h-4 w-4" />
                         <input
@@ -2544,7 +2566,7 @@ export function ChatScreen() {
                         onClick={handleStop}
                         size="icon"
                         className="h-9 w-9 shrink-0 rounded-full"
-                        aria-label="Stop generating"
+                        aria-label={t("stopGenerating")}
                       >
                         <Square className="h-3.5 w-3.5 fill-current" />
                       </Button>
@@ -2557,7 +2579,7 @@ export function ChatScreen() {
                         disabled={(!input.trim() && attachments.length === 0) || !canSendComposer}
                         size="icon"
                         className="h-9 w-9 shrink-0 rounded-full"
-                        aria-label="Send message"
+                        aria-label={t("sendMessage")}
                       >
                         <Send className="h-4 w-4" />
                       </Button>
@@ -2572,7 +2594,7 @@ export function ChatScreen() {
                         ? "opacity-50 cursor-not-allowed"
                         : "hover:bg-muted hover:text-foreground cursor-pointer"
                     }`}
-                    aria-label="Attach files"
+                    aria-label={t("attachFiles")}
                   >
                     <Paperclip className="h-4 w-4" />
                     <input
@@ -2592,12 +2614,12 @@ export function ChatScreen() {
                     onBlur={() => setTimeout(() => setSlashOpen(false), 120)}
                     placeholder={
                       isActAsView
-                        ? "Read-only — viewing another user's chat"
+                        ? t("placeholderActAs")
                         : isReadOnlyChannel
-                          ? `Slash commands only — reply from ${channelLabel(currentChannel)}`
+                          ? t("placeholderReadOnlyChannel", { channel: channelLabel(currentChannel) })
                           : selectedAgent
-                            ? `Message ${agentName || selectedAgent}... ("/" to pick a skill)`
-                            : "Select an agent first"
+                            ? t("placeholderMessage", { name: agentName || selectedAgent })
+                            : t("placeholderNoAgent")
                     }
                     disabled={!canUseComposer}
                     rows={1}
@@ -2609,7 +2631,7 @@ export function ChatScreen() {
                       onClick={handleStop}
                       size="icon"
                       className="h-8 w-8 shrink-0 rounded-lg"
-                      aria-label="Stop generating"
+                      aria-label={t("stopGenerating")}
                     >
                       <Square className="h-3.5 w-3.5 fill-current" />
                     </Button>
@@ -2622,7 +2644,7 @@ export function ChatScreen() {
                       disabled={(!input.trim() && attachments.length === 0) || !canSendComposer}
                       size="icon"
                       className="h-8 w-8 shrink-0 rounded-lg"
-                      aria-label="Send message"
+                      aria-label={t("sendMessage")}
                     >
                       <Send className="h-4 w-4" />
                     </Button>
@@ -2638,12 +2660,12 @@ export function ChatScreen() {
             onClick={() => setLightboxSrc(null)}
             role="dialog"
             aria-modal="true"
-            aria-label="Image preview"
+            aria-label={t("imagePreview")}
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={lightboxSrc}
-              alt="Preview"
+              alt={t("previewAlt")}
               className="max-h-full max-w-full rounded-lg shadow-2xl"
               onClick={(e) => e.stopPropagation()}
             />
@@ -2651,7 +2673,7 @@ export function ChatScreen() {
               type="button"
               onClick={() => setLightboxSrc(null)}
               className="absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-full bg-background/80 text-foreground hover:bg-background"
-              aria-label="Close preview"
+              aria-label={t("closePreview")}
             >
               <X className="h-5 w-5" />
             </button>
@@ -2763,6 +2785,7 @@ function ChatHeaderTitle({ title, fallback, onSave }: ChatHeaderTitleProps) {
  *  container (ToolRoundsBundle) can stack rounds without each one
  *  re-imposing its own bubble alignment. */
 function ToolCallGroup({ msg, surfacedSrcs, agentId, sessionId, nested = false, roundIndex, subagentProgress, onKnowledgeCitationClick }: { msg: ChatMessage; surfacedSrcs?: ReadonlySet<string>; agentId: string; sessionId: string; nested?: boolean; roundIndex?: number; subagentProgress?: { iteration?: number; max?: number; phase?: "thinking" | "running" | "final-delivery" | "done"; tools?: string[] } | null; onKnowledgeCitationClick?: (source: KnowledgeSource) => void }) {
+  const t = useTranslations("chat");
   const [groupOpen, setGroupOpen] = useState(false);
   const [expandedTool, setExpandedTool] = useState<Record<string, boolean>>({});
 
@@ -2823,8 +2846,8 @@ function ToolCallGroup({ msg, surfacedSrcs, agentId, sessionId, nested = false, 
             )}
             <span className="font-medium text-foreground">
               {allDone
-                ? `Executed ${tools.length} tool${tools.length > 1 ? "s" : ""}`
-                : `Running tools (${doneCount}/${tools.length})...`}
+                ? t("toolsExecuted", { count: tools.length })
+                : t("toolsRunning", { done: doneCount, total: tools.length })}
             </span>
             <span className="text-muted-foreground/60 text-[11px] flex-1 text-left truncate">
               {tools.map((tc) => tc.name).join(", ")}
@@ -2853,10 +2876,10 @@ function ToolCallGroup({ msg, surfacedSrcs, agentId, sessionId, nested = false, 
                     {tc.metadata?.sandbox && (
                       <span
                         className="flex items-center gap-0.5 rounded bg-emerald-500/10 px-1 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400"
-                        title="Executed inside a sandboxed container"
+                        title={t("sandboxTooltip")}
                       >
                         <ShieldCheck className="h-2.5 w-2.5" />
-                        sandbox
+                        {t("sandboxBadge")}
                       </span>
                     )}
                     <span className="text-muted-foreground/50 font-mono truncate flex-1 text-left text-[11px]">
@@ -2891,7 +2914,7 @@ function ToolCallGroup({ msg, surfacedSrcs, agentId, sessionId, nested = false, 
                   {expandedTool[tc.id] && (
                     <div className="px-3 py-2 space-y-2 bg-muted/20">
                       <div>
-                        <p className="text-[10px] font-medium text-muted-foreground uppercase mb-1">Input</p>
+                        <p className="text-[10px] font-medium text-muted-foreground uppercase mb-1">{t("toolInput")}</p>
                         <pre className="text-xs font-mono bg-muted/50 rounded p-2 overflow-x-auto whitespace-pre-wrap break-all max-h-40">
                           {(() => {
                             try { return JSON.stringify(JSON.parse(tc.arguments), null, 2); }
@@ -2901,7 +2924,7 @@ function ToolCallGroup({ msg, surfacedSrcs, agentId, sessionId, nested = false, 
                       </div>
                       {tc.result != null ? (
                         <div>
-                          <p className="text-[10px] font-medium text-muted-foreground uppercase mb-1">Output</p>
+                          <p className="text-[10px] font-medium text-muted-foreground uppercase mb-1">{t("toolOutput")}</p>
                           <pre className="text-xs font-mono bg-muted/50 rounded p-2 overflow-x-auto whitespace-pre-wrap break-all max-h-60">
                             {tc.result.length > 2000 ? tc.result.slice(0, 2000) + "..." : tc.result}
                           </pre>
@@ -2913,18 +2936,18 @@ function ToolCallGroup({ msg, surfacedSrcs, agentId, sessionId, nested = false, 
                             const mx = subagentProgress.max;
                             const phase = subagentProgress.phase;
                             const tools = subagentProgress.tools;
-                            const counter = it && mx ? `Iteration ${it}/${mx}` : "Sub-agent running";
+                            const counter = it && mx ? t("subagentIteration", { current: it, max: mx }) : t("subagentRunning");
                             let detail = "";
-                            if (phase === "thinking") detail = "thinking";
-                            else if (phase === "running" && tools?.length) detail = `running ${tools.join(", ")}`;
-                            else if (phase === "final-delivery") detail = "synthesizing final answer";
+                            if (phase === "thinking") detail = t("subagentThinking");
+                            else if (phase === "running" && tools?.length) detail = t("subagentRunningTools", { tools: tools.join(", ") });
+                            else if (phase === "final-delivery") detail = t("subagentFinalizing");
                             return detail ? `${counter} · ${detail}` : counter;
                           })()}
                         </div>
                       ) : tc.name === "delegate_task" && tc.result == null && tc.id !== activeDelegateId ? (
-                        <p className="text-xs text-muted-foreground/60 italic">Queued (waiting on prior sub-agent)…</p>
+                        <p className="text-xs text-muted-foreground/60 italic">{t("subagentQueued")}</p>
                       ) : (
-                        <p className="text-xs text-muted-foreground/60 italic">Executing...</p>
+                        <p className="text-xs text-muted-foreground/60 italic">{t("toolExecuting")}</p>
                       )}
                     </div>
                   )}
@@ -2969,6 +2992,7 @@ function ToolRoundsBundle({
   subagentProgress?: { iteration?: number; max?: number; phase?: "thinking" | "running" | "final-delivery" | "done"; tools?: string[] } | null;
   onKnowledgeCitationClick?: (source: KnowledgeSource) => void;
 }) {
+  const t = useTranslations("chat");
   const [open, setOpen] = useState(false);
   const allTools = rounds.flatMap((r) => r.toolCalls || []);
   const totalTools = allTools.length;
@@ -2989,8 +3013,8 @@ function ToolRoundsBundle({
             )}
             <span className="font-medium text-foreground">
               {allDone
-                ? `Used ${totalTools} tool${totalTools === 1 ? "" : "s"} across ${rounds.length} round${rounds.length === 1 ? "" : "s"}`
-                : `Running tools… (${doneCount}/${totalTools} across ${rounds.length} rounds)`}
+                ? t("bundleDone", { tools: totalTools, rounds: rounds.length })
+                : t("bundleRunning", { done: doneCount, total: totalTools, rounds: rounds.length })}
             </span>
             <span className="ml-auto" />
             {open ? (
@@ -3088,6 +3112,7 @@ function zipUrl(agentId: string, sessionId: string, projectId?: string): string 
 // BuildLogView renders the live scaffold/dev log as a scrolling terminal,
 // auto-pinned to the bottom so the latest pnpm-install lines stay visible.
 function BuildLogView({ text }: { text: string }) {
+  const t = useTranslations("chat");
   const ref = useRef<HTMLPreElement>(null);
   useEffect(() => {
     const el = ref.current;
@@ -3098,22 +3123,23 @@ function BuildLogView({ text }: { text: string }) {
       ref={ref}
       className="h-full w-full overflow-auto whitespace-pre-wrap break-words bg-zinc-950 px-4 py-3 text-left font-mono text-[11px] leading-relaxed text-zinc-300"
     >
-      {text || "Starting build…"}
+      {text || t("buildStarting")}
     </pre>
   );
 }
 
 function FilesPanel({ files, onOpen }: { files: ProducedFile[]; onOpen: () => void }) {
+  const t = useTranslations("chat");
   return (
     <div className="mt-2 max-w-[85%]">
       <button
         type="button"
         onClick={onOpen}
         className="group inline-flex items-center gap-2 rounded-lg border border-border bg-card/50 px-3 py-2 hover:bg-card/80 transition-colors"
-        title="Open workspace files"
+        title={t("openFilesTooltip")}
       >
         <FolderOpen className="h-4 w-4 text-muted-foreground shrink-0 group-hover:text-foreground transition-colors" />
-        <span className="text-sm font-medium text-foreground">Open files</span>
+        <span className="text-sm font-medium text-foreground">{t("openFiles")}</span>
         <span className="rounded-full bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground/80 tabular-nums">
           {files.length}
         </span>
@@ -3347,6 +3373,7 @@ function WorkspacePanel({
   onClearKnowledgePreview?: () => void;
   onClose: () => void;
 }) {
+  const t = useTranslations("chat");
   const [files, setFiles] = useState<WorkspaceFile[]>([]);
   const [loading, setLoading] = useState(false);
   const [previewing, setPreviewing] = useState<ProducedFile | null>(null);
@@ -3448,12 +3475,12 @@ function WorkspacePanel({
         // toast lib we don't have. The message comes from the
         // backend (e.g. "S3-backed store, no host path").
         // eslint-disable-next-line no-alert
-        alert(res.error || "Could not open workspace folder");
+        alert(res.error || t("errorRevealFailed"));
       }
     } finally {
       setRevealing(false);
     }
-  }, [agentId, sessionId, projectId]);
+  }, [agentId, sessionId, projectId, t]);
 
   const refresh = useCallback(async () => {
     // Project scope (no session) is handled via projectId; chat scope
@@ -3562,7 +3589,7 @@ function WorkspacePanel({
         <div
           onMouseDown={(e) => { e.preventDefault(); setResizing(true); }}
           className={`absolute left-0 top-0 bottom-0 w-2 cursor-col-resize z-10 group ${resizing ? "" : ""}`}
-          title="Drag to resize"
+          title={t("dragToResize")}
         >
           <div
             className={`absolute inset-y-0 left-1/2 w-px -translate-x-1/2 transition-colors ${
@@ -3573,7 +3600,7 @@ function WorkspacePanel({
         <div className="flex h-12 items-center justify-between gap-2 border-b border-border px-4">
           <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
             <FolderOpen className="h-4 w-4 shrink-0" />
-            {!compactHeader && <span className="truncate">{knowledgePreview ? "Knowledge" : "Workspace"}</span>}
+            {!compactHeader && <span className="truncate">{knowledgePreview ? t("knowledgeTitle") : t("workspaceTitle")}</span>}
           </div>
           <div className="flex shrink-0 items-center gap-1">
             {/* Secondary actions: inline on a wide panel, folded into a "⋯"
@@ -3585,7 +3612,7 @@ function WorkspacePanel({
                   render={
                     <button
                       className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
-                      title="More actions"
+                      title={t("moreActions")}
                     >
                       <MoreHorizontal className="h-4 w-4" />
                     </button>
@@ -3599,7 +3626,7 @@ function WorkspacePanel({
                       }
                     >
                       <ExternalLink className="h-4 w-4 text-muted-foreground" />
-                      <span>Open in new tab</span>
+                      <span>{t("openInNewTab")}</span>
                     </DropdownMenuItem>
                   )}
                   <DropdownMenuItem
@@ -3613,7 +3640,7 @@ function WorkspacePanel({
                     }}
                   >
                     <Download className="h-4 w-4 text-muted-foreground" />
-                    <span>Download zip</span>
+                    <span>{t("downloadZip")}</span>
                   </DropdownMenuItem>
                   {deployMode === "self-hosted" && (
                     <DropdownMenuItem
@@ -3621,12 +3648,12 @@ function WorkspacePanel({
                       onClick={handleReveal}
                     >
                       <FolderSearch className="h-4 w-4 text-muted-foreground" />
-                      <span>Open in Finder</span>
+                      <span>{t("openInFinder")}</span>
                     </DropdownMenuItem>
                   )}
                   <DropdownMenuItem disabled={loading} onClick={refresh}>
                     <RefreshCw className="h-4 w-4 text-muted-foreground" />
-                    <span>Refresh</span>
+                    <span>{t("refresh")}</span>
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -3638,7 +3665,7 @@ function WorkspacePanel({
                     target="_blank"
                     rel="noopener noreferrer"
                     className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
-                    title={`Open preview in new tab: ${appPreview.previewUrl}`}
+                    title={t("openPreviewNewTab", { url: appPreview.previewUrl })}
                   >
                     <ExternalLink className="h-4 w-4" />
                   </a>
@@ -3651,7 +3678,7 @@ function WorkspacePanel({
                       ? "pointer-events-none text-muted-foreground/40"
                       : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
                   }`}
-                  title="Download all as zip"
+                  title={t("downloadAllZip")}
                 >
                   <Download className="h-4 w-4" />
                 </a>
@@ -3660,7 +3687,7 @@ function WorkspacePanel({
                     onClick={handleReveal}
                     disabled={revealing || (!sessionId && !projectId)}
                     className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:opacity-50"
-                    title="Open folder in Finder"
+                    title={t("openFolderInFinder")}
                   >
                     <FolderSearch className="h-4 w-4" />
                   </button>
@@ -3669,7 +3696,7 @@ function WorkspacePanel({
                   onClick={refresh}
                   disabled={loading}
                   className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:opacity-50"
-                  title="Refresh"
+                  title={t("refresh")}
                 >
                   <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
                 </button>
@@ -3678,7 +3705,7 @@ function WorkspacePanel({
             <button
               onClick={onClose}
               className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
-              title="Close"
+              title={t("close")}
             >
               <X className="h-4 w-4" />
             </button>
@@ -3698,7 +3725,7 @@ function WorkspacePanel({
                     : "text-muted-foreground hover:text-foreground"
                 }`}
               >
-                Files
+                {t("tabFiles")}
               </button>
               <button
                 onClick={() => setTab("preview")}
@@ -3708,20 +3735,20 @@ function WorkspacePanel({
                     : "text-muted-foreground hover:text-foreground"
                 }`}
               >
-                Preview
+                {t("tabPreview")}
                 {(appPreview.status === "starting" || appPreview.status === "scaffolding") && (
                   <RefreshCw className="h-3 w-3 animate-spin" />
                 )}
               </button>
             </div>
           ) : (
-            <span className="px-1 text-xs font-medium text-muted-foreground">Files</span>
+            <span className="px-1 text-xs font-medium text-muted-foreground">{t("tabFiles")}</span>
           )}
           {tab === "code" && (
             <button
               onClick={() => setTreeCollapsed((c) => !c)}
               className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
-              title={treeCollapsed ? "Show file tree" : "Hide file tree"}
+              title={treeCollapsed ? t("showFileTree") : t("hideFileTree")}
             >
               {treeCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
             </button>
@@ -3742,7 +3769,7 @@ function WorkspacePanel({
                       !showAll ? "bg-muted font-medium text-foreground" : "text-muted-foreground hover:text-foreground"
                     }`}
                   >
-                    Changed{changed.files.length ? ` (${changed.files.length})` : ""}
+                    {t("changedFilter", { count: changed.files.length })}
                   </button>
                   <button
                     onClick={() => setShowAll(true)}
@@ -3750,7 +3777,7 @@ function WorkspacePanel({
                       showAll ? "bg-muted font-medium text-foreground" : "text-muted-foreground hover:text-foreground"
                     }`}
                   >
-                    All files
+                    {t("allFilesFilter")}
                   </button>
                 </div>
               )}
@@ -3762,10 +3789,10 @@ function WorkspacePanel({
                     return (
                       <p className="px-3 py-8 text-center text-sm text-muted-foreground">
                         {showChanged
-                          ? "No changes yet — the agent hasn't edited any files."
+                          ? t("emptyNoChanges")
                           : projectId
-                            ? "No files in this project yet."
-                            : "No files in this session yet."}
+                            ? t("emptyProject")
+                            : t("emptySession")}
                       </p>
                     );
                   }
@@ -3806,7 +3833,7 @@ function WorkspacePanel({
               ) : (
                 <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-muted-foreground">
                   <FileText className="h-6 w-6" />
-                  <p className="text-sm">Select a file to view it here.</p>
+                  <p className="text-sm">{t("selectFileHint")}</p>
                 </div>
               )}
             </div>
@@ -3817,7 +3844,7 @@ function WorkspacePanel({
               <iframe
                 src={appPreview.previewUrl}
                 className="h-full w-full border-0 bg-white"
-                title="App preview"
+                title={t("appPreviewTitle")}
               />
             ) : appPreview.status === "starting" || appPreview.status === "scaffolding" ? (
               <div className="flex h-full flex-col">
@@ -3825,8 +3852,8 @@ function WorkspacePanel({
                   <RefreshCw className="h-4 w-4 shrink-0 animate-spin" />
                   <span>
                     {appPreview.status === "scaffolding"
-                      ? "Installing dependencies — this can take a few minutes…"
-                      : "Starting the dev server…"}
+                      ? t("previewInstalling")
+                      : t("previewStartingDev")}
                   </span>
                 </div>
                 <div className="min-h-0 flex-1">
@@ -3835,17 +3862,17 @@ function WorkspacePanel({
               </div>
             ) : appPreview.status === "crashed" ? (
               <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
-                <p className="text-sm text-destructive">Preview failed to start.</p>
+                <p className="text-sm text-destructive">{t("previewCrashed")}</p>
                 <p className="text-xs text-muted-foreground">
-                  Ask the agent to check the dev-server logs (app_preview_logs).
+                  {t("previewCrashedHint")}
                 </p>
               </div>
             ) : (
               <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-muted-foreground">
                 <Eye className="h-6 w-6" />
-                <p className="text-sm">No preview yet.</p>
+                <p className="text-sm">{t("previewEmpty")}</p>
                 <p className="text-xs">
-                  Ask the agent to build an app, and it shows up here.
+                  {t("previewEmptyHint")}
                 </p>
               </div>
             )}
@@ -3872,6 +3899,7 @@ function formatRelativeTime(ts?: number): string {
 // Files tab): image / pdf / markdown / highlighted text / rendered-or-source
 // HTML. onClose, when given, deselects the file.
 function KnowledgeFileViewer({ agentId, source, onClose }: { agentId: string; source: KnowledgeSource; onClose?: () => void }) {
+  const t = useTranslations("chat");
   const storedName = source.path.startsWith("knowledge/") ? source.path.slice("knowledge/".length) : source.path;
   const [file, setFile] = useState<{ name: string; content: string; size: number; hash?: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -3903,8 +3931,8 @@ function KnowledgeFileViewer({ agentId, source, onClose }: { agentId: string; so
           </div>
           <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
             {source.id}
-            {source.chunk ? ` · chunk ${source.chunk}` : ""}
-            {source.score ? ` · score ${source.score}` : ""}
+            {source.chunk ? ` · ${t("chunkLabel", { chunk: source.chunk })}` : ""}
+            {source.score ? ` · ${t("scoreLabel", { score: source.score })}` : ""}
             {file?.hash ? ` · ${file.hash.slice(0, 8)}` : ""}
           </p>
         </div>
@@ -3913,7 +3941,7 @@ function KnowledgeFileViewer({ agentId, source, onClose }: { agentId: string; so
             <button
               onClick={() => setView(view === "rendered" ? "source" : "rendered")}
               className="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted/50"
-              title={view === "rendered" ? "View source" : "View rendered"}
+              title={view === "rendered" ? t("viewSource") : t("viewRendered")}
             >
               {view === "rendered" ? <Code2 className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
             </button>
@@ -3922,7 +3950,7 @@ function KnowledgeFileViewer({ agentId, source, onClose }: { agentId: string; so
             <button
               onClick={onClose}
               className="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted/50"
-              title="Close knowledge file"
+              title={t("closeKnowledgeFile")}
             >
               <X className="h-4 w-4" />
             </button>
@@ -3931,9 +3959,9 @@ function KnowledgeFileViewer({ agentId, source, onClose }: { agentId: string; so
       </div>
       <div className="min-h-0 flex-1">
         {error ? (
-          <p className="p-4 text-sm text-destructive">Failed to load: {error}</p>
+          <p className="p-4 text-sm text-destructive">{t("errorLoadFailed", { message: error })}</p>
         ) : !file ? (
-          <p className="p-4 text-sm text-muted-foreground">Loading…</p>
+          <p className="p-4 text-sm text-muted-foreground">{t("loading")}</p>
         ) : preview !== "text" && view === "rendered" ? (
           <div className="h-full overflow-auto p-4">
             <ChatMarkdown text={file.content} />
@@ -3951,6 +3979,7 @@ function KnowledgeFileViewer({ agentId, source, onClose }: { agentId: string; so
 }
 
 function FileViewer({ agentId, file, onClose }: { agentId: string; file: ProducedFile; onClose?: () => void }) {
+  const t = useTranslations("chat");
   const { preview } = fileKind(file.path);
   const src = fileUrl(agentId, file.path, false);
   const downloadUrl = fileUrl(agentId, file.path, true);
@@ -3989,7 +4018,7 @@ function FileViewer({ agentId, file, onClose }: { agentId: string; file: Produce
               <button
                 onClick={() => setView(view === "rendered" ? "source" : "rendered")}
                 className="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted/50"
-                title={view === "rendered" ? "View source" : "View rendered"}
+                title={view === "rendered" ? t("viewSource") : t("viewRendered")}
               >
                 {view === "rendered" ? <Code2 className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               </button>
@@ -3999,7 +4028,7 @@ function FileViewer({ agentId, file, onClose }: { agentId: string; file: Produce
               target="_blank"
               rel="noopener noreferrer"
               className="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted/50"
-              title="Open in new tab"
+              title={t("openInNewTab")}
             >
               <ExternalLink className="h-4 w-4" />
             </a>
@@ -4007,7 +4036,7 @@ function FileViewer({ agentId, file, onClose }: { agentId: string; file: Produce
               <button
                 onClick={onClose}
                 className="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted/50"
-                title="Close file"
+                title={t("closeFile")}
               >
                 <X className="h-4 w-4" />
               </button>
@@ -4042,9 +4071,9 @@ function FileViewer({ agentId, file, onClose }: { agentId: string; file: Produce
                 </div>
               )
             ) : error ? (
-              <p className="p-4 text-sm text-destructive">Failed to load: {error}</p>
+              <p className="p-4 text-sm text-destructive">{t("errorLoadFailed", { message: error })}</p>
             ) : text === null ? (
-              <p className="p-4 text-sm text-muted-foreground">Loading…</p>
+              <p className="p-4 text-sm text-muted-foreground">{t("loading")}</p>
             ) : text.includes("```") ? (
               // Content with its own fences would break the fenced wrapper —
               // fall back to a plain (unhighlighted) full-bleed block.
@@ -4060,9 +4089,9 @@ function FileViewer({ agentId, file, onClose }: { agentId: string; file: Produce
           {preview === "none" && (
             <div className="flex h-full flex-col items-center justify-center gap-3 p-4 text-center">
               <File className="h-12 w-12 text-muted-foreground/50" />
-              <p className="text-sm text-muted-foreground">Preview not available for this file type.</p>
+              <p className="text-sm text-muted-foreground">{t("noPreviewForType")}</p>
               <a href={downloadUrl} className="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90">
-                <Download className="h-3.5 w-3.5" /> Download
+                <Download className="h-3.5 w-3.5" /> {t("download")}
               </a>
             </div>
           )}
@@ -4082,13 +4111,14 @@ function SlashMenu({
   onHover: (i: number) => void;
   onSelect: (s: SlashItem) => void;
 }) {
+  const t = useTranslations("chat");
   return (
     <div className="absolute bottom-full left-0 right-0 mb-2 rounded-xl border border-border bg-popover shadow-lg overflow-hidden z-20">
       <div className="max-h-[320px] overflow-y-auto py-1">
         {items.map((it, i) => {
           const isCmd = it.kind === "command";
           const Icon = isCmd ? Terminal : Puzzle;
-          const badge = isCmd ? "command" : (it.type || "skill");
+          const badge = isCmd ? t("badgeCommand") : (it.type || t("badgeSkill"));
           const label = isCmd ? `/${it.name}` : it.name;
           return (
             <button
@@ -4127,7 +4157,7 @@ function SlashMenu({
         className="flex items-center gap-2 border-t border-border px-3 py-2 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
       >
         <SlidersHorizontal className="h-3.5 w-3.5" />
-        Manage Skills
+        {t("manageSkills")}
       </Link>
     </div>
   );

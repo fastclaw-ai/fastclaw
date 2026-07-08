@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -36,6 +37,8 @@ import {
 import { ConfigureSkillDialog, type SkillEntryView } from "@/components/configure-skill-dialog";
 
 export default function SkillsPage() {
+  const t = useTranslations("skills");
+  const tc = useTranslations("common");
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
@@ -96,12 +99,12 @@ export default function SkillsPage() {
   const acceptDroppedFiles = (files: FileList | null) => {
     if (!files || files.length === 0) return;
     if (files.length > 1) {
-      setUploadError("Please drop only one .zip file at a time.");
+      setUploadError(t("errorOnlyOneZip"));
       return;
     }
     const f = files[0];
     if (!/\.zip$/i.test(f.name)) {
-      setUploadError("File must be a .zip archive.");
+      setUploadError(t("errorNotZip"));
       return;
     }
     setUploadFile(f);
@@ -117,14 +120,14 @@ export default function SkillsPage() {
       // The connect handler enforces admin auth for global installs.
       const resp = await uploadSkill(uploadFile);
       if (!resp.ok) {
-        setUploadError(resp.error || "upload failed");
+        setUploadError(resp.error || t("errorUploadFailed"));
         return;
       }
       setUploadOpen(false);
       setUploadFile(null);
       fetchSkills();
     } catch (e) {
-      setUploadError(e instanceof Error ? e.message : "upload failed");
+      setUploadError(e instanceof Error ? e.message : t("errorUploadFailed"));
     } finally {
       setUploading(false);
       if (uploadInputRef.current) uploadInputRef.current.value = "";
@@ -135,19 +138,19 @@ export default function SkillsPage() {
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight">Skills</h2>
+          <h2 className="text-2xl font-semibold tracking-tight">{t("title")}</h2>
           <p className="text-sm text-muted-foreground mt-1">
-            Installed skills that agents can use
+            {t("subtitle")}
           </p>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" onClick={() => setUploadOpen(true)}>
             <Upload className="h-4 w-4 mr-2" />
-            Upload Skills
+            {t("uploadSkills")}
           </Button>
           <Button onClick={() => setInstallOpen(true)}>
             <Download className="h-4 w-4 mr-2" />
-            Install Skill
+            {t("installSkill")}
           </Button>
         </div>
       </div>
@@ -164,9 +167,9 @@ export default function SkillsPage() {
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 mb-4">
               <Sparkles className="h-7 w-7 text-primary" />
             </div>
-            <p className="text-sm text-muted-foreground mb-1">No skills installed</p>
+            <p className="text-sm text-muted-foreground mb-1">{t("emptyTitle")}</p>
             <p className="text-xs text-muted-foreground/60">
-              Skills extend agent capabilities with specialized behaviors
+              {t("emptyHint")}
             </p>
           </div>
         </div>
@@ -188,7 +191,7 @@ export default function SkillsPage() {
                       variant="outline"
                       className="mt-1 text-[10px]"
                     >
-                      {skill.type || "skill"}
+                      {skill.type || t("typeBadgeFallback")}
                     </Badge>
                   </div>
                 </div>
@@ -198,7 +201,7 @@ export default function SkillsPage() {
                     size="icon"
                     className="h-7 w-7 text-muted-foreground hover:text-foreground"
                     onClick={() => setConfigureTarget(skill)}
-                    title="Configure env / API keys"
+                    title={t("configureTooltip")}
                   >
                     <Settings className="h-3.5 w-3.5" />
                   </Button>
@@ -213,13 +216,13 @@ export default function SkillsPage() {
                 </div>
               </div>
               <p className="text-sm text-muted-foreground line-clamp-2">
-                {skill.description || "No description"}
+                {skill.description || t("noDescription")}
               </p>
               {(skillEntries[skill.name]?.apiKey ||
                 Object.keys(skillEntries[skill.name]?.env || {}).length > 0) && (
                 <div className="mt-2 inline-flex items-center gap-1 text-[10px] text-emerald-500">
                   <Check className="h-3 w-3" />
-                  configured
+                  {t("configuredBadge")}
                 </div>
               )}
             </div>
@@ -230,7 +233,7 @@ export default function SkillsPage() {
       <Dialog open={uploadOpen} onOpenChange={handleUploadOpenChange}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Upload skill</DialogTitle>
+            <DialogTitle>{t("uploadDialogTitle")}</DialogTitle>
           </DialogHeader>
 
           <input
@@ -268,31 +271,33 @@ export default function SkillsPage() {
               <div className="space-y-1">
                 <p className="text-sm font-medium break-all">{uploadFile.name}</p>
                 <p className="text-xs text-muted-foreground">
-                  {(uploadFile.size / 1024).toFixed(1)} KB · click to choose a different file
+                  {t("fileSelectedHint", { size: (uploadFile.size / 1024).toFixed(1) })}
                 </p>
               </div>
             ) : (
               <p className="text-sm text-muted-foreground">
-                Drag and drop or click to upload
+                {t("dropzoneHint")}
               </p>
             )}
           </button>
 
           <div className="space-y-2">
-            <p className="text-sm font-medium">File requirements</p>
+            <p className="text-sm font-medium">{t("fileRequirements")}</p>
             <ul className="space-y-1.5 text-sm text-muted-foreground">
               <li className="flex gap-2">
                 <span className="text-muted-foreground/60">•</span>
                 <span>
-                  <code className="text-foreground">.zip</code> file that includes a{" "}
-                  <code className="text-foreground">SKILL.md</code> at the root level
+                  {t.rich("requirementZip", {
+                    code: (chunks) => <code className="text-foreground">{chunks}</code>,
+                  })}
                 </span>
               </li>
               <li className="flex gap-2">
                 <span className="text-muted-foreground/60">•</span>
                 <span>
-                  <code className="text-foreground">SKILL.md</code> contains a skill name
-                  and description formatted in YAML
+                  {t.rich("requirementYaml", {
+                    code: (chunks) => <code className="text-foreground">{chunks}</code>,
+                  })}
                 </span>
               </li>
             </ul>
@@ -306,7 +311,7 @@ export default function SkillsPage() {
               rel="noreferrer"
               className="underline hover:text-foreground"
             >
-              Read more about creating skills
+              {t("readMore")}
             </a>
           </div>
 
@@ -322,7 +327,7 @@ export default function SkillsPage() {
               onClick={() => handleUploadOpenChange(false)}
               disabled={uploading}
             >
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button
               onClick={handleUploadConfirm}
@@ -331,10 +336,10 @@ export default function SkillsPage() {
               {uploading ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Uploading…
+                  {t("uploading")}
                 </>
               ) : (
-                "Upload"
+                t("upload")
               )}
             </Button>
           </div>
@@ -344,18 +349,21 @@ export default function SkillsPage() {
       <AlertDialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Remove Skill</AlertDialogTitle>
+            <AlertDialogTitle>{t("removeTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
-              Remove <strong>{deleteTarget}</strong> from installed skills?
+              {t.rich("removeConfirm", {
+                name: deleteTarget ?? "",
+                strong: (chunks) => <strong>{chunks}</strong>,
+              })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{tc("cancel")}</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleDelete}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              Remove
+              {tc("remove")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -396,6 +404,7 @@ function InstallSkillDialog({
   onInstalled: () => void;
   installedNames: Set<string>;
 }) {
+  const t = useTranslations("skills");
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SkillSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
@@ -440,12 +449,12 @@ function InstallSkillDialog({
     try {
       const resp = await installSkill({ source: "skillssh", name: r.skillId });
       if (!resp.ok) {
-        setInstallError(resp.error || "install failed");
+        setInstallError(resp.error || t("errorInstallFailed"));
         return;
       }
       onInstalled();
     } catch (e) {
-      setInstallError(e instanceof Error ? e.message : "install failed");
+      setInstallError(e instanceof Error ? e.message : t("errorInstallFailed"));
     } finally {
       setInstallingId(null);
     }
@@ -455,11 +464,13 @@ function InstallSkillDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Install Skill</DialogTitle>
+          <DialogTitle>{t("installDialogTitle")}</DialogTitle>
           <DialogDescription>
-            Search skills.sh for a published skill. Installs land in{" "}
-            <code className="font-mono text-xs">~/.fastclaw/skills/</code> and
-            become available to every agent.
+            {t.rich("installDialogDescription", {
+              code: (chunks) => (
+                <code className="font-mono text-xs">{chunks}</code>
+              ),
+            })}
           </DialogDescription>
         </DialogHeader>
 
@@ -467,7 +478,7 @@ function InstallSkillDialog({
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/70" />
           <Input
             autoFocus
-            placeholder="pdf, translation, web scraping…"
+            placeholder={t("searchPlaceholder")}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="pl-9"
@@ -479,7 +490,7 @@ function InstallSkillDialog({
             <div className="flex flex-col items-center justify-center py-12 text-center">
               <Sparkles className="h-8 w-8 text-muted-foreground/40 mb-3" />
               <p className="text-sm text-muted-foreground">
-                Start typing to search skills.sh
+                {t("searchPrompt")}
               </p>
             </div>
           ) : searching ? (
@@ -491,19 +502,23 @@ function InstallSkillDialog({
           ) : visible.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-10 text-center">
               <p className="text-sm text-muted-foreground mb-1">
-                No skills found on skills.sh for{" "}
-                <strong className="text-foreground">{query}</strong>
+                {t.rich("noResults", {
+                  query,
+                  strong: (chunks) => (
+                    <strong className="text-foreground">{chunks}</strong>
+                  ),
+                })}
               </p>
               <p className="text-xs text-muted-foreground/70 max-w-sm">
-                Ask one of your agents to build a custom skill with the{" "}
-                <code className="font-mono">skill-creator</code> skill — it
-                will scaffold and iterate a new skill for you.
+                {t.rich("noResultsHint", {
+                  code: (chunks) => <code className="font-mono">{chunks}</code>,
+                })}
               </p>
             </div>
           ) : (
             <>
               <p className="text-[10px] uppercase tracking-wider text-muted-foreground/70 mb-1.5 px-1">
-                Results from skills.sh
+                {t("resultsFrom")}
               </p>
               <div className="space-y-1.5 py-1">
                 {visible.map((r) => {
@@ -524,7 +539,7 @@ function InstallSkillDialog({
                             {r.skillId}
                           </p>
                           <span className="text-[10px] text-muted-foreground">
-                            {r.installs.toLocaleString()} installs
+                            {t("installsCount", { count: r.installs })}
                           </span>
                         </div>
                         <a
@@ -532,7 +547,7 @@ function InstallSkillDialog({
                           target="_blank"
                           rel="noopener noreferrer"
                           className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground font-mono truncate"
-                          title={`View on skills.sh: ${r.id}`}
+                          title={t("viewOnSkillsSh", { id: r.id })}
                         >
                           {r.source}
                           <ExternalLink className="h-3 w-3 shrink-0" />
@@ -545,11 +560,11 @@ function InstallSkillDialog({
                         onClick={() => handleInstall(r)}
                       >
                         {already ? (
-                          <><Check className="h-3.5 w-3.5 mr-1.5" /> Installed</>
+                          <><Check className="h-3.5 w-3.5 mr-1.5" /> {t("installed")}</>
                         ) : busy ? (
-                          <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> Installing…</>
+                          <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> {t("installing")}</>
                         ) : (
-                          "Install"
+                          t("install")
                         )}
                       </Button>
                     </div>

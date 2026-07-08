@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { useRouter, usePathname } from "next/navigation";
+import { useTranslations } from "next-intl";
 import {
   SidebarGroup,
   SidebarGroupAction,
@@ -97,6 +98,7 @@ export function NavProjectsList({
 }) {
   const router = useRouter();
   const pathname = usePathname();
+  const t = useTranslations("projects");
   const [createOpen, setCreateOpen] = React.useState(false);
   const [editTarget, setEditTarget] = React.useState<ProjectEntry | null>(null);
   const [deleteTarget, setDeleteTarget] = React.useState<ProjectEntry | null>(
@@ -251,10 +253,10 @@ export function NavProjectsList({
               (sectionCollapsed ? "rotate-0" : "rotate-90")
             }
           />
-          Projects
+          {t("title")}
         </SidebarGroupLabel>
         <SidebarGroupAction
-          aria-label="New project"
+          aria-label={t("newProject")}
           onClick={() => setCreateOpen(true)}
           render={
             <button>
@@ -267,7 +269,7 @@ export function NavProjectsList({
           {projects.length === 0 && (
             <SidebarMenuItem>
               <div className="px-2 py-1.5 text-xs text-muted-foreground">
-                No projects yet
+                {t("emptyState")}
               </div>
             </SidebarMenuItem>
           )}
@@ -375,6 +377,9 @@ function ProjectRow({
   onMoved: () => void;
 }) {
   const { isMobile } = useSidebar();
+  const t = useTranslations("projects");
+  const tc = useTranslations("common");
+  const tSessions = useTranslations("sessions");
   const [dropActive, setDropActive] = React.useState(false);
   const onDragOver = (e: React.DragEvent) => {
     if (!hasChatPayload(e)) return;
@@ -398,7 +403,7 @@ function ProjectRow({
     const res = await moveChatSessionToProject(agentId, sid, project.id);
     if (res?.error) {
       console.error("move chat to project failed:", res.error);
-      window.alert(`Failed to move chat: ${res.error}`);
+      window.alert(tSessions("errorMoveChat", { error: res.error }));
       return;
     }
     onMoved();
@@ -441,7 +446,7 @@ function ProjectRow({
           render={
             <SidebarMenuAction showOnHover>
               <MoreHorizontalIcon />
-              <span className="sr-only">Project actions</span>
+              <span className="sr-only">{t("actionsLabel")}</span>
             </SidebarMenuAction>
           }
         />
@@ -452,19 +457,19 @@ function ProjectRow({
         >
           <DropdownMenuItem onClick={onNewChat}>
             <PlusIcon className="text-muted-foreground" />
-            <span>New chat in project</span>
+            <span>{t("newChatInProject")}</span>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={onEdit}>
             <PencilIcon className="text-muted-foreground" />
-            <span>Edit</span>
+            <span>{tc("edit")}</span>
           </DropdownMenuItem>
           <DropdownMenuItem
             onClick={onDelete}
             className="text-destructive focus:text-destructive"
           >
             <Trash2Icon className="text-destructive" />
-            <span>Delete</span>
+            <span>{tc("delete")}</span>
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -520,6 +525,8 @@ function CreateProjectDialog({
   onOpenChange: (v: boolean) => void;
   onCreated: () => void;
 }) {
+  const t = useTranslations("projects");
+  const tc = useTranslations("common");
   const [name, setName] = React.useState("");
   const [description, setDescription] = React.useState("");
   const [saving, setSaving] = React.useState(false);
@@ -552,30 +559,29 @@ function CreateProjectDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>New project</DialogTitle>
+          <DialogTitle>{t("createTitle")}</DialogTitle>
           <DialogDescription>
-            Group chats that share research, files, or context. Every chat
-            in a project sees the same workspace folder.
+            {t("createDescription")}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           <div>
-            <label className="mb-1 block text-xs font-medium">Name</label>
+            <label className="mb-1 block text-xs font-medium">{t("nameLabel")}</label>
             <Input
               autoFocus
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. NLP survey"
+              placeholder={t("namePlaceholder")}
             />
           </div>
           <div>
             <label className="mb-1 block text-xs font-medium">
-              Description (optional)
+              {t("descriptionOptionalLabel")}
             </label>
             <Textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="What this project is for…"
+              placeholder={t("descriptionPlaceholder")}
               rows={3}
             />
           </div>
@@ -586,10 +592,10 @@ function CreateProjectDialog({
             onClick={() => onOpenChange(false)}
             disabled={saving}
           >
-            Cancel
+            {tc("cancel")}
           </Button>
           <Button onClick={save} disabled={saving || !name.trim()}>
-            {saving ? "Creating…" : "Create"}
+            {saving ? t("creating") : t("create")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -608,6 +614,8 @@ function EditProjectDialog({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const t = useTranslations("projects");
+  const tc = useTranslations("common");
   const [name, setName] = React.useState("");
   const [description, setDescription] = React.useState("");
   const [saving, setSaving] = React.useState(false);
@@ -640,15 +648,14 @@ function EditProjectDialog({
     <Dialog open={!!target} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Edit project</DialogTitle>
+          <DialogTitle>{t("editTitle")}</DialogTitle>
           <DialogDescription>
-            Rename or update the description. The workspace folder stays
-            the same — files aren&apos;t moved.
+            {t("editDescription")}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           <div>
-            <label className="mb-1 block text-xs font-medium">Name</label>
+            <label className="mb-1 block text-xs font-medium">{t("nameLabel")}</label>
             <Input
               autoFocus
               value={name}
@@ -657,7 +664,7 @@ function EditProjectDialog({
           </div>
           <div>
             <label className="mb-1 block text-xs font-medium">
-              Description
+              {t("descriptionLabel")}
             </label>
             <Textarea
               value={description}
@@ -668,10 +675,10 @@ function EditProjectDialog({
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={saving}>
-            Cancel
+            {tc("cancel")}
           </Button>
           <Button onClick={save} disabled={saving || !name.trim()}>
-            {saving ? "Saving…" : "Save"}
+            {saving ? tc("saving") : tc("save")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -690,6 +697,8 @@ function DeleteProjectDialog({
   onClose: () => void;
   onDeleted: () => void;
 }) {
+  const t = useTranslations("projects");
+  const tc = useTranslations("common");
   const [error, setError] = React.useState<string>("");
   const [busy, setBusy] = React.useState(false);
 
@@ -706,9 +715,7 @@ function DeleteProjectDialog({
         // Server returned 409 with sessionCount when the project still
         // owns chats — surface a hint instead of just "delete failed".
         if (res.sessionCount && res.sessionCount > 0) {
-          setError(
-            `This project still has ${res.sessionCount} chat${res.sessionCount === 1 ? "" : "s"}. Delete or move them first.`,
-          );
+          setError(t("errorHasChats", { count: res.sessionCount }));
         } else {
           setError(res.error);
         }
@@ -725,11 +732,12 @@ function DeleteProjectDialog({
     <AlertDialog open={!!target} onOpenChange={(v) => !v && onClose()}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Delete project</AlertDialogTitle>
+          <AlertDialogTitle>{t("deleteTitle")}</AlertDialogTitle>
           <AlertDialogDescription>
-            Delete <strong>{target?.name}</strong>? Chats inside the project
-            must be removed first — this won&apos;t cascade. The workspace
-            folder on disk is left in place.
+            {t.rich("deleteDescription", {
+              name: target?.name ?? "",
+              strong: (chunks) => <strong>{chunks}</strong>,
+            })}
           </AlertDialogDescription>
         </AlertDialogHeader>
         {error && (
@@ -738,13 +746,13 @@ function DeleteProjectDialog({
           </div>
         )}
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+          <AlertDialogCancel disabled={busy}>{tc("cancel")}</AlertDialogCancel>
           <AlertDialogAction
             onClick={onConfirm}
             disabled={busy}
             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
           >
-            {busy ? "Deleting…" : "Delete"}
+            {busy ? tc("deleting") : tc("delete")}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { BookOpen, FileText, Files, Loader2, Trash2, Upload } from "lucide-react";
 
 import {
@@ -36,6 +37,8 @@ type KnowledgeFile = {
 };
 
 export default function AgentKnowledgePage() {
+  const t = useTranslations("knowledge");
+  const tc = useTranslations("common");
   const agentId = useAgentIdFromURL();
   const agentName = useAgentName(agentId);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -53,12 +56,12 @@ export default function AgentKnowledgePage() {
     try {
       const res = await apiFetch(`/api/agents/${agentId}/knowledge-files`);
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || `Failed to load files (${res.status})`);
+      if (!res.ok) throw new Error(data?.error || t("errorLoadFiles", { status: res.status }));
       setFiles((data.files || []) as KnowledgeFile[]);
     } finally {
       setLoading(false);
     }
-  }, [agentId]);
+  }, [agentId, t]);
 
   useEffect(() => {
     fetchFiles().catch(() => setLoading(false));
@@ -77,12 +80,12 @@ export default function AgentKnowledgePage() {
   const acceptFile = (list: FileList | null) => {
     if (!list?.length) return;
     if (list.length > 1) {
-      setUploadError("Please upload one knowledge file at a time.");
+      setUploadError(t("errorOneFileAtATime"));
       return;
     }
     const file = list[0];
     if (file.size > MAX_BYTES) {
-      setUploadError("Knowledge file is too large; maximum size is 256KB.");
+      setUploadError(t("errorTooLarge"));
       return;
     }
     setUploadFile(file);
@@ -102,10 +105,10 @@ export default function AgentKnowledgePage() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data?.ok === false) {
-        throw new Error(data?.error || `Upload failed (${res.status})`);
+        throw new Error(data?.error || t("errorUploadFailed", { status: res.status }));
       }
       if (data?.duplicate) {
-        setUploadError("This file is already in the knowledge base.");
+        setUploadError(t("errorDuplicate"));
         await fetchFiles();
         return;
       }
@@ -133,14 +136,17 @@ export default function AgentKnowledgePage() {
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight">Knowledge</h2>
+          <h2 className="text-2xl font-semibold tracking-tight">{t("title")}</h2>
           <p className="text-sm text-muted-foreground mt-1">
-            Reference files scoped to <strong>{agentName}</strong>
+            {t.rich("subtitle", {
+              name: agentName,
+              strong: (chunks) => <strong>{chunks}</strong>,
+            })}
           </p>
         </div>
         <Button variant="outline" onClick={() => setUploadOpen(true)}>
           <Upload className="h-4 w-4 mr-2" />
-          Upload File
+          {t("uploadFile")}
         </Button>
       </div>
 
@@ -156,13 +162,13 @@ export default function AgentKnowledgePage() {
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 mb-4">
               <BookOpen className="h-7 w-7 text-primary" />
             </div>
-            <p className="text-sm text-muted-foreground mb-1">No knowledge files yet</p>
+            <p className="text-sm text-muted-foreground mb-1">{t("empty")}</p>
             <p className="text-xs text-muted-foreground/60 mb-4 max-w-sm text-center">
-              Upload reference files this agent should use when answering.
+              {t("emptyHint")}
             </p>
             <Button variant="outline" size="sm" onClick={() => setUploadOpen(true)}>
               <Upload className="h-4 w-4 mr-2" />
-              Upload File
+              {t("uploadFile")}
             </Button>
           </div>
         </div>
@@ -191,7 +197,7 @@ export default function AgentKnowledgePage() {
                   size="icon"
                   className="h-7 w-7 shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
                   onClick={() => setDeleteTarget(file)}
-                  title="Delete knowledge file"
+                  title={t("deleteFileTitle")}
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                 </Button>
@@ -204,7 +210,7 @@ export default function AgentKnowledgePage() {
       <Dialog open={uploadOpen} onOpenChange={handleUploadOpenChange}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Upload knowledge file</DialogTitle>
+            <DialogTitle>{t("uploadDialogTitle")}</DialogTitle>
           </DialogHeader>
           <input
             ref={fileInputRef}
@@ -240,17 +246,17 @@ export default function AgentKnowledgePage() {
               <div className="space-y-1">
                 <p className="break-all text-sm font-medium">{uploadFile.name}</p>
                 <p className="text-xs text-muted-foreground">
-                  {formatBytes(uploadFile.size)} · click to choose a different file
+                  {t("fileSelectedHint", { size: formatBytes(uploadFile.size) })}
                 </p>
               </div>
             ) : (
               <p className="text-sm text-muted-foreground">
-                Drag and drop or click to upload
+                {t("dropHint")}
               </p>
             )}
           </button>
           <p className="text-xs text-muted-foreground">
-            Supported text files up to 256KB. Existing files with the same name are replaced.
+            {t("uploadNote")}
           </p>
           {uploadError && (
             <p className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive break-words">
@@ -259,18 +265,18 @@ export default function AgentKnowledgePage() {
           )}
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="outline" onClick={() => handleUploadOpenChange(false)} disabled={uploading}>
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button onClick={upload} disabled={!uploadFile || uploading}>
               {uploading ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Uploading...
+                  {t("uploading")}
                 </>
               ) : (
                 <>
                   <Upload className="h-4 w-4 mr-2" />
-                  Upload
+                  {t("upload")}
                 </>
               )}
             </Button>
@@ -281,15 +287,15 @@ export default function AgentKnowledgePage() {
       <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete knowledge file?</AlertDialogTitle>
+            <AlertDialogTitle>{t("deleteConfirmTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
-              This removes {deleteTarget?.name} from this agent knowledge base.
+              {t("deleteConfirmDesc", { name: deleteTarget?.name ?? "" })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{tc("cancel")}</AlertDialogCancel>
             <AlertDialogAction onClick={deleteFile} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-              Delete
+              {tc("delete")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

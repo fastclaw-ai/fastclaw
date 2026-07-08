@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -65,24 +66,29 @@ const PROVIDER_PRESETS: Record<
   custom: { apiBase: "", apiType: "openai-chat", authType: "bearer-token", models: [] },
 };
 
-const PROVIDER_LABELS: Record<string, string> = {
+// Display labels come from the models.* message namespace where they are
+// translatable ("Custom", auth-type wording); brand/protocol names stay
+// as-is. Builders over the active translator instead of module constants.
+type ModelsTranslator = ReturnType<typeof useTranslations<"models">>;
+
+const PROVIDER_LABELS = (t: ModelsTranslator): Record<string, string> => ({
   openai: "OpenAI",
   openrouter: "OpenRouter",
   anthropic: "Anthropic",
   deepseek: "DeepSeek",
   ollama: "Ollama",
-  custom: "Custom",
-};
+  custom: t("providerCustom"),
+});
 
 const API_TYPE_LABELS: Record<string, string> = {
   "openai-chat": "OpenAI Chat Completions",
   "anthropic-messages": "Anthropic Messages",
 };
 
-const AUTH_TYPE_LABELS: Record<string, string> = {
-  "bearer-token": "Bearer Token",
-  "api-key": "API Key Header",
-};
+const AUTH_TYPE_LABELS = (t: ModelsTranslator): Record<string, string> => ({
+  "bearer-token": t("authBearerToken"),
+  "api-key": t("authApiKeyHeader"),
+});
 
 interface ProviderEntry {
   id: string;          // configs row id — required for PUT/DELETE
@@ -123,6 +129,10 @@ function presetModelRows(preset: string): ModelEntry[] {
 }
 
 export default function ModelsPage() {
+  const t = useTranslations("models");
+  const tc = useTranslations("common");
+  const providerLabels = useMemo(() => PROVIDER_LABELS(t), [t]);
+  const authTypeLabels = useMemo(() => AUTH_TYPE_LABELS(t), [t]);
   // Agent context is auto-detected from the URL. The standalone /models
   // page lives outside any /agents/<id>/ path, so the hook returns
   // "default" and we render the plain user-scope view. When this same
@@ -411,12 +421,12 @@ export default function ModelsPage() {
             ...prev,
             [idx]: result.ok
               ? { status: "success" }
-              : { status: "error", error: result.error || "Connection failed" },
+              : { status: "error", error: result.error || t("errorConnectionFailed") },
           }));
         } catch {
           setModelTests((prev) => ({
             ...prev,
-            [idx]: { status: "error", error: "Connection failed" },
+            [idx]: { status: "error", error: t("errorConnectionFailed") },
           }));
         }
       }),
@@ -584,23 +594,20 @@ export default function ModelsPage() {
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight">Models</h2>
+          <h2 className="text-2xl font-semibold tracking-tight">{t("title")}</h2>
           <p className="text-sm text-muted-foreground mt-1">
-            {inAgentContext ? (
-              <>
-                Your model + providers for{" "}
-                <strong>{agentName || "this agent"}</strong>. Your override wins
-                over the agent&apos;s default.
-              </>
-            ) : (
-              <>Manage LLM providers and default model</>
-            )}
+            {inAgentContext
+              ? t.rich("descriptionAgent", {
+                  name: agentName || t("thisAgent"),
+                  strong: (chunks) => <strong>{chunks}</strong>,
+                })
+              : t("description")}
           </p>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" onClick={openAddDialog}>
             <Plus className="h-4 w-4 mr-2" />
-            Add Provider
+            {t("addProvider")}
           </Button>
           <Button
             onClick={handleSaveAll}
@@ -611,10 +618,10 @@ export default function ModelsPage() {
             {saved ? (
               <>
                 <Check className="h-4 w-4 mr-2" />
-                Saved
+                {t("saved")}
               </>
             ) : (
-              saving ? "Saving..." : "Save"
+              saving ? tc("saving") : tc("save")
             )}
           </Button>
         </div>
@@ -645,12 +652,12 @@ export default function ModelsPage() {
           <div className="flex items-center gap-2">
             <Cpu className="h-4 w-4 text-primary" />
             <h3 className="font-medium">
-              {inAgentContext ? "Active Model" : "Default Model"}
+              {inAgentContext ? t("activeModel") : t("defaultModel")}
             </h3>
             {!isSuperAdmin && (inheriting ? (
-              <Badge variant="outline" className="text-[10px]">Inheriting</Badge>
+              <Badge variant="outline" className="text-[10px]">{t("badgeInheriting")}</Badge>
             ) : (
-              <Badge className="bg-primary/10 text-primary hover:bg-primary/10 text-[10px]">Override</Badge>
+              <Badge className="bg-primary/10 text-primary hover:bg-primary/10 text-[10px]">{t("badgeOverride")}</Badge>
             ))}
           </div>
           {overridden && (
@@ -661,14 +668,14 @@ export default function ModelsPage() {
               onClick={handleClearOverride}
               disabled={saving}
             >
-              Clear override
+              {t("clearOverride")}
             </Button>
           )}
         </div>
         {allModelOptions.length > 0 ? (
           <Select value={inheriting ? "" : model} onValueChange={(v: string | null) => v && handleDefaultModelChange(v)}>
             <SelectTrigger className="font-mono text-sm max-w-md">
-              <SelectValue placeholder={inheriting ? `Inherit (${effectiveFallback || "no default"})` : "Select a model"} />
+              <SelectValue placeholder={inheriting ? t("inheritPlaceholder", { value: effectiveFallback || t("noDefault") }) : t("selectModel")} />
             </SelectTrigger>
             {/* Default `w-(--anchor-width)` locks the popup to the
                 trigger's max-w-md. Long ids like
@@ -687,39 +694,43 @@ export default function ModelsPage() {
           <Input
             value={inheriting ? "" : model}
             onChange={(e) => setModel(e.target.value)}
-            placeholder={inheriting ? (effectiveFallback ? `Inherit (${effectiveFallback})` : "e.g. openai/gpt-4o") : "e.g. openai/gpt-4o"}
+            placeholder={inheriting && effectiveFallback ? t("inheritPlaceholder", { value: effectiveFallback }) : t("modelExample")}
             className="font-mono text-sm max-w-md"
           />
         )}
         <p className="text-xs text-muted-foreground mt-2">
           {isSuperAdmin ? (
-            <>Used by agents unless overridden in agent config.</>
+            <>{t("captionAdmin")}</>
           ) : inheriting ? (
             <>
               {fallbackSource === "agent" ? (
-                <>
-                  <strong>{agentName || "This agent"}</strong> uses{" "}
-                  <code className="text-[11px]">{effectiveFallback}</code> (inherited
-                  from the agent). Pick a model above to override it just for you.
-                </>
+                t.rich("captionAgentInherit", {
+                  name: agentName || t("thisAgentCap"),
+                  model: effectiveFallback,
+                  strong: (chunks) => <strong>{chunks}</strong>,
+                  code: (chunks) => <code className="text-[11px]">{chunks}</code>,
+                })
+              ) : effectiveFallback ? (
+                t.rich(
+                  inAgentContext ? "captionInheritSystemAgent" : "captionInheritSystemUser",
+                  {
+                    model: effectiveFallback,
+                    code: (chunks) => <code className="text-[11px]">{chunks}</code>,
+                  },
+                )
               ) : (
-                <>
-                  Using system default
-                  {effectiveFallback ? (
-                    <>: <code className="text-[11px]">{effectiveFallback}</code></>
-                  ) : (
-                    <> (none configured)</>
-                  )}
-                  . Pick a model above to override
-                  {inAgentContext ? <> for this agent.</> : <> for your agents only.</>}
-                </>
+                t(inAgentContext ? "captionInheritNoneAgent" : "captionInheritNoneUser")
               )}
             </>
+          ) : inAgentContext ? (
+            t.rich("captionOverrideAgent", {
+              strong: (chunks) => <strong>{chunks}</strong>,
+              code: (chunks) => <code className="text-[11px]">{chunks}</code>,
+            })
           ) : (
-            <>
-              Override applies to {inAgentContext ? <strong>you</strong> : <>your agents</>}.
-              Format <code className="text-[11px]">provider/modelId</code>.
-            </>
+            t.rich("captionOverrideUser", {
+              code: (chunks) => <code className="text-[11px]">{chunks}</code>,
+            })
           )}
         </p>
       </div>
@@ -733,13 +744,13 @@ export default function ModelsPage() {
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-500/10 mb-4">
               <Brain className="h-7 w-7 text-amber-500" />
             </div>
-            <p className="text-sm text-muted-foreground mb-1">No providers configured</p>
+            <p className="text-sm text-muted-foreground mb-1">{t("emptyTitle")}</p>
             <p className="text-xs text-muted-foreground/60 mb-4">
-              Add an LLM provider to get started
+              {t("emptyHint")}
             </p>
             <Button variant="outline" size="sm" onClick={openAddDialog}>
               <Plus className="h-4 w-4 mr-2" />
-              Add Provider
+              {t("addProvider")}
             </Button>
           </div>
         </div>
@@ -748,12 +759,12 @@ export default function ModelsPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>API Base</TableHead>
-                <TableHead>API Key</TableHead>
-                <TableHead>Models</TableHead>
-                <TableHead>Source</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
+                <TableHead>{t("colName")}</TableHead>
+                <TableHead>{t("colApiBase")}</TableHead>
+                <TableHead>{t("colApiKey")}</TableHead>
+                <TableHead>{t("colModels")}</TableHead>
+                <TableHead>{t("colSource")}</TableHead>
+                <TableHead className="text-right">{t("colActions")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -767,16 +778,16 @@ export default function ModelsPage() {
                   : provider.scope === "user";
                 const sourceLabel =
                   provider.scope === "agent"
-                    ? "Inherited from agent"
+                    ? t("sourceAgent")
                     : editable
-                      ? "Mine"
-                      : "Inherited";
+                      ? t("sourceMine")
+                      : t("sourceInherited");
                 const sourceTitle =
                   provider.scope === "agent"
-                    ? "Configured on this agent by its owner — shared with chatters."
+                    ? t("sourceAgentTitle")
                     : editable
                       ? ""
-                      : "Configured by an admin and shared with all users.";
+                      : t("sourceInheritedTitle");
                 return (
                 <TableRow key={`${provider.scope}:${provider.id}`}>
                   <TableCell className="font-medium">{provider.name}</TableCell>
@@ -813,7 +824,7 @@ export default function ModelsPage() {
                         size="icon"
                         variant="ghost"
                         onClick={() => openEditDialog(provider)}
-                        title={editable ? "Edit" : "Read-only — inherited row"}
+                        title={editable ? tc("edit") : t("readOnlyInherited")}
                         disabled={!editable}
                       >
                         <Pencil className="size-4" />
@@ -823,7 +834,7 @@ export default function ModelsPage() {
                         variant="ghost"
                         className="text-destructive hover:text-destructive"
                         onClick={() => handleDeleteProvider(provider)}
-                        title={editable ? "Remove" : "Read-only — inherited row"}
+                        title={editable ? tc("remove") : t("readOnlyInherited")}
                         disabled={!editable}
                       >
                         <Trash2 className="size-4" />
@@ -842,17 +853,17 @@ export default function ModelsPage() {
         <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
-              {editingName ? "Edit Provider" : "Add Provider"}
+              {editingName ? t("editProvider") : t("addProvider")}
             </DialogTitle>
             <DialogDescription>
-              Configure LLM provider connection and models
+              {t("dialogDescription")}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
             {/* Provider + Provider Name (mirrors onboard's 2-col grid). */}
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">
-                <Label>Provider</Label>
+                <Label>{t("providerLabel")}</Label>
                 <Select
                   value={formPreset}
                   onValueChange={(v: string | null) => v && handlePresetChange(v)}
@@ -860,20 +871,20 @@ export default function ModelsPage() {
                 >
                   <SelectTrigger className="w-full">
                     <SelectValue>
-                      {(v: unknown) => PROVIDER_LABELS[v as string] ?? (v as string) ?? ""}
+                      {(v: unknown) => providerLabels[v as string] ?? (v as string) ?? ""}
                     </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     {Object.keys(PROVIDER_PRESETS).map((p) => (
                       <SelectItem key={p} value={p}>
-                        {PROVIDER_LABELS[p] ?? p}
+                        {providerLabels[p] ?? p}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
               <div className="space-y-1.5">
-                <Label>Provider Name</Label>
+                <Label>{t("providerNameLabel")}</Label>
                 <Input
                   value={formName}
                   onChange={(e) => setFormName(e.target.value)}
@@ -886,7 +897,7 @@ export default function ModelsPage() {
 
             {/* API Base URL */}
             <div className="space-y-1.5">
-              <Label>API Base URL</Label>
+              <Label>{t("apiBaseUrlLabel")}</Label>
               <Input
                 value={formApiBase}
                 onChange={(e) => setFormApiBase(e.target.value)}
@@ -901,7 +912,7 @@ export default function ModelsPage() {
                 empty so they can type a replacement; Test connection
                 falls back to the stored key when the field is blank. */}
             <div className="space-y-1.5">
-              <Label>API Key</Label>
+              <Label>{t("apiKeyLabel")}</Label>
               <Input
                 type={editingName && !formApiKey ? "text" : "password"}
                 value={formApiKey}
@@ -918,7 +929,7 @@ export default function ModelsPage() {
               />
               {editingName && (
                 <p className="text-[11px] text-muted-foreground/60">
-                  Leave empty to keep existing key. Test connection uses the saved key.
+                  {t("keepExistingKeyHint")}
                 </p>
               )}
             </div>
@@ -926,7 +937,7 @@ export default function ModelsPage() {
             {/* API Type & Auth Type */}
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">
-                <Label>API Type</Label>
+                <Label>{t("apiTypeLabel")}</Label>
                 <Select value={formApiType} onValueChange={(v: string | null) => v && setFormApi(v)}>
                   <SelectTrigger className="w-full">
                     <SelectValue>
@@ -940,16 +951,16 @@ export default function ModelsPage() {
                 </Select>
               </div>
               <div className="space-y-1.5">
-                <Label>Auth Type</Label>
+                <Label>{t("authTypeLabel")}</Label>
                 <Select value={formAuthType} onValueChange={(v: string | null) => v && setFormAuthType(v)}>
                   <SelectTrigger className="w-full">
                     <SelectValue>
-                      {(v: unknown) => AUTH_TYPE_LABELS[v as string] ?? (v as string) ?? ""}
+                      {(v: unknown) => authTypeLabels[v as string] ?? (v as string) ?? ""}
                     </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="bearer-token">Bearer Token</SelectItem>
-                    <SelectItem value="api-key">API Key Header</SelectItem>
+                    <SelectItem value="bearer-token">{t("authBearerToken")}</SelectItem>
+                    <SelectItem value="api-key">{t("authApiKeyHeader")}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -958,41 +969,41 @@ export default function ModelsPage() {
             {/* Models Section */}
             <div className="space-y-3 pt-2 border-t border-border">
               <div className="flex items-center justify-between">
-                <Label className="text-base">Models</Label>
+                <Label className="text-base">{t("modelsLabel")}</Label>
                 <Button variant="outline" size="sm" onClick={handleAddModel}>
                   <Plus className="h-3 w-3 mr-1.5" />
-                  Add Model
+                  {t("addModel")}
                 </Button>
               </div>
 
               {formModels.length === 0 && (
                 <p className="text-sm text-muted-foreground/60 text-center py-4">
-                  No models configured. Add models to use with this provider.
+                  {t("modelsEmpty")}
                 </p>
               )}
 
               {formModels.map((m, idx) => {
-                const t = modelTests[idx];
+                const mt = modelTests[idx];
                 return (
                 <div key={idx} className="rounded-lg border border-border bg-muted/30 p-4 space-y-3">
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2 min-w-0">
                       <span className="text-sm font-medium text-muted-foreground">
-                        Model {idx + 1}
+                        {t("modelIndex", { num: idx + 1 })}
                       </span>
-                      {t?.status === "testing" && (
+                      {mt?.status === "testing" && (
                         <Badge variant="outline" className="text-[10px]">
-                          <Loader2 className="mr-1 size-3 animate-spin" /> testing
+                          <Loader2 className="mr-1 size-3 animate-spin" /> {t("statusTesting")}
                         </Badge>
                       )}
-                      {t?.status === "success" && (
+                      {mt?.status === "success" && (
                         <Badge className="bg-emerald-500/15 text-emerald-700 hover:bg-emerald-500/15 text-[10px]">
-                          <Check className="mr-1 size-3" /> connected
+                          <Check className="mr-1 size-3" /> {t("statusConnected")}
                         </Badge>
                       )}
-                      {t?.status === "error" && (
-                        <Badge variant="outline" className="border-destructive/40 text-destructive text-[10px]" title={t.error}>
-                          failed
+                      {mt?.status === "error" && (
+                        <Badge variant="outline" className="border-destructive/40 text-destructive text-[10px]" title={mt.error}>
+                          {t("statusFailed")}
                         </Badge>
                       )}
                     </div>
@@ -1003,25 +1014,25 @@ export default function ModelsPage() {
                       onClick={() => handleRemoveModel(idx)}
                     >
                       <Trash2 className="h-3 w-3 mr-1" />
-                      Remove
+                      {tc("remove")}
                     </Button>
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1">
-                      <Label className="text-xs">Model ID</Label>
+                      <Label className="text-xs">{t("modelIdLabel")}</Label>
                       <Input
                         value={m.id}
                         onChange={(e) => handleUpdateModel(idx, "id", e.target.value)}
-                        placeholder="e.g. gpt-4o"
+                        placeholder={t("modelIdPlaceholder")}
                         className="font-mono text-xs h-8"
                       />
                     </div>
                     <div className="space-y-1">
-                      <Label className="text-xs">Display Name</Label>
+                      <Label className="text-xs">{t("displayNameLabel")}</Label>
                       <Input
                         value={m.name}
                         onChange={(e) => handleUpdateModel(idx, "name", e.target.value)}
-                        placeholder="e.g. GPT-4o"
+                        placeholder={t("displayNamePlaceholder")}
                         className="text-xs h-8"
                       />
                     </div>
@@ -1049,26 +1060,26 @@ export default function ModelsPage() {
                   >
                     {batchTesting ? (
                       <>
-                        <Loader2 className="mr-1 size-4 animate-spin" /> Testing
+                        <Loader2 className="mr-1 size-4 animate-spin" /> {t("testing")}
                       </>
                     ) : (
-                      "Test connection"
+                      t("testConnection")
                     )}
                   </Button>
                   <span className="text-xs text-muted-foreground">
                     {cleanModelRows.length === 0
-                      ? "Add at least one model with an id, then test."
-                      : "Pings every model above; results show next to each row."}
+                      ? t("testHintEmpty")
+                      : t("testHintReady")}
                   </span>
                 </div>
                 {Object.values(modelTests).some((t) => t.status === "error") && (
                   <ul className="space-y-0.5">
                     {formModels.map((m, idx) => {
-                      const t = modelTests[idx];
-                      if (!t || t.status !== "error" || !m.id.trim()) return null;
+                      const mt = modelTests[idx];
+                      if (!mt || mt.status !== "error" || !m.id.trim()) return null;
                       return (
                         <li key={idx} className="text-xs text-destructive break-all">
-                          <code className="font-mono">{m.id}</code>: {t.error}
+                          <code className="font-mono">{m.id}</code>: {mt.error}
                         </li>
                       );
                     })}
@@ -1080,17 +1091,17 @@ export default function ModelsPage() {
           <DialogFooter className="flex flex-col gap-2 sm:flex-row sm:items-center">
             {!allModelsPassed && (
               <span className="text-xs text-muted-foreground sm:mr-auto">
-                Test every model first — Add/Update unlocks once they all pass.
+                {t("testAllFirst")}
               </span>
             )}
             <Button variant="outline" onClick={() => setDialogOpen(false)}>
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button
               onClick={handleSaveProvider}
               disabled={!formName.trim() || saving || !allModelsPassed}
             >
-              {editingName ? "Update" : "Add"}
+              {editingName ? t("update") : t("add")}
             </Button>
           </DialogFooter>
         </DialogContent>

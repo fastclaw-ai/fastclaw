@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
@@ -29,15 +30,19 @@ import { useAgentName } from "@/hooks/use-agent-name";
 
 type PromptModeValue = "" | "agent" | "chatbot" | "customize";
 
-const MODE_LABEL: Record<string, string> = {
-  agent: "Agent",
-  chatbot: "Chatbot",
-  customize: "Customize",
-};
-
 export default function AgentContextPage() {
+  const t = useTranslations("context");
   const agentId = useAgentIdFromURL();
   const agentName = useAgentName(agentId);
+
+  const modeLabel: Record<string, string> = useMemo(
+    () => ({
+      agent: t("modeAgent"),
+      chatbot: t("modeChatbot"),
+      customize: t("modeCustomize"),
+    }),
+    [t],
+  );
 
   // "" = no override saved; runtime falls back to "agent".
   const [promptMode, setPromptMode] = useState<PromptModeValue>("");
@@ -161,19 +166,18 @@ export default function AgentContextPage() {
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight">Context</h2>
+          <h2 className="text-2xl font-semibold tracking-tight">{t("title")}</h2>
           <p className="text-sm text-muted-foreground mt-1">
-            What the LLM sees for{" "}
-            <strong>{agentName || "this agent"}</strong>. The prompt mode
-            picks both the framework prompt profile and the built-in tool
-            set. Custom tools come from plugins — always exposed
-            regardless of mode.
+            {t.rich("subtitle", {
+              name: agentName || t("thisAgent"),
+              strong: (chunks) => <strong>{chunks}</strong>,
+            })}
           </p>
         </div>
         <div className="flex items-center gap-2">
           {saved && (
             <span className="inline-flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400">
-              <Check className="h-3.5 w-3.5" /> Saved
+              <Check className="h-3.5 w-3.5" /> {t("saved")}
             </span>
           )}
         </div>
@@ -184,14 +188,14 @@ export default function AgentContextPage() {
         <div className="flex items-center justify-between gap-2 mb-3">
           <div className="flex items-center gap-2">
             <MessageSquare className="h-4 w-4 text-primary" />
-            <h3 className="font-medium">Prompt mode</h3>
+            <h3 className="font-medium">{t("promptModeTitle")}</h3>
             {promptMode === "" || promptMode === "agent" ? (
               <Badge variant="outline" className="text-[10px]">
-                Default
+                {t("badgeDefault")}
               </Badge>
             ) : (
               <Badge className="bg-primary/10 text-primary hover:bg-primary/10 text-[10px]">
-                {MODE_LABEL[promptMode]}
+                {modeLabel[promptMode]}
               </Badge>
             )}
           </div>
@@ -209,52 +213,38 @@ export default function AgentContextPage() {
             {/* Explicit children override SelectValue's auto-extraction
                 from the active SelectItem — shadcn sometimes falls back
                 to rendering the raw `value` string. */}
-            <SelectValue>{MODE_LABEL[promptMode || "agent"]}</SelectValue>
+            <SelectValue>{modeLabel[promptMode || "agent"]}</SelectValue>
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="agent">Agent</SelectItem>
-            <SelectItem value="chatbot">Chatbot</SelectItem>
-            <SelectItem value="customize">Customize</SelectItem>
+            <SelectItem value="agent">{t("modeAgent")}</SelectItem>
+            <SelectItem value="chatbot">{t("modeChatbot")}</SelectItem>
+            <SelectItem value="customize">{t("modeCustomize")}</SelectItem>
           </SelectContent>
         </Select>
         <div className="mt-3 text-xs text-muted-foreground space-y-1.5">
           <div>
-            <strong>Agent</strong> — full framework prompt (task delegation,
-            tool-use discipline, workspace self-update, scheduling) + all
-            built-in tools. Default for autonomous task agents.
+            {t.rich("modeAgentDesc", {
+              strong: (chunks) => <strong>{chunks}</strong>,
+            })}
           </div>
           <div>
-            <strong>Chatbot</strong> — slim framework so persona files
-            shape voice directly. Built-ins narrowed to{" "}
-            <code className="text-[10px]">image_gen</code>,{" "}
-            <code className="text-[10px]">tts</code>,{" "}
-            <code className="text-[10px]">write_file</code>,{" "}
-            <code className="text-[10px]">edit_file</code> — the
-            last two let the LLM persist USER.md / MEMORY.md when it
-            learns about the chatter. Memory is the USER.md / MEMORY.md
-            sections inlined in the system prompt; no{" "}
-            <code className="text-[10px]">memory_search</code> escape
-            hatch (it scans logs chatbot mode doesn't write, returns
-            empty, and confuses the model). Main reply emits as plain
-            text, multi-bubble via the inline split marker. For
-            companion / role-play / customer-support bots.
+            {t.rich("modeChatbotDesc", {
+              strong: (chunks) => <strong>{chunks}</strong>,
+              code: (chunks) => <code className="text-[10px]">{chunks}</code>,
+            })}
           </div>
           <div>
-            <strong>Customize</strong> — only the date anchor + your
-            bootstrap files; NO built-in tools. You write the system
-            prompt completely via SOUL.md / IDENTITY.md and bring tools
-            via plugins.
+            {t.rich("modeCustomizeDesc", {
+              strong: (chunks) => <strong>{chunks}</strong>,
+            })}
           </div>
         </div>
         <div className="mt-4 pt-3 border-t border-border flex items-start gap-2 text-xs text-muted-foreground">
           <Puzzle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
           <span>
-            Plugin and MCP tools are always exposed regardless of mode.
-            Build a plugin — see{" "}
-            <code className="text-[11px]">
-              ~/.fastclaw/plugins/fastclaw-plugin-demo
-            </code>{" "}
-            for a minimal example.
+            {t.rich("pluginNote", {
+              code: (chunks) => <code className="text-[11px]">{chunks}</code>,
+            })}
           </span>
         </div>
       </div>
@@ -267,14 +257,9 @@ export default function AgentContextPage() {
           <div className="flex items-start gap-3 min-w-0">
             <MessagesSquare className="h-4 w-4 text-primary mt-0.5 shrink-0" />
             <div className="min-w-0">
-              <h3 className="font-medium">Multi-bubble replies</h3>
+              <h3 className="font-medium">{t("multiBubbleTitle")}</h3>
               <p className="text-sm text-muted-foreground mt-1">
-                Let the agent split one reply into multiple chat bubbles
-                using a separator marker — natural for short, multi-beat
-                replies in IM. Applies to every IM channel
-                (WeChat / Telegram / Discord / Slack / LINE / Feishu);
-                ignored on web. Off by default — keeps each reply as a
-                single message.
+                {t("multiBubbleDesc")}
               </p>
             </div>
           </div>
@@ -282,7 +267,7 @@ export default function AgentContextPage() {
             checked={splitReplies}
             onCheckedChange={handleSplitRepliesChange}
             disabled={splitRepliesSaving}
-            aria-label="Multi-bubble replies"
+            aria-label={t("multiBubbleTitle")}
           />
         </div>
       </div>
@@ -295,18 +280,11 @@ export default function AgentContextPage() {
           <div className="flex items-start gap-3 min-w-0">
             <Brain className="h-4 w-4 text-primary mt-0.5 shrink-0" />
             <div className="min-w-0">
-              <h3 className="font-medium">Auto-remember chatter</h3>
+              <h3 className="font-medium">{t("autoRememberTitle")}</h3>
               <p className="text-sm text-muted-foreground mt-1">
-                Backup persistence path: every 5 user-turns the runtime
-                fires a small LLM call that distills the recent
-                conversation into USER.md / MEMORY.md. The primary
-                path is the LLM writing those files directly via{" "}
-                <code className="text-[10px]">write_file</code> /{" "}
-                <code className="text-[10px]">edit_file</code> (now
-                available in Chatbot mode too) — this toggle just
-                makes sure something still gets persisted when the
-                model forgets to. Off by default to preserve the
-                stateless-across-sessions behavior.
+                {t.rich("autoRememberDesc", {
+                  code: (chunks) => <code className="text-[10px]">{chunks}</code>,
+                })}
               </p>
             </div>
           </div>
@@ -314,7 +292,7 @@ export default function AgentContextPage() {
             checked={autoPersist}
             onCheckedChange={handleAutoPersistChange}
             disabled={autoPersistSaving}
-            aria-label="Auto-remember chatter"
+            aria-label={t("autoRememberTitle")}
           />
         </div>
       </div>
@@ -325,13 +303,9 @@ export default function AgentContextPage() {
           <div className="flex items-start gap-3 min-w-0">
             <Link2 className="h-4 w-4 text-primary mt-0.5 shrink-0" />
             <div className="min-w-0">
-              <h3 className="font-medium">Shared identity across channels</h3>
+              <h3 className="font-medium">{t("sharedIdentityTitle")}</h3>
               <p className="text-sm text-muted-foreground mt-1">
-                When enabled, all IM channels (WeChat / Telegram / Discord /
-                Slack / LINE / Feishu) share the same session and memory
-                with the web chat. Conversations started on one channel
-                can be continued on another. Off by default — each
-                channel gets its own isolated session and memory.
+                {t("sharedIdentityDesc")}
               </p>
             </div>
           </div>
@@ -339,7 +313,7 @@ export default function AgentContextPage() {
             checked={sharedIdentity}
             onCheckedChange={handleSharedIdentityChange}
             disabled={sharedIdentitySaving}
-            aria-label="Shared identity across channels"
+            aria-label={t("sharedIdentityTitle")}
           />
         </div>
       </div>

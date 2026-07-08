@@ -1,30 +1,38 @@
 "use client";
 
+import { useMemo } from "react";
 import { Sun, Moon, Monitor } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { useTheme, type Theme } from "@/components/theme-provider";
 
-const choices: Array<{ value: Theme; label: string; icon: React.ComponentType<{ className?: string }> }> = [
-  { value: "light", label: "Light", icon: Sun },
-  { value: "dark", label: "Dark", icon: Moon },
-  { value: "system", label: "System", icon: Monitor },
+type SettingsTranslator = ReturnType<typeof useTranslations<"settings">>;
+
+const THEME_CHOICES = (
+  t: SettingsTranslator,
+): Array<{ value: Theme; label: string; icon: React.ComponentType<{ className?: string }> }> => [
+  { value: "light", label: t("generalThemeLight"), icon: Sun },
+  { value: "dark", label: t("generalThemeDark"), icon: Moon },
+  { value: "system", label: t("generalThemeSystem"), icon: Monitor },
 ];
 
 export default function GeneralSettingsPage() {
+  const t = useTranslations("settings");
   const { theme, setTheme } = useTheme();
+  const choices = useMemo(() => THEME_CHOICES(t), [t]);
 
   return (
     <div className="space-y-6">
       <div>
-        <h3 className="text-xl font-semibold tracking-tight">General</h3>
+        <h3 className="text-xl font-semibold tracking-tight">{t("generalTitle")}</h3>
         <p className="text-sm text-muted-foreground mt-1">
-          Appearance and per-device preferences.
+          {t("generalDescription")}
         </p>
       </div>
 
       <div className="rounded-lg border border-border bg-card p-5">
-        <h4 className="font-medium mb-1">Theme</h4>
+        <h4 className="font-medium mb-1">{t("generalThemeTitle")}</h4>
         <p className="text-sm text-muted-foreground mb-4">
-          Choose the dashboard color scheme. System follows your OS.
+          {t("generalThemeDescription")}
         </p>
         <div className="grid grid-cols-3 gap-3 max-w-md">
           {choices.map((c) => {

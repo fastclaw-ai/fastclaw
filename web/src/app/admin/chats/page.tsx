@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import {
   MessagesSquare,
   ChevronLeft,
@@ -27,6 +28,7 @@ import { ChannelIcon, channelLabel } from "@/components/channel-icon";
 const PAGE_SIZE = 30;
 
 export default function AdminChatsPage() {
+  const t = useTranslations("adminChats");
   const [sessions, setSessions] = useState<AdminChatSessionEntry[]>([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -46,12 +48,12 @@ export default function AdminChatsPage() {
       setSessions(list);
       setError("");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load chats");
+      setError(e instanceof Error ? e.message : t("errorLoadFailed"));
     } finally {
       if (initial) setLoading(false);
       else setRefreshing(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     void load(true);
@@ -74,9 +76,9 @@ export default function AdminChatsPage() {
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
       <div className="flex items-center justify-between gap-4">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight">Chats</h2>
+          <h2 className="text-2xl font-semibold tracking-tight">{t("title")}</h2>
           <p className="text-sm text-muted-foreground mt-1">
-            All conversations across every agent on the platform.
+            {t("subtitle")}
           </p>
         </div>
         <Button
@@ -84,10 +86,10 @@ export default function AdminChatsPage() {
           size="sm"
           onClick={() => void load(false)}
           disabled={loading || refreshing}
-          title="Refresh chats"
+          title={t("refreshTitle")}
         >
           <RefreshCw className={`h-4 w-4 mr-2 ${refreshing ? "animate-spin" : ""}`} />
-          Refresh
+          {t("refresh")}
         </Button>
       </div>
 
@@ -103,7 +105,7 @@ export default function AdminChatsPage() {
         <div className="rounded-lg border border-border bg-card">
           <div className="flex flex-col items-center justify-center py-16">
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-            <p className="mt-3 text-xs text-muted-foreground/60">Loading chats…</p>
+            <p className="mt-3 text-xs text-muted-foreground/60">{t("loading")}</p>
           </div>
         </div>
       ) : sorted.length === 0 ? (
@@ -112,10 +114,9 @@ export default function AdminChatsPage() {
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 mb-4">
               <MessagesSquare className="h-7 w-7 text-primary" />
             </div>
-            <p className="text-sm text-muted-foreground mb-1">No chats yet</p>
+            <p className="text-sm text-muted-foreground mb-1">{t("empty")}</p>
             <p className="text-xs text-muted-foreground/60">
-              Conversations will appear here once users start chatting with
-              their agents.
+              {t("emptyHint")}
             </p>
           </div>
         </div>
@@ -125,20 +126,20 @@ export default function AdminChatsPage() {
             <Table className="table-fixed w-full">
               <TableHeader>
                 <TableRow>
-                  <TableHead>Title</TableHead>
+                  <TableHead>{t("colTitle")}</TableHead>
                   <TableHead className="hidden md:table-cell w-[200px]">
-                    Agent
+                    {t("colAgent")}
                   </TableHead>
                   <TableHead className="hidden lg:table-cell w-[180px]">
-                    Owner
+                    {t("colOwner")}
                   </TableHead>
                   <TableHead className="hidden md:table-cell w-[120px]">
-                    Channel
+                    {t("colChannel")}
                   </TableHead>
                   <TableHead className="hidden sm:table-cell w-[160px]">
-                    Updated
+                    {t("colUpdated")}
                   </TableHead>
-                  <TableHead className="w-[60px] text-right">Open</TableHead>
+                  <TableHead className="w-[60px] text-right">{t("colOpen")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -200,7 +201,7 @@ export default function AdminChatsPage() {
                         href={`/agents/${encodeURIComponent(s.agentId)}/chat/${encodeURIComponent(s.id)}/?actAs=${encodeURIComponent(s.userId)}`}
                         target="_blank"
                         rel="noopener noreferrer"
-                        title="Open in new tab (read-only)"
+                        title={t("openInNewTab")}
                         className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
                       >
                         <ExternalLink className="size-4" />
@@ -215,9 +216,11 @@ export default function AdminChatsPage() {
           {totalPages > 1 && (
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">
-                {pageStart + 1}–
-                {Math.min(pageStart + PAGE_SIZE, sorted.length)} of{" "}
-                {sorted.length}
+                {t("pageRange", {
+                  from: pageStart + 1,
+                  to: Math.min(pageStart + PAGE_SIZE, sorted.length),
+                  total: sorted.length,
+                })}
               </span>
               <div className="flex items-center gap-1">
                 <Button
@@ -229,7 +232,7 @@ export default function AdminChatsPage() {
                   <ChevronLeft className="size-4" />
                 </Button>
                 <span className="px-3 text-muted-foreground">
-                  Page {safePage} / {totalPages}
+                  {t("pageIndicator", { page: safePage, total: totalPages })}
                 </span>
                 <Button
                   variant="outline"

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import {
   MessagesSquare,
   PencilIcon,
@@ -62,6 +63,8 @@ type Session = {
 const PAGE_SIZE = 20;
 
 export default function AgentChatsPage() {
+  const t = useTranslations("agentChats");
+  const tc = useTranslations("common");
   const router = useRouter();
   const agentId = useAgentIdFromURL();
   const agentName = useAgentName(agentId);
@@ -79,7 +82,7 @@ export default function AgentChatsPage() {
       const list = await getChatSessions(agentId);
       setSessions(list);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load chats");
+      setError(e instanceof Error ? e.message : t("errorLoadChats"));
     }
   }
   useEffect(() => {
@@ -120,10 +123,10 @@ export default function AgentChatsPage() {
         <div>
           <div className="flex items-center gap-2">
             <MessagesSquare className="size-5 text-muted-foreground" />
-            <h2 className="text-2xl font-semibold tracking-tight">Chats</h2>
+            <h2 className="text-2xl font-semibold tracking-tight">{t("title")}</h2>
           </div>
           <p className="text-sm text-muted-foreground mt-1">
-            All conversations with {agentName || "this agent"}.
+            {t("subtitle", { name: agentName || t("thisAgent") })}
           </p>
         </div>
       </div>
@@ -143,17 +146,17 @@ export default function AgentChatsPage() {
               <MessagesSquare className="h-7 w-7 text-primary" />
             </div>
             <p className="text-sm text-muted-foreground mb-1">
-              No chats yet
+              {t("empty")}
             </p>
             <p className="text-xs text-muted-foreground/60 mb-4">
-              Start a conversation to see it listed here.
+              {t("emptyHint")}
             </p>
             <Button
               variant="outline"
               size="sm"
               onClick={() => router.push(`/agents/${agentId}/chat/`)}
             >
-              Start a chat
+              {t("startChat")}
             </Button>
           </div>
         </div>
@@ -163,10 +166,10 @@ export default function AgentChatsPage() {
             <Table className="table-fixed w-full">
               <TableHeader>
                 <TableRow>
-                  <TableHead>Title</TableHead>
-                  <TableHead className="hidden md:table-cell w-[120px]">Channel</TableHead>
-                  <TableHead className="hidden sm:table-cell w-[160px]">Created</TableHead>
-                  <TableHead className="w-[100px] text-right">Actions</TableHead>
+                  <TableHead>{t("colTitle")}</TableHead>
+                  <TableHead className="hidden md:table-cell w-[120px]">{t("colChannel")}</TableHead>
+                  <TableHead className="hidden sm:table-cell w-[160px]">{t("colCreated")}</TableHead>
+                  <TableHead className="w-[100px] text-right">{t("colActions")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -217,7 +220,7 @@ export default function AgentChatsPage() {
                           size="icon"
                           variant="ghost"
                           onClick={() => setEditTarget(s)}
-                          title="Edit title"
+                          title={t("editTitleTooltip")}
                         >
                           <PencilIcon className="size-4" />
                         </Button>
@@ -226,7 +229,7 @@ export default function AgentChatsPage() {
                           variant="ghost"
                           className="text-destructive hover:text-destructive"
                           onClick={() => setDeleteTarget(s)}
-                          title="Delete"
+                          title={tc("delete")}
                         >
                           <Trash2 className="size-4" />
                         </Button>
@@ -241,8 +244,11 @@ export default function AgentChatsPage() {
           {totalPages > 1 && (
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">
-                {pageStart + 1}–{Math.min(pageStart + PAGE_SIZE, sorted.length)}{" "}
-                of {sorted.length}
+                {t("rangeLabel", {
+                  start: pageStart + 1,
+                  end: Math.min(pageStart + PAGE_SIZE, sorted.length),
+                  total: sorted.length,
+                })}
               </span>
               <div className="flex items-center gap-1">
                 <Button
@@ -254,7 +260,7 @@ export default function AgentChatsPage() {
                   <ChevronLeft className="size-4" />
                 </Button>
                 <span className="px-3 text-muted-foreground">
-                  Page {safePage} / {totalPages}
+                  {t("pageLabel", { page: safePage, total: totalPages })}
                 </span>
                 <Button
                   variant="outline"
@@ -286,18 +292,17 @@ export default function AgentChatsPage() {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete chat</AlertDialogTitle>
+            <AlertDialogTitle>{t("deleteTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
-              Delete{" "}
-              <strong>
-                {deleteTarget?.title || deleteTarget?.preview || deleteTarget?.id}
-              </strong>
-              ? The full message history for this chat will be removed and cannot
-              be recovered.
+              {t.rich("deleteConfirm", {
+                name:
+                  deleteTarget?.title || deleteTarget?.preview || deleteTarget?.id || "",
+                strong: (chunks) => <strong>{chunks}</strong>,
+              })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{tc("cancel")}</AlertDialogCancel>
             <AlertDialogAction
               onClick={async () => {
                 if (!deleteTarget || !agentId) return;
@@ -308,7 +313,7 @@ export default function AgentChatsPage() {
               }}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              Delete
+              {tc("delete")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -335,6 +340,8 @@ function EditTitleDialog({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const t = useTranslations("agentChats");
+  const tc = useTranslations("common");
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -364,9 +371,9 @@ function EditTitleDialog({
     <Dialog open={!!target} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Edit chat title</DialogTitle>
+          <DialogTitle>{t("editDialogTitle")}</DialogTitle>
           <DialogDescription>
-            Rename this chat so it&apos;s easier to find in the sidebar.
+            {t("editDialogDesc")}
           </DialogDescription>
         </DialogHeader>
         <Input
@@ -382,14 +389,14 @@ function EditTitleDialog({
               save();
             }
           }}
-          placeholder="Chat title"
+          placeholder={t("titlePlaceholder")}
         />
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={saving}>
-            Cancel
+            {tc("cancel")}
           </Button>
           <Button onClick={save} disabled={saving || !draft.trim()}>
-            {saving ? "Saving…" : "Save"}
+            {saving ? tc("saving") : tc("save")}
           </Button>
         </DialogFooter>
       </DialogContent>

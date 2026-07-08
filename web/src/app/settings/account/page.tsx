@@ -6,12 +6,15 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Save, Check, Upload, X } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { getMe, updateMe, changeMyPassword } from "@/lib/api";
 import { logout as doLogout } from "@/lib/auth";
 
 const AVATAR_MAX_BYTES = 256 * 1024;
 
 export default function AccountSettingsPage() {
+  const t = useTranslations("settings");
+  const tc = useTranslations("common");
   const [loading, setLoading] = useState(true);
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
@@ -53,20 +56,20 @@ export default function AccountSettingsPage() {
     const file = e.target.files?.[0];
     if (!file) return;
     if (!file.type.startsWith("image/")) {
-      setProfileError("Avatar must be an image");
+      setProfileError(t("accountErrorAvatarNotImage"));
       return;
     }
     // Rough pre-check on raw bytes; the encoded data URL will be ~33%
     // larger, so reject anything that won't fit comfortably.
     if (file.size > Math.floor(AVATAR_MAX_BYTES * 0.7)) {
-      setProfileError("Image too large (max ~180KB before encoding)");
+      setProfileError(t("accountErrorAvatarTooLarge"));
       return;
     }
     const reader = new FileReader();
     reader.onload = () => {
       const result = String(reader.result || "");
       if (result.length > AVATAR_MAX_BYTES) {
-        setProfileError("Encoded image exceeds 256KB");
+        setProfileError(t("accountErrorAvatarEncodedTooLarge"));
         return;
       }
       setAvatarUrl(result);
@@ -93,11 +96,11 @@ export default function AccountSettingsPage() {
     e.preventDefault();
     setPwError("");
     if (!oldPassword || !newPassword) {
-      setPwError("Both fields required");
+      setPwError(t("accountErrorBothRequired"));
       return;
     }
     if (newPassword !== confirmPassword) {
-      setPwError("New password and confirmation don't match");
+      setPwError(t("accountErrorPasswordMismatch"));
       return;
     }
     setPwSaving(true);
@@ -131,9 +134,9 @@ export default function AccountSettingsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h3 className="text-xl font-semibold tracking-tight">Account</h3>
+        <h3 className="text-xl font-semibold tracking-tight">{t("accountTitle")}</h3>
         <p className="text-sm text-muted-foreground mt-1">
-          Profile, password, and session.
+          {t("accountDescription")}
         </p>
       </div>
 
@@ -144,7 +147,7 @@ export default function AccountSettingsPage() {
             <div className="size-16 rounded-full bg-muted overflow-hidden flex items-center justify-center text-lg font-bold text-muted-foreground">
               {avatarUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={avatarUrl} alt="avatar" className="size-full object-cover" />
+                <img src={avatarUrl} alt={t("accountAvatarAlt")} className="size-full object-cover" />
               ) : (
                 initials
               )}
@@ -153,8 +156,8 @@ export default function AccountSettingsPage() {
               <button
                 type="button"
                 onClick={() => setAvatarUrl("")}
-                aria-label="Remove avatar"
-                title="Remove avatar"
+                aria-label={t("accountRemoveAvatar")}
+                title={t("accountRemoveAvatar")}
                 className="absolute -top-1 -right-1 hidden group-hover:flex items-center justify-center size-5 rounded-full bg-background border border-border text-muted-foreground hover:text-destructive hover:border-destructive transition shadow-sm"
               >
                 <X className="size-3" />
@@ -163,7 +166,7 @@ export default function AccountSettingsPage() {
           </div>
           <Button variant="outline" size="sm" onClick={pickAvatar}>
             <Upload className="size-4 mr-2" />
-            Upload
+            {t("accountUpload")}
           </Button>
           <input
             ref={fileRef}
@@ -176,20 +179,20 @@ export default function AccountSettingsPage() {
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-1.5">
-            <Label>Username</Label>
+            <Label>{t("accountUsernameLabel")}</Label>
             <Input value={username} disabled />
           </div>
           <div className="space-y-1.5">
-            <Label>Email</Label>
+            <Label>{t("accountEmailLabel")}</Label>
             <Input value={email} disabled />
           </div>
           <div className="space-y-1.5 sm:col-span-2">
-            <Label htmlFor="display-name">Display name</Label>
+            <Label htmlFor="display-name">{t("accountDisplayNameLabel")}</Label>
             <Input
               id="display-name"
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
-              placeholder="How your name appears in the dashboard"
+              placeholder={t("accountDisplayNamePlaceholder")}
             />
           </div>
         </div>
@@ -211,12 +214,12 @@ export default function AccountSettingsPage() {
             {profileSaved ? (
               <>
                 <Check className="h-4 w-4 mr-2" />
-                Saved
+                {t("accountSaved")}
               </>
             ) : (
               <>
                 <Save className="h-4 w-4 mr-2" />
-                {profileSaving ? "Saving..." : "Save profile"}
+                {profileSaving ? tc("saving") : t("accountSaveProfile")}
               </>
             )}
           </Button>
@@ -226,14 +229,14 @@ export default function AccountSettingsPage() {
       {/* Password */}
       <form onSubmit={savePassword} className="rounded-lg border border-border bg-card p-5 space-y-4">
         <div>
-          <h4 className="font-medium">Change password</h4>
+          <h4 className="font-medium">{t("accountChangePasswordTitle")}</h4>
           <p className="text-sm text-muted-foreground">
-            You&apos;ll need your current password. You&apos;ll be signed out and asked to sign back in.
+            {t("accountChangePasswordDescription")}
           </p>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div className="space-y-1.5">
-            <Label htmlFor="old-pw">Current</Label>
+            <Label htmlFor="old-pw">{t("accountCurrentPasswordLabel")}</Label>
             <Input
               id="old-pw"
               type="password"
@@ -243,7 +246,7 @@ export default function AccountSettingsPage() {
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="new-pw">New</Label>
+            <Label htmlFor="new-pw">{t("accountNewPasswordLabel")}</Label>
             <Input
               id="new-pw"
               type="password"
@@ -253,7 +256,7 @@ export default function AccountSettingsPage() {
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="confirm-pw">Confirm</Label>
+            <Label htmlFor="confirm-pw">{t("accountConfirmPasswordLabel")}</Label>
             <Input
               id="confirm-pw"
               type="password"
@@ -278,10 +281,10 @@ export default function AccountSettingsPage() {
             {pwSaved ? (
               <>
                 <Check className="h-4 w-4 mr-2" />
-                Updated
+                {t("accountPasswordUpdated")}
               </>
             ) : (
-              pwSaving ? "Updating..." : "Update password"
+              pwSaving ? t("accountPasswordUpdating") : t("accountUpdatePassword")
             )}
           </Button>
         </div>

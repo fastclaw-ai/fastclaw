@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useTranslations } from "next-intl";
 import {
   BrainIcon,
   BookOpenIcon,
@@ -55,29 +56,38 @@ export type AgentSettingsTab =
 
 type TabIcon = React.ComponentType<{ className?: string }>;
 
-const AGENT_TABS: Array<{ id: AgentSettingsTab; label: string; icon: TabIcon }> = [
-  { id: "profile", label: "Profile", icon: IdCardIcon },
-  { id: "customize", label: "Customize", icon: Wand2Icon },
-  { id: "models", label: "Models", icon: BrainIcon },
-  { id: "context", label: "Context", icon: LayersIcon },
-  { id: "knowledge", label: "Knowledge", icon: BookOpenIcon },
-  { id: "skills", label: "Skills", icon: SparklesIcon },
-  { id: "mcp", label: "MCP", icon: ServerIcon },
-  { id: "plugins", label: "Plugins", icon: Plug },
-  { id: "channels", label: "Channels", icon: RadioIcon },
-  { id: "scheduler", label: "Scheduler", icon: ClockIcon },
-  { id: "usage", label: "Token Usage", icon: CoinsIcon },
+// Labels come from the agentSettings.* message namespace, so the tab
+// lists are builders over the active translator instead of module
+// constants (same pattern as app-sidebar.tsx).
+type SettingsTranslator = ReturnType<typeof useTranslations<"agentSettings">>;
+
+const AGENT_TABS = (
+  t: SettingsTranslator,
+): Array<{ id: AgentSettingsTab; label: string; icon: TabIcon }> => [
+  { id: "profile", label: t("tabProfile"), icon: IdCardIcon },
+  { id: "customize", label: t("tabCustomize"), icon: Wand2Icon },
+  { id: "models", label: t("tabModels"), icon: BrainIcon },
+  { id: "context", label: t("tabContext"), icon: LayersIcon },
+  { id: "knowledge", label: t("tabKnowledge"), icon: BookOpenIcon },
+  { id: "skills", label: t("tabSkills"), icon: SparklesIcon },
+  { id: "mcp", label: t("tabMcp"), icon: ServerIcon },
+  { id: "plugins", label: t("tabPlugins"), icon: Plug },
+  { id: "channels", label: t("tabChannels"), icon: RadioIcon },
+  { id: "scheduler", label: t("tabScheduler"), icon: ClockIcon },
+  { id: "usage", label: t("tabUsage"), icon: CoinsIcon },
 ];
 
 // Runtime intentionally lives only on the standalone /settings/runtime
 // page (super_admin-gated) — it's a deployment-wide knob, not the kind
 // of thing the average chatter wants in their per-agent dialog.
-const USER_TABS: Array<{ id: AgentSettingsTab; label: string; icon: TabIcon }> = [
-  { id: "account", label: "Account", icon: UserCog },
-  { id: "general", label: "General", icon: Palette },
+const USER_TABS = (
+  t: SettingsTranslator,
+): Array<{ id: AgentSettingsTab; label: string; icon: TabIcon }> => [
+  { id: "account", label: t("tabAccount"), icon: UserCog },
+  { id: "general", label: t("tabGeneral"), icon: Palette },
   // About surfaces the gateway version + upgrade hint — only useful
   // to operators (super_admin), filtered out below for regular users.
-  { id: "about", label: "About", icon: InfoIcon },
+  { id: "about", label: t("tabAbout"), icon: InfoIcon },
 ];
 
 // Tabbed configuration panel. Hosts both the per-agent pages
@@ -115,12 +125,19 @@ export function AgentSettingsDialog({
   // gateway version + upgrade hint is operator info, not end-user info).
   isAdmin?: boolean;
 }) {
+  const t = useTranslations("agentSettings");
+  // Memoized so tab-array identity only changes with the locale — the
+  // filters below derive from these per render, same as before.
+  const allAgentTabs = React.useMemo(() => AGENT_TABS(t), [t]);
+  const allUserTabs = React.useMemo(() => USER_TABS(t), [t]);
   const agentTabs = userOnly
     ? []
     : role === "viewer"
-      ? AGENT_TABS.filter((t) => t.id === "models" || t.id === "channels")
-      : AGENT_TABS;
-  const userTabs = isAdmin ? USER_TABS : USER_TABS.filter((t) => t.id !== "about");
+      ? allAgentTabs.filter((tb) => tb.id === "models" || tb.id === "channels")
+      : allAgentTabs;
+  const userTabs = isAdmin
+    ? allUserTabs
+    : allUserTabs.filter((tb) => tb.id !== "about");
   // Pick the landing tab: userOnly opens on General (User section);
   // viewers land on Models (the first Agent tab they have); owners on
   // Profile.
@@ -147,25 +164,25 @@ export function AgentSettingsDialog({
         <aside className="flex flex-col gap-1 border-r bg-muted/40 p-3 overflow-y-auto">
           {agentTabs.length > 0 && (
             <>
-              <SectionLabel>Agent</SectionLabel>
-              {agentTabs.map((t) => (
+              <SectionLabel>{t("sectionAgent")}</SectionLabel>
+              {agentTabs.map((tb) => (
                 <TabButton
-                  key={t.id}
-                  tab={t}
-                  active={tab === t.id}
+                  key={tb.id}
+                  tab={tb}
+                  active={tab === tb.id}
                   onSelect={setTab}
                 />
               ))}
             </>
           )}
           <SectionLabel className={agentTabs.length > 0 ? "mt-3" : undefined}>
-            User
+            {t("sectionUser")}
           </SectionLabel>
-          {userTabs.map((t) => (
+          {userTabs.map((tb) => (
             <TabButton
-              key={t.id}
-              tab={t}
-              active={tab === t.id}
+              key={tb.id}
+              tab={tb}
+              active={tab === tb.id}
               onSelect={setTab}
             />
           ))}
