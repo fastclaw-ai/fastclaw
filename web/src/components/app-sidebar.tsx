@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { usePathname, useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import {
   Sidebar,
   SidebarContent,
@@ -69,33 +70,37 @@ function extractAgentId(pathname: string): string | null {
 // and a slim User group with API Keys. Settings is a click-only item —
 // its onClick is attached at render time so it can call into component
 // state.
-const OVERVIEW_ITEM: NavItem = {
-  title: "Overview",
+// Titles come from the nav.* message namespace, so the item lists are
+// builders over the active translator instead of module constants.
+type NavTranslator = ReturnType<typeof useTranslations<"nav">>;
+
+const OVERVIEW_ITEM = (t: NavTranslator): NavItem => ({
+  title: t("overview"),
   url: "/overview/",
   icon: LayoutDashboardIcon,
-};
+});
 
-const USER_AGENT_GROUP: NavItem[] = [
-  { title: "Agents", url: "/agents/", icon: BotIcon },
-  { title: "Models", url: "/models/", icon: BrainIcon },
+const USER_AGENT_GROUP = (t: NavTranslator): NavItem[] => [
+  { title: t("agents"), url: "/agents/", icon: BotIcon },
+  { title: t("models"), url: "/models/", icon: BrainIcon },
 ];
 
-const ADMIN_AGENT_GROUP: NavItem[] = [
-  { title: "Agents", url: "/agents/", icon: BotIcon },
-  { title: "Models", url: "/models/", icon: BrainIcon },
-  { title: "Skills", url: "/skills/", icon: SparklesIcon },
-  { title: "Tools", url: "/tools/", icon: WrenchIcon },
+const ADMIN_AGENT_GROUP = (t: NavTranslator): NavItem[] => [
+  { title: t("agents"), url: "/agents/", icon: BotIcon },
+  { title: t("models"), url: "/models/", icon: BrainIcon },
+  { title: t("skills"), url: "/skills/", icon: SparklesIcon },
+  { title: t("tools"), url: "/tools/", icon: WrenchIcon },
 ];
 
-const USER_USER_GROUP: NavItem[] = [
-  { title: "API Keys", url: "/apikeys/", icon: KeyRoundIcon },
+const USER_USER_GROUP = (t: NavTranslator): NavItem[] => [
+  { title: t("apiKeys"), url: "/apikeys/", icon: KeyRoundIcon },
 ];
 
-const ADMIN_USER_GROUP: NavItem[] = [
-  { title: "Users", url: "/admin/users/", icon: UsersIcon },
-  { title: "Chats", url: "/admin/chats/", icon: MessagesSquareIcon },
-  { title: "Token Usage", url: "/admin/usage/", icon: CoinsIcon },
-  { title: "API Keys", url: "/apikeys/", icon: KeyRoundIcon },
+const ADMIN_USER_GROUP = (t: NavTranslator): NavItem[] => [
+  { title: t("users"), url: "/admin/users/", icon: UsersIcon },
+  { title: t("chats"), url: "/admin/chats/", icon: MessagesSquareIcon },
+  { title: t("tokenUsage"), url: "/admin/usage/", icon: CoinsIcon },
+  { title: t("apiKeys"), url: "/apikeys/", icon: KeyRoundIcon },
 ];
 
 // "New chat" is active iff we're parked on the bare /chat/ page with
@@ -110,6 +115,7 @@ const ADMIN_USER_GROUP: NavItem[] = [
 // Scheduler) live in the footer Settings dialog — for owners only —
 // so the sidebar nav itself just exposes "New chat" regardless of role.
 const AGENT_NAV = (
+  t: NavTranslator,
   agentId: string,
   pathname: string,
   hasSession: boolean,
@@ -118,7 +124,7 @@ const AGENT_NAV = (
   const onNewChatRoute = pathname === base || pathname === `${base}/`;
   return [
     {
-      title: "New chat",
+      title: t("newChat"),
       url: `${base}/`,
       icon: PlusIcon,
       active: onNewChatRoute && !hasSession,
@@ -127,6 +133,8 @@ const AGENT_NAV = (
 };
 
 export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
+  const t = useTranslations("nav");
+  const tUser = useTranslations("userMenu");
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const activeAgentId = extractAgentId(pathname);
@@ -268,6 +276,26 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
   // button. So we keep the Agents nav entry visible.
   const quotaLocked = me?.user?.agentQuota === 0;
 
+  // Memoized so item-array identity is stable across unrelated re-renders —
+  // NavMain prefetches on [items] changes and would otherwise re-run every
+  // render. Recomputes when the locale (t) or the inputs change.
+  const agentNavItems = React.useMemo(
+    () =>
+      activeAgentId
+        ? AGENT_NAV(t, activeAgentId, pathname, hasOpenSession)
+        : [],
+    [t, activeAgentId, pathname, hasOpenSession],
+  );
+  const overviewItems = React.useMemo(() => [OVERVIEW_ITEM(t)], [t]);
+  const agentGroupItems = React.useMemo(
+    () => (isAdmin ? ADMIN_AGENT_GROUP(t) : USER_AGENT_GROUP(t)),
+    [t, isAdmin],
+  );
+  const userGroupItems = React.useMemo(
+    () => (isAdmin ? ADMIN_USER_GROUP(t) : USER_USER_GROUP(t)),
+    [t, isAdmin],
+  );
+
   return (
     <Sidebar collapsible="icon" {...props}>
       <SidebarHeader>
@@ -282,21 +310,12 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
       </SidebarHeader>
       <SidebarContent>
         {activeAgentId ? (
-          <NavMain
-            label="Agent"
-            items={AGENT_NAV(activeAgentId, pathname, hasOpenSession)}
-          />
+          <NavMain label={t("groupAgent")} items={agentNavItems} />
         ) : (
           <>
-            <NavMain items={[OVERVIEW_ITEM]} />
-            <NavMain
-              label="Agent"
-              items={isAdmin ? ADMIN_AGENT_GROUP : USER_AGENT_GROUP}
-            />
-            <NavMain
-              label="User"
-              items={isAdmin ? ADMIN_USER_GROUP : USER_USER_GROUP}
-            />
+            <NavMain items={overviewItems} />
+            <NavMain label={t("groupAgent")} items={agentGroupItems} />
+            <NavMain label={t("groupUser")} items={userGroupItems} />
           </>
         )}
         {/* Projects are per-(user, agent), so viewers on a shared agent
@@ -319,14 +338,14 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton
-              tooltip="Settings"
+              tooltip={t("settings")}
               onClick={() => {
                 setSettingsUserOnly(!activeAgentId);
                 setSettingsOpen(true);
               }}
             >
               <SettingsIcon />
-              <span>Settings</span>
+              <span>{t("settings")}</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
@@ -334,7 +353,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
           name={
             me?.user?.displayName ||
             me?.user?.username ||
-            (isAdmin ? "Admin" : "User")
+            (isAdmin ? tUser("adminName") : tUser("defaultName"))
           }
           subtitle={me?.user?.role || (isAdmin ? "super_admin" : "user")}
         />

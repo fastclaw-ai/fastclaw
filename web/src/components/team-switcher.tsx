@@ -18,6 +18,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { Bot, ChevronsUpDownIcon, PlusIcon } from "lucide-react";
+import { useTranslations } from "next-intl";
 
 // AgentAvatar shows the agent's uploaded /api/agents/{id}/files/avatar.png
 // when available, falls back to the FastClaw logo for the platform header
@@ -105,6 +106,7 @@ export function AgentSwitcher({
 }) {
   const { isMobile } = useSidebar();
   const router = useRouter();
+  const t = useTranslations("agentSwitcher");
 
   const active = activeAgentId
     ? agents.find((a) => a.id === activeAgentId) ?? null
@@ -163,7 +165,7 @@ export function AgentSwitcher({
               <>
                 <DropdownMenuGroup>
                   <DropdownMenuLabel className="text-xs text-muted-foreground">
-                    Agents
+                    {t("agentsLabel")}
                   </DropdownMenuLabel>
                   {agents.map((a) => (
                     <DropdownMenuItem
@@ -188,7 +190,7 @@ export function AgentSwitcher({
                   <PlusIcon className="size-4" />
                 </div>
                 <div className="font-medium text-muted-foreground">
-                  Manage agents
+                  {t("manageAgents")}
                 </div>
               </DropdownMenuItem>
             </DropdownMenuGroup>

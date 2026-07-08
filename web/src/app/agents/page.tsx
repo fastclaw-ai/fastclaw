@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -85,6 +86,8 @@ function AgentAvatar({
 }
 
 export default function AgentsPage() {
+  const t = useTranslations("agents");
+  const tc = useTranslations("common");
   const [agents, setAgents] = useState<AgentDetail[]>([]);
   const [otherAgents, setOtherAgents] = useState<OtherAgent[]>([]);
   const [isAdmin, setIsAdmin] = useState(false);
@@ -215,7 +218,7 @@ export default function AgentsPage() {
       description: newDescription.trim() || undefined,
     });
     if (resp && (resp.ok === false || resp.error)) {
-      setCreateError(resp.error || "Failed to create agent");
+      setCreateError(resp.error || t("errorCreateFailed"));
       setSaving(false);
       return;
     }
@@ -243,7 +246,7 @@ export default function AgentsPage() {
       isPublic: editIsPublic,
     });
     if (resp && (resp.ok === false || resp.error)) {
-      setEditError(resp.error || "Failed to update agent");
+      setEditError(resp.error || t("errorUpdateFailed"));
       setSaving(false);
       return;
     }
@@ -269,7 +272,7 @@ export default function AgentsPage() {
       setDeleteId(null);
       fetchAgents();
     } catch (err) {
-      setDeleteError(err instanceof Error ? err.message : "Failed to delete agent");
+      setDeleteError(err instanceof Error ? err.message : t("errorDeleteFailed"));
     } finally {
       setDeleting(false);
     }
@@ -279,15 +282,15 @@ export default function AgentsPage() {
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight">Agents</h2>
+          <h2 className="text-2xl font-semibold tracking-tight">{t("title")}</h2>
           <p className="text-sm text-muted-foreground mt-1">
-            Manage your AI agents and their configurations
+            {t("subtitle")}
           </p>
         </div>
         {!quotaLocked && (
           <Button onClick={() => setCreateOpen(true)}>
             <Plus className="h-4 w-4 mr-2" />
-            New Agent
+            {t("newAgent")}
           </Button>
         )}
       </div>
@@ -305,9 +308,7 @@ export default function AgentsPage() {
               <Bot className="h-7 w-7 text-primary" />
             </div>
             <p className="text-sm text-muted-foreground">
-              {quotaLocked
-                ? "No agent has been provisioned for your account yet — contact your admin."
-                : "No agents configured yet"}
+              {quotaLocked ? t("emptyQuotaLocked") : t("empty")}
             </p>
             {!quotaLocked && (
               <Button
@@ -315,7 +316,7 @@ export default function AgentsPage() {
                 variant="outline"
                 className="mt-4"
               >
-                Create your first agent
+                {t("createFirst")}
               </Button>
             )}
           </div>
@@ -332,7 +333,7 @@ export default function AgentsPage() {
                   : "border-transparent text-muted-foreground hover:text-foreground"
               }`}
             >
-              Your agents
+              {t("tabOwn")}
               <span className="ml-1.5 text-xs text-muted-foreground/70">
                 {ownedAgents.length}
               </span>
@@ -345,7 +346,7 @@ export default function AgentsPage() {
                   : "border-transparent text-muted-foreground hover:text-foreground"
               }`}
             >
-              Others&apos; agents
+              {t("tabOthers")}
               <span className="ml-1.5 text-xs text-muted-foreground/70">
                 {otherAgents.length}
               </span>
@@ -368,14 +369,14 @@ export default function AgentsPage() {
                     className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20"
                   >
                     <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                    Public
+                    {t("badgePublic")}
                   </Badge>
                 ) : (
                   <Badge
                     variant="outline"
                     className="bg-muted/60 text-muted-foreground"
                   >
-                    Private
+                    {t("badgePrivate")}
                   </Badge>
                 )}
               </div>
@@ -410,7 +411,7 @@ export default function AgentsPage() {
                     }}
                   >
                     <Pencil className="h-3 w-3 mr-1.5" />
-                    Edit
+                    {tc("edit")}
                   </Button>
                   <Button
                     variant="ghost"
@@ -422,7 +423,7 @@ export default function AgentsPage() {
                     }}
                   >
                     <Trash2 className="h-3 w-3 mr-1.5" />
-                    Remove
+                    {tc("remove")}
                   </Button>
                 </div>
               )}
@@ -450,7 +451,9 @@ export default function AgentsPage() {
                       className="max-w-[60%] bg-muted/40 text-muted-foreground"
                     >
                       <span className="truncate">
-                        Owner: {agent.ownerDisplayName || agent.ownerUsername || agent.userId}
+                        {t("ownerLabel", {
+                          name: agent.ownerDisplayName || agent.ownerUsername || agent.userId,
+                        })}
                       </span>
                     </Badge>
                   </div>
@@ -471,7 +474,7 @@ export default function AgentsPage() {
                   )}
                   <div className="mt-auto pt-3 border-t border-border">
                     <p className="text-xs text-muted-foreground">
-                      Click to chat — only the owner can edit or remove this agent.
+                      {t("othersChatHint")}
                     </p>
                   </div>
                 </div>
@@ -491,11 +494,15 @@ export default function AgentsPage() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Create New Agent</DialogTitle>
+            <DialogTitle>{t("createTitle")}</DialogTitle>
             <DialogDescription>
-              The system generates a globally unique id (e.g.{" "}
-              <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">agt_a1b2c3…</code>);
-              everything below is for display.
+              {t.rich("createDescription", {
+                code: (chunks) => (
+                  <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
+                    {chunks}
+                  </code>
+                ),
+              })}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
@@ -504,7 +511,7 @@ export default function AgentsPage() {
                 type="button"
                 onClick={() => createAvatarInput.current?.click()}
                 className="group relative flex size-20 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-dashed bg-muted/40 transition hover:bg-muted"
-                aria-label="Upload avatar"
+                aria-label={t("uploadAvatar")}
               >
                 {newAvatarPreview ? (
                   // eslint-disable-next-line @next/next/no-img-element
@@ -526,7 +533,7 @@ export default function AgentsPage() {
                 />
               </button>
               <div className="flex-1 space-y-2">
-                <Label htmlFor="agent-name">Name</Label>
+                <Label htmlFor="agent-name">{t("nameLabel")}</Label>
                 <Input
                   id="agent-name"
                   value={newName}
@@ -534,18 +541,18 @@ export default function AgentsPage() {
                     setNewName(e.target.value);
                     setCreateError(null);
                   }}
-                  placeholder="My Helper"
+                  placeholder={t("namePlaceholder")}
                   autoFocus
                 />
               </div>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="agent-desc">Description (optional)</Label>
+              <Label htmlFor="agent-desc">{t("descriptionOptionalLabel")}</Label>
               <Textarea
                 id="agent-desc"
                 value={newDescription}
                 onChange={(e) => setNewDescription(e.target.value)}
-                placeholder="What's this agent for? Shown in the agent list and on its profile."
+                placeholder={t("createDescPlaceholder")}
                 rows={3}
               />
             </div>
@@ -555,10 +562,10 @@ export default function AgentsPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)}>
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button onClick={handleCreate} disabled={!newName.trim() || saving}>
-              {saving ? "Creating..." : "Create Agent"}
+              {saving ? t("creating") : t("createAgent")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -576,12 +583,16 @@ export default function AgentsPage() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Edit Agent</DialogTitle>
+            <DialogTitle>{t("editTitle")}</DialogTitle>
             <DialogDescription>
-              ID is locked —{" "}
-              <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
-                {editTarget?.id}
-              </code>
+              {t.rich("editIdLocked", {
+                id: editTarget?.id ?? "",
+                code: (chunks) => (
+                  <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
+                    {chunks}
+                  </code>
+                ),
+              })}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
@@ -590,7 +601,7 @@ export default function AgentsPage() {
                 type="button"
                 onClick={() => editAvatarInput.current?.click()}
                 className="group relative flex size-20 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-dashed bg-muted/40 transition hover:bg-muted"
-                aria-label="Upload avatar"
+                aria-label={t("uploadAvatar")}
               >
                 {editAvatarPreview ? (
                   // eslint-disable-next-line @next/next/no-img-element
@@ -612,7 +623,7 @@ export default function AgentsPage() {
                 />
               </button>
               <div className="flex-1 space-y-2">
-                <Label htmlFor="agent-edit-name">Name</Label>
+                <Label htmlFor="agent-edit-name">{t("nameLabel")}</Label>
                 <Input
                   id="agent-edit-name"
                   value={editName}
@@ -620,17 +631,17 @@ export default function AgentsPage() {
                     setEditName(e.target.value);
                     setEditError(null);
                   }}
-                  placeholder="My Helper"
+                  placeholder={t("namePlaceholder")}
                 />
               </div>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="agent-edit-desc">Description</Label>
+              <Label htmlFor="agent-edit-desc">{t("descriptionLabel")}</Label>
               <Textarea
                 id="agent-edit-desc"
                 value={editDescription}
                 onChange={(e) => setEditDescription(e.target.value)}
-                placeholder="What's this agent for?"
+                placeholder={t("editDescPlaceholder")}
                 rows={3}
               />
             </div>
@@ -642,12 +653,10 @@ export default function AgentsPage() {
               <div className="flex items-start justify-between gap-4">
                 <div className="space-y-1">
                   <Label htmlFor="agent-edit-public" className="text-sm font-medium">
-                    Public access
+                    {t("publicAccessLabel")}
                   </Label>
                   <p className="text-xs text-muted-foreground">
-                    {editIsPublic
-                      ? "Anyone with the link can chat. Their history stays private to them."
-                      : "Only you can use this agent."}
+                    {editIsPublic ? t("publicAccessOnHint") : t("publicAccessOffHint")}
                   </p>
                 </div>
                 <Switch
@@ -689,12 +698,12 @@ export default function AgentsPage() {
                     {editLinkCopied ? (
                       <>
                         <Check className="h-4 w-4 mr-1.5" />
-                        Copied
+                        {tc("copied")}
                       </>
                     ) : (
                       <>
                         <Copy className="h-4 w-4 mr-1.5" />
-                        Copy
+                        {tc("copy")}
                       </>
                     )}
                   </Button>
@@ -706,10 +715,10 @@ export default function AgentsPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditTarget(null)}>
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button onClick={handleEdit} disabled={!editName.trim() || saving}>
-              {saving ? "Saving..." : "Save"}
+              {saving ? tc("saving") : tc("save")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -727,17 +736,19 @@ export default function AgentsPage() {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Agent</AlertDialogTitle>
+            <AlertDialogTitle>{t("deleteTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete <strong>{deleteId}</strong>?
-              This action cannot be undone.
+              {t.rich("deleteConfirm", {
+                id: deleteId ?? "",
+                strong: (chunks) => <strong>{chunks}</strong>,
+              })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           {deleteError && (
             <p className="text-sm text-destructive">{deleteError}</p>
           )}
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogCancel disabled={deleting}>{tc("cancel")}</AlertDialogCancel>
             <AlertDialogAction
               onClick={(e) => {
                 e.preventDefault();
@@ -746,7 +757,7 @@ export default function AgentsPage() {
               disabled={deleting}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              {deleting ? "Deleting..." : "Delete"}
+              {deleting ? tc("deleting") : tc("delete")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
