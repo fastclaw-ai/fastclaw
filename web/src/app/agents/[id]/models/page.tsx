@@ -65,6 +65,7 @@ const PROVIDER_PRESETS: Record<
   { apiBase: string; apiType: string; authType: string; models: string[] }
 > = {
   openai: { apiBase: "https://api.openai.com/v1", apiType: "openai-chat", authType: "bearer-token", models: ["gpt-5.5"] },
+  evolink: { apiBase: "https://direct.evolink.ai/v1", apiType: "openai-chat", authType: "bearer-token", models: ["gpt-5.2"] },
   openrouter: { apiBase: "https://openrouter.ai/api/v1", apiType: "openai-chat", authType: "bearer-token", models: [] },
   anthropic: { apiBase: "https://api.anthropic.com", apiType: "anthropic-messages", authType: "api-key", models: ["claude-opus-4-7", "claude-sonnet-4-7", "claude-haiku-4-5"] },
   deepseek: { apiBase: "https://api.deepseek.com", apiType: "openai-chat", authType: "bearer-token", models: ["deepseek-v4-pro", "deepseek-v4-flash"] },
@@ -74,6 +75,7 @@ const PROVIDER_PRESETS: Record<
 
 const PROVIDER_LABELS: Record<string, string> = {
   openai: "OpenAI",
+  evolink: "EvoLink",
   openrouter: "OpenRouter",
   anthropic: "Anthropic",
   deepseek: "DeepSeek",

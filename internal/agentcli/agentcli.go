@@ -577,6 +577,8 @@ func providerPreset(name string) providerDefaults {
 		return providerDefaults{"https://api.anthropic.com", "anthropic-messages", "api-key", "ANTHROPIC_API_KEY"}
 	case "openrouter":
 		return providerDefaults{"https://openrouter.ai/api/v1", "openai-chat", "bearer-token", "OPENROUTER_API_KEY"}
+	case "evolink":
+		return providerDefaults{"https://direct.evolink.ai/v1", "openai-chat", "bearer-token", "EVOLINK_API_KEY"}
 	case "ollama":
 		return providerDefaults{"http://localhost:11434/v1", "openai-chat", "bearer-token", ""}
 	case "groq":

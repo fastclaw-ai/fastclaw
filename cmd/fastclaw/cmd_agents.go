@@ -159,7 +159,7 @@ func agentsInitCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&opts.AgentID, "id", "", "agent id (default: auto-generated; pass an existing agt_ id to update an agent created via the dashboard)")
 	cmd.Flags().StringVar(&opts.Description, "description", "", "description for the agent")
-	cmd.Flags().StringVar(&opts.Provider, "provider", "", "provider name, e.g. openai, openrouter, anthropic, ollama")
+	cmd.Flags().StringVar(&opts.Provider, "provider", "", "provider name, e.g. openai, evolink, openrouter, anthropic, ollama")
 	cmd.Flags().StringVar(&opts.Model, "model", "", "default model, either <provider>/<model> or <model> with --provider")
 	cmd.Flags().StringVar(&opts.APIKeyEnv, "api-key-env", "", "environment variable containing the provider API key")
 	cmd.Flags().StringVar(&opts.APIBase, "api-base", "", "provider API base URL")

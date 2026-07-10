@@ -73,6 +73,43 @@ func TestInitCreatesAgentAndOwner(t *testing.T) {
 	}
 }
 
+func TestInitUsesEvolinkProviderPreset(t *testing.T) {
+	st := freshStore(t)
+	t.Setenv("EVOLINK_API_KEY", "test-key")
+
+	res, err := Init(context.Background(), st, "alpha", InitOptions{
+		Provider: "evolink",
+		Model:    "evolink/gpt-5.2",
+	})
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if !res.ProviderSaved || !res.ModelSaved {
+		t.Fatalf("expected provider and model to be saved: %+v", res)
+	}
+
+	rec, err := st.GetConfigByName(context.Background(), store.KindProvider, "", "", "evolink")
+	if err != nil {
+		t.Fatalf("get provider: %v", err)
+	}
+	if rec.Data["apiBase"] != "https://direct.evolink.ai/v1" {
+		t.Fatalf("preset apiBase missing: %#v", rec.Data["apiBase"])
+	}
+	if rec.Data["apiType"] != "openai-chat" {
+		t.Fatalf("preset apiType missing: %#v", rec.Data["apiType"])
+	}
+	if rec.Data["authType"] != "bearer-token" {
+		t.Fatalf("preset authType missing: %#v", rec.Data["authType"])
+	}
+	model, err := GetConfig(context.Background(), st, res.Agent.ID, "model")
+	if err != nil {
+		t.Fatalf("get model: %v", err)
+	}
+	if model != "evolink/gpt-5.2" {
+		t.Fatalf("model not saved at agent scope: %#v", model)
+	}
+}
+
 func TestInitProviderPreflightRunsBeforeWrites(t *testing.T) {
 	st := freshStore(t)
 	t.Setenv("OPENAI_API_KEY", "")
@@ -513,9 +550,9 @@ func TestParseValueTypes(t *testing.T) {
 
 func TestSettingKeyRouting(t *testing.T) {
 	cases := []struct {
-		key           string
-		ns            string
-		path          []string
+		key            string
+		ns             string
+		path           []string
 		wantAgentScope bool
 	}{
 		{"model", "agents.defaults", []string{"model"}, true},
