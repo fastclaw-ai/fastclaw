@@ -20,6 +20,7 @@
     "katex": "^0.16.47",
     "lucide-react": "^0.577.0",
     "next": "16.1.6",
+    "next-intl": "^4.13.1",
     "qrcode.react": "^4.2.0",
     "react": "19.2.3",
     "react-dom": "19.2.3",

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
@@ -27,6 +28,8 @@ import { Puzzle, Download, Settings } from "lucide-react";
 import { getPlugins, updatePlugin, type PluginInfo } from "@/lib/api";
 
 export default function PluginsPage() {
+  const t = useTranslations("plugins");
+  const tc = useTranslations("common");
   const [plugins, setPlugins] = useState<PluginInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [editPlugin, setEditPlugin] = useState<PluginInfo | null>(null);
@@ -89,14 +92,14 @@ export default function PluginsPage() {
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight">Plugins</h2>
+          <h2 className="text-2xl font-semibold tracking-tight">{t("title")}</h2>
           <p className="text-sm text-muted-foreground mt-1">
-            Extend FastClaw with custom plugins
+            {t("subtitle")}
           </p>
         </div>
         <Button variant="outline">
           <Download className="h-4 w-4 mr-2" />
-          Install Plugin
+          {t("installPlugin")}
         </Button>
       </div>
 
@@ -112,9 +115,9 @@ export default function PluginsPage() {
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 mb-4">
               <Puzzle className="h-7 w-7 text-primary" />
             </div>
-            <p className="text-sm text-muted-foreground">No plugins installed</p>
+            <p className="text-sm text-muted-foreground">{t("emptyTitle")}</p>
             <p className="text-xs text-muted-foreground/60 mt-1">
-              Plugins add channels, tools, and providers
+              {t("emptyHint")}
             </p>
           </div>
         ) : (
@@ -122,12 +125,12 @@ export default function PluginsPage() {
           <Table>
             <TableHeader>
               <TableRow className="hover:bg-transparent">
-                <TableHead>Plugin</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Version</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Enabled</TableHead>
-                <TableHead className="text-right">Config</TableHead>
+                <TableHead>{t("colPlugin")}</TableHead>
+                <TableHead>{t("colType")}</TableHead>
+                <TableHead>{t("colVersion")}</TableHead>
+                <TableHead>{t("colStatus")}</TableHead>
+                <TableHead>{t("colEnabled")}</TableHead>
+                <TableHead className="text-right">{t("colConfig")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -189,14 +192,14 @@ export default function PluginsPage() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Puzzle className="h-5 w-5 text-primary" />
-              {editPlugin?.id} Configuration
+              {t("configDialogTitle", { id: editPlugin?.id ?? "" })}
             </DialogTitle>
             <DialogDescription>
-              Edit plugin configuration as JSON
+              {t("configDialogDescription")}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
-            <Label>Config JSON</Label>
+            <Label>{t("configJsonLabel")}</Label>
             <Textarea
               value={configJson}
               onChange={(e) => setConfigJson(e.target.value)}
@@ -206,10 +209,10 @@ export default function PluginsPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditPlugin(null)}>
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button onClick={handleSaveConfig} disabled={saving}>
-              {saving ? "Saving..." : "Save Config"}
+              {saving ? tc("saving") : t("saveConfig")}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -2,19 +2,24 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import { getMe } from "@/lib/api";
 
-const items = [
-  { href: "/settings/general", label: "General", adminOnly: false },
-  { href: "/settings/account", label: "Account", adminOnly: false },
-  { href: "/settings/about", label: "About", adminOnly: false },
-  { href: "/settings/runtime", label: "Runtime", adminOnly: true },
+type SettingsTranslator = ReturnType<typeof useTranslations<"settings">>;
+
+const NAV_ITEMS = (t: SettingsTranslator) => [
+  { href: "/settings/general", label: t("navGeneral"), adminOnly: false },
+  { href: "/settings/account", label: t("navAccount"), adminOnly: false },
+  { href: "/settings/about", label: t("navAbout"), adminOnly: false },
+  { href: "/settings/runtime", label: t("navRuntime"), adminOnly: true },
 ];
 
 export default function SettingsLayout({ children }: { children: React.ReactNode }) {
+  const t = useTranslations("settings");
   const pathname = usePathname();
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
+  const items = useMemo(() => NAV_ITEMS(t), [t]);
 
   useEffect(() => {
     getMe()
@@ -27,7 +32,7 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
   return (
     <div className="flex flex-col md:flex-row md:gap-8 p-4 md:p-6 max-w-6xl mx-auto md:min-h-[calc(100vh-3.5rem)]">
       <aside className="md:w-48 md:shrink-0 mb-4 md:mb-0">
-        <h2 className="text-lg font-semibold tracking-tight mb-3 md:mb-4">Settings</h2>
+        <h2 className="text-lg font-semibold tracking-tight mb-3 md:mb-4">{t("title")}</h2>
         {/* Horizontal scroll-tabs on mobile, vertical list on desktop. */}
         <nav className="flex flex-row md:flex-col gap-1 overflow-x-auto md:overflow-visible -mx-1 px-1 md:mx-0 md:px-0">
           {visible.map((it) => {

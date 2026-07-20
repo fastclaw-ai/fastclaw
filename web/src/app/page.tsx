@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { getStatus, getMe, login as loginApi } from "@/lib/api";
 import { logout } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
@@ -9,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 export default function RootPage() {
+  const t = useTranslations("home");
   const router = useRouter();
   const [showLogin, setShowLogin] = useState(false);
   const [loginField, setLoginField] = useState("");
@@ -49,12 +51,12 @@ export default function RootPage() {
     try {
       const res = await loginApi(loginField.trim(), password);
       if (!res.ok) {
-        setError(res.error || "Invalid username or password");
+        setError(res.error || t("errorInvalidCredentials"));
         return;
       }
       router.replace("/overview/");
     } catch {
-      setError("Connection failed");
+      setError(t("errorConnectionFailed"));
     } finally {
       setSubmitting(false);
     }
@@ -75,23 +77,23 @@ export default function RootPage() {
           <div className="flex flex-col items-center gap-3">
             <img src="/logo.png" alt="FastClaw" className="h-12 w-12" />
             <h1 className="text-xl font-bold">FastClaw</h1>
-            <p className="text-sm text-muted-foreground">Sign in to continue</p>
+            <p className="text-sm text-muted-foreground">{t("signInToContinue")}</p>
           </div>
 
           <form onSubmit={handleLogin} className="space-y-4">
             <div className="space-y-1.5">
-              <Label htmlFor="login-field">Username or email</Label>
+              <Label htmlFor="login-field">{t("usernameOrEmailLabel")}</Label>
               <Input
                 id="login-field"
                 value={loginField}
                 onChange={(e) => setLoginField(e.target.value)}
                 autoComplete="username"
                 autoFocus
-                placeholder="alice"
+                placeholder={t("usernamePlaceholder")}
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="login-password">Password</Label>
+              <Label htmlFor="login-password">{t("passwordLabel")}</Label>
               <Input
                 id="login-password"
                 type="password"
@@ -106,7 +108,7 @@ export default function RootPage() {
               disabled={!loginField.trim() || !password || submitting}
               className="w-full"
             >
-              {submitting ? "Signing in…" : "Sign In"}
+              {submitting ? t("signingIn") : t("signIn")}
             </Button>
           </form>
         </div>

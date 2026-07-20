@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { Bot } from "lucide-react";
 import { getAgentStatus } from "@/lib/api";
 
@@ -38,6 +39,7 @@ export default function AgentAccessGate({
 }: {
   children: React.ReactNode;
 }) {
+  const t = useTranslations("accessGate");
   const pathname = usePathname();
   const agentId = agentIdFromPath(pathname);
   const [state, setState] = useState<"checking" | "ok" | "denied">("checking");
@@ -88,11 +90,9 @@ export default function AgentAccessGate({
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-muted/60">
             <Bot className="h-7 w-7 text-muted-foreground" />
           </div>
-          <h2 className="text-lg font-semibold">No access to this agent</h2>
+          <h2 className="text-lg font-semibold">{t("deniedTitle")}</h2>
           <p className="text-sm text-muted-foreground">
-            This agent is private to its owner, or the link is no longer
-            valid. If the owner shares it publicly, the chat URL will
-            start working for you automatically.
+            {t("deniedDescription")}
           </p>
         </div>
       </div>

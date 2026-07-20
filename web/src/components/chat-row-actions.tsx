@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -63,6 +64,8 @@ export function ChatRowActions({
 }) {
   const router = useRouter();
   const { isMobile } = useSidebar();
+  const t = useTranslations("sessions");
+  const tc = useTranslations("common");
   const [editOpen, setEditOpen] = React.useState(false);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
 
@@ -107,7 +110,7 @@ export function ChatRowActions({
           render={
             <button type="button" className={triggerClass}>
               <MoreHorizontalIcon />
-              <span className="sr-only">Chat actions</span>
+              <span className="sr-only">{t("actionsLabel")}</span>
             </button>
           }
         />
@@ -118,7 +121,7 @@ export function ChatRowActions({
         >
           <DropdownMenuItem onClick={() => setEditOpen(true)}>
             <PencilIcon className="text-muted-foreground" />
-            <span>Edit</span>
+            <span>{tc("edit")}</span>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem
@@ -126,7 +129,7 @@ export function ChatRowActions({
             className="text-destructive focus:text-destructive"
           >
             <Trash2Icon className="text-destructive" />
-            <span>Delete</span>
+            <span>{tc("delete")}</span>
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -142,20 +145,21 @@ export function ChatRowActions({
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete chat</AlertDialogTitle>
+            <AlertDialogTitle>{t("deleteTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
-              Delete <strong>{session.title || session.id}</strong>? The full
-              message history for this chat will be removed and cannot be
-              recovered.
+              {t.rich("deleteDescription", {
+                title: session.title || session.id,
+                strong: (chunks) => <strong>{chunks}</strong>,
+              })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{tc("cancel")}</AlertDialogCancel>
             <AlertDialogAction
               onClick={onConfirmDelete}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              Delete
+              {tc("delete")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -177,6 +181,8 @@ function EditTitleDialog({
   session: ChatRowSession;
   onSaved: () => void;
 }) {
+  const t = useTranslations("sessions");
+  const tc = useTranslations("common");
   const [draft, setDraft] = React.useState("");
   const [saving, setSaving] = React.useState(false);
 
@@ -206,9 +212,9 @@ function EditTitleDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Edit chat title</DialogTitle>
+          <DialogTitle>{t("editTitle")}</DialogTitle>
           <DialogDescription>
-            Rename this chat so it&apos;s easier to find in the sidebar.
+            {t("editDescription")}
           </DialogDescription>
         </DialogHeader>
         <Input
@@ -225,7 +231,7 @@ function EditTitleDialog({
               save();
             }
           }}
-          placeholder="Chat title"
+          placeholder={t("titlePlaceholder")}
         />
         <DialogFooter>
           <Button
@@ -233,10 +239,10 @@ function EditTitleDialog({
             onClick={() => onOpenChange(false)}
             disabled={saving}
           >
-            Cancel
+            {tc("cancel")}
           </Button>
           <Button onClick={save} disabled={saving || !draft.trim()}>
-            {saving ? "Saving…" : "Save"}
+            {saving ? tc("saving") : tc("save")}
           </Button>
         </DialogFooter>
       </DialogContent>

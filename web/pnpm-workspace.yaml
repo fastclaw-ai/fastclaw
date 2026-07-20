@@ -1,4 +1,9 @@
 allowBuilds:
+  # Both ship prebuilt binaries; their install scripts are a source-build
+  # fallback we don't need. Explicit decisions keep pnpm >=11 from failing
+  # install with ERR_PNPM_IGNORED_BUILDS.
+  '@parcel/watcher': false
+  '@swc/core': false
   msw: true
   sharp: true
   unrs-resolver: true

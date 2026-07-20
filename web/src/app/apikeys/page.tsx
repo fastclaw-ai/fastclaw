@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import {
   listApikeys,
   createApikey,
@@ -63,6 +64,8 @@ interface AgentMeta {
 }
 
 export default function ApikeysPage() {
+  const t = useTranslations("apikeys");
+  const tc = useTranslations("common");
   const [keys, setKeys] = useState<ApiKey[]>([]);
   const [agents, setAgents] = useState<AgentMeta[]>([]);
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
@@ -99,7 +102,7 @@ export default function ApikeysPage() {
     setError("");
     if (!createName.trim()) return;
     if (createType === "agent" && createAgents.length === 0) {
-      setError("Select at least one agent");
+      setError(t("errorSelectAgent"));
       return;
     }
     const res = await createApikey({
@@ -152,7 +155,7 @@ export default function ApikeysPage() {
   async function saveScope() {
     if (!scopeTarget) return;
     if (scopeAgents.length === 0) {
-      setError("type=agent keys need at least one agent");
+      setError(t("errorScopeNeedsAgent"));
       return;
     }
     await handleSetAgents(scopeTarget.id, scopeAgents);
@@ -174,31 +177,39 @@ export default function ApikeysPage() {
     setCreateOpen(true);
   }
 
-  function typeBadgeVariant(t: ApikeyType): "default" | "secondary" | "outline" {
-    if (t === "admin") return "default";
-    if (t === "user") return "secondary";
+  function typeBadgeVariant(ty: ApikeyType): "default" | "secondary" | "outline" {
+    if (ty === "admin") return "default";
+    if (ty === "user") return "secondary";
     return "outline";
+  }
+
+  // Badge label for the key type — the raw values stay untranslated in
+  // the API; only the on-screen label goes through the dictionary.
+  function typeBadgeLabel(ty: ApikeyType): string {
+    if (ty === "admin") return t("typeBadgeAdmin");
+    if (ty === "user") return t("typeBadgeUser");
+    return t("typeBadgeAgent");
   }
 
   return (
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight">API Keys</h2>
+          <h2 className="text-2xl font-semibold tracking-tight">{t("title")}</h2>
           <p className="text-sm text-muted-foreground mt-1">
-            Issue programmatic credentials. Each key is scoped to a subset of your agents.
+            {t("subtitle")}
           </p>
         </div>
         <Button onClick={openCreateDialog}>
           <Plus className="h-4 w-4 mr-2" />
-          Add API Key
+          {t("addKey")}
         </Button>
       </div>
 
       {showToken && (
         <Card className="border-amber-500/40 bg-amber-500/5">
           <CardContent className="space-y-3 pt-6">
-            <p className="text-sm font-medium">Token issued — copy it now, you won&apos;t see it again.</p>
+            <p className="text-sm font-medium">{t("tokenIssued")}</p>
             <div className="flex items-center gap-2">
               <code className="flex-1 break-all rounded border bg-background px-3 py-2 font-mono text-xs">
                 {showToken.token}
@@ -208,7 +219,7 @@ export default function ApikeysPage() {
               </Button>
             </div>
             <Button size="sm" variant="ghost" onClick={() => setShowToken(null)}>
-              Got it
+              {t("gotIt")}
             </Button>
           </CardContent>
         </Card>
@@ -228,13 +239,13 @@ export default function ApikeysPage() {
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 mb-4">
               <KeyRound className="h-7 w-7 text-primary" />
             </div>
-            <p className="text-sm text-muted-foreground mb-1">No API keys yet</p>
+            <p className="text-sm text-muted-foreground mb-1">{t("empty")}</p>
             <p className="text-xs text-muted-foreground/60 mb-4">
-              Issue one to let an external client call your agents
+              {t("emptyHint")}
             </p>
             <Button variant="outline" size="sm" onClick={openCreateDialog}>
               <Plus className="h-4 w-4 mr-2" />
-              Add API Key
+              {t("addKey")}
             </Button>
           </div>
         </div>
@@ -243,12 +254,12 @@ export default function ApikeysPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Key</TableHead>
-                <TableHead>Scope</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
+                <TableHead>{t("colName")}</TableHead>
+                <TableHead>{t("colType")}</TableHead>
+                <TableHead>{t("colKey")}</TableHead>
+                <TableHead>{t("colScope")}</TableHead>
+                <TableHead>{t("colCreated")}</TableHead>
+                <TableHead className="text-right">{t("colActions")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -257,7 +268,7 @@ export default function ApikeysPage() {
                   <TableCell className="font-medium">{k.name || k.id}</TableCell>
                   <TableCell>
                     <Badge variant={typeBadgeVariant(k.type)} className="text-xs">
-                      {k.type}
+                      {typeBadgeLabel(k.type)}
                     </Badge>
                   </TableCell>
                   <TableCell>
@@ -265,9 +276,9 @@ export default function ApikeysPage() {
                   </TableCell>
                   <TableCell>
                     {k.type === "admin" ? (
-                      <span className="text-xs text-muted-foreground">All agents (platform-wide)</span>
+                      <span className="text-xs text-muted-foreground">{t("scopeAllAgents")}</span>
                     ) : k.type === "user" ? (
-                      <span className="text-xs text-muted-foreground">All your agents (auto-includes new ones)</span>
+                      <span className="text-xs text-muted-foreground">{t("scopeAllYourAgents")}</span>
                     ) : (
                       <ScopeChips
                         selectedIds={k.agents || []}
@@ -281,7 +292,7 @@ export default function ApikeysPage() {
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
-                      <Button size="icon" variant="ghost" onClick={() => setRotateTarget(k)} title="Rotate">
+                      <Button size="icon" variant="ghost" onClick={() => setRotateTarget(k)} title={t("rotate")}>
                         <RotateCw className="size-4" />
                       </Button>
                       <Button
@@ -289,7 +300,7 @@ export default function ApikeysPage() {
                         variant="ghost"
                         className="text-destructive hover:text-destructive"
                         onClick={() => setDeleteTarget(k)}
-                        title="Delete"
+                        title={tc("delete")}
                       >
                         <Trash2 className="size-4" />
                       </Button>
@@ -305,56 +316,56 @@ export default function ApikeysPage() {
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>Add API Key</DialogTitle>
+            <DialogTitle>{t("addKey")}</DialogTitle>
             <DialogDescription>
-              Issue a new bearer token scoped to a subset of your agents.
+              {t("createDescription")}
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleCreate} className="space-y-4 py-2">
             <div className="space-y-1.5">
-              <Label htmlFor="key-name">Name</Label>
+              <Label htmlFor="key-name">{t("nameLabel")}</Label>
               <Input
                 id="key-name"
                 value={createName}
                 onChange={(e) => setCreateName(e.target.value)}
-                placeholder="e.g. thinkany-web"
+                placeholder={t("namePlaceholder")}
                 autoFocus
               />
             </div>
             <div className="space-y-1.5">
-              <Label>Type</Label>
+              <Label>{t("typeLabel")}</Label>
               <div className="space-y-2">
                 {isSuperAdmin && (
                   <TypeOption
                     value="admin"
                     selected={createType}
                     onSelect={setCreateType}
-                    title="Admin"
-                    description="Full platform — manage users, providers, models, skills."
+                    title={t("typeAdminTitle")}
+                    description={t("typeAdminDesc")}
                   />
                 )}
                 <TypeOption
                   value="user"
                   selected={createType}
                   onSelect={setCreateType}
-                  title="User"
-                  description="Access all your agents (auto-includes future ones). Can create new agents."
+                  title={t("typeUserTitle")}
+                  description={t("typeUserDesc")}
                 />
                 <TypeOption
                   value="agent"
                   selected={createType}
                   onSelect={setCreateType}
-                  title="Agent"
-                  description="Locked to specific agents. Cannot create new ones."
+                  title={t("typeAgentTitle")}
+                  description={t("typeAgentDesc")}
                 />
               </div>
             </div>
             {createType === "agent" && (
               <div className="space-y-1.5">
-                <Label>Allowed agents</Label>
+                <Label>{t("allowedAgentsLabel")}</Label>
                 {agents.length === 0 ? (
                   <p className="text-xs text-muted-foreground">
-                    No agents yet — create one from the Agents page first.
+                    {t("noAgentsYetHint")}
                   </p>
                 ) : (
                   <div className="flex flex-wrap gap-2">
@@ -386,7 +397,7 @@ export default function ApikeysPage() {
             )}
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setCreateOpen(false)}>
-                Cancel
+                {tc("cancel")}
               </Button>
               <Button
                 type="submit"
@@ -394,7 +405,7 @@ export default function ApikeysPage() {
                   !createName.trim() || (createType === "agent" && createAgents.length === 0)
                 }
               >
-                Create key
+                {t("createKey")}
               </Button>
             </DialogFooter>
           </form>
@@ -404,15 +415,19 @@ export default function ApikeysPage() {
       <AlertDialog open={deleteTarget !== null} onOpenChange={(o) => !o && setDeleteTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete API key?</AlertDialogTitle>
+            <AlertDialogTitle>{t("deleteTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
-              <code className="rounded bg-muted px-1.5 py-0.5 text-xs">{deleteTarget?.name || deleteTarget?.id}</code>{" "}
-              will stop working immediately for any client using it.
+              {t.rich("deleteConfirm", {
+                name: deleteTarget?.name || deleteTarget?.id || "",
+                code: (chunks) => (
+                  <code className="rounded bg-muted px-1.5 py-0.5 text-xs">{chunks}</code>
+                ),
+              })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => deleteTarget && handleDelete(deleteTarget)}>Delete</AlertDialogAction>
+            <AlertDialogCancel>{tc("cancel")}</AlertDialogCancel>
+            <AlertDialogAction onClick={() => deleteTarget && handleDelete(deleteTarget)}>{tc("delete")}</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -420,17 +435,20 @@ export default function ApikeysPage() {
       <AlertDialog open={rotateTarget !== null} onOpenChange={(o) => !o && setRotateTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Rotate API key?</AlertDialogTitle>
+            <AlertDialogTitle>{t("rotateTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
-              The current token for{" "}
-              <code className="rounded bg-muted px-1.5 py-0.5 text-xs">{rotateTarget?.name || rotateTarget?.id}</code>{" "}
-              will stop working immediately. A new token will be issued and shown once.
+              {t.rich("rotateConfirm", {
+                name: rotateTarget?.name || rotateTarget?.id || "",
+                code: (chunks) => (
+                  <code className="rounded bg-muted px-1.5 py-0.5 text-xs">{chunks}</code>
+                ),
+              })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{tc("cancel")}</AlertDialogCancel>
             <AlertDialogAction onClick={() => rotateTarget && handleRotate(rotateTarget.id)}>
-              Rotate
+              {t("rotate")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -439,14 +457,14 @@ export default function ApikeysPage() {
       <Dialog open={scopeTarget !== null} onOpenChange={(o) => !o && setScopeTarget(null)}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>Edit allowed agents</DialogTitle>
+            <DialogTitle>{t("scopeTitle")}</DialogTitle>
             <DialogDescription>
-              {scopeTarget?.name || scopeTarget?.id} — toggle which agents this key may operate on.
+              {t("scopeDescription", { name: scopeTarget?.name || scopeTarget?.id || "" })}
             </DialogDescription>
           </DialogHeader>
           <div className="py-2">
             {agents.length === 0 ? (
-              <p className="text-xs text-muted-foreground">No agents available.</p>
+              <p className="text-xs text-muted-foreground">{t("noAgentsAvailable")}</p>
             ) : (
               <div className="flex flex-wrap gap-2">
                 {agents.map((a) => {
@@ -476,10 +494,10 @@ export default function ApikeysPage() {
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setScopeTarget(null)}>
-              Cancel
+              {tc("cancel")}
             </Button>
             <Button type="button" onClick={saveScope} disabled={scopeAgents.length === 0}>
-              Save
+              {tc("save")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -497,6 +515,7 @@ function ScopeChips({
   agents: AgentMeta[];
   onClick: () => void;
 }) {
+  const t = useTranslations("apikeys");
   const selected = selectedIds
     .map((id) => agents.find((a) => a.id === id))
     .filter((a): a is AgentMeta => !!a);
@@ -508,10 +527,10 @@ function ScopeChips({
       type="button"
       onClick={onClick}
       className="flex flex-wrap items-center gap-1.5 rounded-md p-1 -m-1 hover:bg-muted/60 transition"
-      title="Edit allowed agents"
+      title={t("scopeTitle")}
     >
       {selected.length === 0 && (
-        <span className="text-xs text-muted-foreground italic">no agents — click to add</span>
+        <span className="text-xs text-muted-foreground italic">{t("scopeEmptyChip")}</span>
       )}
       {shown.map((a) => (
         <Badge key={a.id} variant="default" className="text-xs">

@@ -18,11 +18,15 @@ import {
 } from "@/components/ui/sidebar";
 import {
   ChevronsUpDownIcon,
+  LanguagesIcon,
   LogOutIcon,
   MoonIcon,
   SunIcon,
 } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { useTheme } from "@/components/theme-provider";
+import { useLocaleSetting } from "@/i18n/locale-provider";
+import { LOCALES, LOCALE_LABELS } from "@/i18n/config";
 import { logout as doLogout } from "@/lib/auth";
 
 export function NavUser({
@@ -34,6 +38,12 @@ export function NavUser({
 }) {
   const { isMobile } = useSidebar();
   const { resolvedTheme, toggleTheme } = useTheme();
+  const t = useTranslations("userMenu");
+  const { locale, setLocale } = useLocaleSetting();
+  // The menu item is labeled with the locale it switches TO (in that
+  // locale's own language), mirroring how the theme item is labeled
+  // with the mode you'd switch to.
+  const nextLocale = LOCALES[(LOCALES.indexOf(locale) + 1) % LOCALES.length];
 
   const initials = name.slice(0, 2).toUpperCase();
 
@@ -89,7 +99,16 @@ export function NavUser({
               }}
             >
               {resolvedTheme === "dark" ? <SunIcon /> : <MoonIcon />}
-              <span>{resolvedTheme === "dark" ? "Light mode" : "Dark mode"}</span>
+              <span>{resolvedTheme === "dark" ? t("lightMode") : t("darkMode")}</span>
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={(e) => {
+                e.preventDefault();
+                setLocale(nextLocale);
+              }}
+            >
+              <LanguagesIcon />
+              <span>{LOCALE_LABELS[nextLocale]}</span>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem
@@ -99,7 +118,7 @@ export function NavUser({
               }}
             >
               <LogOutIcon />
-              <span>Log out</span>
+              <span>{t("logOut")}</span>
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

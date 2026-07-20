@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -55,6 +56,8 @@ export function ConfigureSkillDialog({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const t = useTranslations("skillConfig");
+  const tc = useTranslations("common");
   const [env, setEnv] = useState<Record<string, string>>({});
   const [customRows, setCustomRows] = useState<{ name: string; value: string }[]>([]);
   const [saving, setSaving] = useState(false);
@@ -109,13 +112,13 @@ export function ConfigureSkillDialog({
         agentId,
       );
       if (resp && resp.ok === false) {
-        setError(resp.error || "Save failed");
+        setError(resp.error || t("errorSaveFailed"));
         setSaving(false);
         return;
       }
       onSaved();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Save failed");
+      setError(e instanceof Error ? e.message : t("errorSaveFailed"));
     } finally {
       setSaving(false);
     }
@@ -125,28 +128,21 @@ export function ConfigureSkillDialog({
     <Dialog open={!!skill} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Configure {skill.name}</DialogTitle>
+          <DialogTitle>{t("title", { name: skill.name })}</DialogTitle>
           <DialogDescription>
-            {agentId ? (
-              <>
-                Per-agent override for <strong>{agentName}</strong>.
-                Falls back to the global value when a field is empty here.
-                Other agents are unaffected.
-              </>
-            ) : (
-              <>
-                Global default. Used by every agent that runs this skill
-                unless that agent has its own per-agent override set.
-              </>
-            )}
+            {agentId
+              ? t.rich("descriptionAgent", {
+                  name: agentName,
+                  strong: (chunks) => <strong>{chunks}</strong>,
+                })
+              : t("descriptionGlobal")}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-2">
           {declaredSpec.length === 0 && customRows.length === 0 && (
             <p className="text-sm text-muted-foreground/70">
-              This skill didn&apos;t declare any env vars in its SKILL.md
-              frontmatter. Add custom variables below if it reads any.
+              {t("noEnvDeclared")}
             </p>
           )}
 
@@ -156,7 +152,7 @@ export function ConfigureSkillDialog({
               isSecret && existing?.env?.[spec.name]?.includes("****")
                 ? existing.env[spec.name]
                 : isSecret
-                ? "<not set>"
+                ? t("notSetPlaceholder")
                 : "";
             return (
               <div key={spec.name} className="space-y-1.5">
@@ -164,12 +160,12 @@ export function ConfigureSkillDialog({
                   {spec.name}
                   {spec.required && (
                     <span className="text-[9px] uppercase tracking-wider text-amber-500">
-                      required
+                      {t("requiredBadge")}
                     </span>
                   )}
                   {!spec.required && (
                     <span className="text-[9px] uppercase tracking-wider text-muted-foreground/60">
-                      optional
+                      {t("optionalBadge")}
                     </span>
                   )}
                 </Label>
@@ -192,19 +188,19 @@ export function ConfigureSkillDialog({
           {customRows.length > 0 && (
             <div className="space-y-2 pt-2 border-t border-border/60">
               <Label className="text-xs uppercase tracking-wider text-muted-foreground/70">
-                Custom env vars
+                {t("customEnvVars")}
               </Label>
               {customRows.map((row, idx) => (
                 <div key={idx} className="flex items-center gap-2">
                   <Input
-                    placeholder="VAR_NAME"
+                    placeholder={t("varNamePlaceholder")}
                     value={row.name}
                     onChange={(e) => updateCustomRow(idx, { name: e.target.value })}
                     className="font-mono text-xs flex-1"
                   />
                   <Input
                     type={looksLikeSecret(row.name) ? "password" : "text"}
-                    placeholder="value"
+                    placeholder={t("valuePlaceholder")}
                     value={row.value}
                     onChange={(e) => updateCustomRow(idx, { value: e.target.value })}
                     className="font-mono text-xs flex-1"
@@ -229,7 +225,7 @@ export function ConfigureSkillDialog({
             onClick={addCustomRow}
           >
             <Plus className="h-3 w-3 mr-1.5" />
-            Add custom env var
+            {t("addCustomEnvVar")}
           </Button>
 
           {error && <p className="text-xs text-destructive">{error}</p>}
@@ -237,10 +233,10 @@ export function ConfigureSkillDialog({
 
         <div className="flex justify-end gap-2">
           <Button variant="outline" onClick={onClose}>
-            Cancel
+            {tc("cancel")}
           </Button>
           <Button onClick={handleSave} disabled={saving}>
-            {saving ? "Saving…" : "Save"}
+            {saving ? tc("saving") : tc("save")}
           </Button>
         </div>
       </DialogContent>

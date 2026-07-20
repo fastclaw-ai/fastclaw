@@ -3,6 +3,8 @@ import localFont from "next/font/local";
 import { ThemeProvider } from "@/components/theme-provider";
 import { AuthGuard } from "@/components/auth-guard";
 import { AppShell } from "@/components/app-shell";
+import { LocaleProvider } from "@/i18n/locale-provider";
+import { DEFAULT_LOCALE } from "@/i18n/config";
 import "./globals.css";
 import { cn } from "@/lib/utils";
 
@@ -41,7 +43,9 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" suppressHydrationWarning className={cn("font-sans", nunitoSans.variable, figtreeHeading.variable)}>
+    // lang reflects the build-time default locale; LocaleProvider updates
+    // it client-side when the user's stored/browser preference differs.
+    <html lang={DEFAULT_LOCALE} suppressHydrationWarning className={cn("font-sans", nunitoSans.variable, figtreeHeading.variable)}>
       <head>
         <script
           dangerouslySetInnerHTML={{
@@ -52,7 +56,7 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        <ThemeProvider><AuthGuard><AppShell>{children}</AppShell></AuthGuard></ThemeProvider>
+        <LocaleProvider><ThemeProvider><AuthGuard><AppShell>{children}</AppShell></AuthGuard></ThemeProvider></LocaleProvider>
       </body>
     </html>
   );

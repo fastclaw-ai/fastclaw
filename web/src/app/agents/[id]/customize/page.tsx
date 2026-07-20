@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Save, Check, Loader2, RotateCcw } from "lucide-react";
@@ -9,15 +10,17 @@ import { apiFetch } from "@/lib/api";
 import { useAgentIdFromURL } from "@/hooks/use-agent-id";
 import { useAgentName } from "@/hooks/use-agent-name";
 
-const CUSTOMIZE_FILES = [
-  { name: "SOUL.md", label: "Soul" },
-  { name: "IDENTITY.md", label: "Identity" },
-  { name: "USER.md", label: "User" },
-  { name: "TOOLS.md", label: "Tools" },
-  { name: "BOOTSTRAP.md", label: "Bootstrap" },
-  { name: "HEARTBEAT.md", label: "Heartbeat" },
-  { name: "MEMORY.md", label: "Memory" },
-  { name: "AGENTS.md", label: "Agents" },
+type CustomizeTranslator = ReturnType<typeof useTranslations<"customize">>;
+
+const CUSTOMIZE_FILES = (t: CustomizeTranslator) => [
+  { name: "SOUL.md", label: t("fileSoul") },
+  { name: "IDENTITY.md", label: t("fileIdentity") },
+  { name: "USER.md", label: t("fileUser") },
+  { name: "TOOLS.md", label: t("fileTools") },
+  { name: "BOOTSTRAP.md", label: t("fileBootstrap") },
+  { name: "HEARTBEAT.md", label: t("fileHeartbeat") },
+  { name: "MEMORY.md", label: t("fileMemory") },
+  { name: "AGENTS.md", label: t("fileAgents") },
 ];
 
 // FileState mirrors the backend's GET response: `content` is what's
@@ -36,8 +39,11 @@ type FileSource = "db" | "owner" | "fs" | "default";
 type FileState = { content: string; source: FileSource; baseContent?: string };
 
 export default function AgentCustomizePage() {
+  const t = useTranslations("customize");
+  const tc = useTranslations("common");
   const agentId = useAgentIdFromURL();
   const agentName = useAgentName(agentId);
+  const customizeFiles = useMemo(() => CUSTOMIZE_FILES(t), [t]);
   const [activeTab, setActiveTab] = useState("SOUL.md");
   const [files, setFiles] = useState<Record<string, FileState>>({});
   const [loading, setLoading] = useState(true);
@@ -46,7 +52,7 @@ export default function AgentCustomizePage() {
 
   const loadAll = async () => {
     const entries = await Promise.all(
-      CUSTOMIZE_FILES.map(async (f) => {
+      customizeFiles.map(async (f) => {
         try {
           const res = await apiFetch(`/api/agents/${agentId}/system-files/${f.name}`);
           if (res.ok) {
@@ -95,7 +101,7 @@ export default function AgentCustomizePage() {
   // AND a baseContent exists (otherwise the tab just becomes empty).
   const handleRevert = async () => {
     if (!active || active.source !== "db") return;
-    if (!confirm(`Revert ${activeTab} to the repo base? Your edits will be discarded.`)) return;
+    if (!confirm(t("revertConfirm", { file: activeTab }))) return;
     setSaving(true);
     try {
       await apiFetch(`/api/agents/${agentId}/system-files/${activeTab}`, {
@@ -119,14 +125,14 @@ export default function AgentCustomizePage() {
     if (source === "db") {
       return (
         <span className="text-xs px-2 py-0.5 rounded-md border border-amber-500/30 text-amber-600">
-          Edited
+          {t("badgeEdited")}
         </span>
       );
     }
     if (source === "fs") {
       return (
         <span className="text-xs px-2 py-0.5 rounded-md border border-emerald-500/30 text-emerald-600">
-          From repo
+          {t("badgeFromRepo")}
         </span>
       );
     }
@@ -137,9 +143,12 @@ export default function AgentCustomizePage() {
     <div className="p-6 max-w-4xl mx-auto">
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight">Customize</h2>
+          <h2 className="text-2xl font-semibold tracking-tight">{t("title")}</h2>
           <p className="text-sm text-muted-foreground mt-1">
-            Personality, memory, and behavior files for <strong>{agentName}</strong>
+            {t.rich("subtitle", {
+              name: agentName,
+              strong: (chunks) => <strong>{chunks}</strong>,
+            })}
           </p>
         </div>
         <div className="flex gap-2">
@@ -150,11 +159,11 @@ export default function AgentCustomizePage() {
               variant="outline"
               title={
                 active.baseContent
-                  ? "Discard your edits and revert to the file shipped in the repo"
-                  : "Discard your edits (no repo base for this file — tab will become empty)"
+                  ? t("revertTitleWithBase")
+                  : t("revertTitleNoBase")
               }
             >
-              <RotateCcw className="h-4 w-4 mr-2" /> Revert
+              <RotateCcw className="h-4 w-4 mr-2" /> {t("revert")}
             </Button>
           )}
           <Button
@@ -164,11 +173,11 @@ export default function AgentCustomizePage() {
             className={saved ? "border-emerald-500/30 text-emerald-600" : ""}
           >
             {saved ? (
-              <><Check className="h-4 w-4 mr-2" /> Saved</>
+              <><Check className="h-4 w-4 mr-2" /> {t("saved")}</>
             ) : saving ? (
-              <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Saving...</>
+              <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> {tc("saving")}</>
             ) : (
-              <><Save className="h-4 w-4 mr-2" /> Save</>
+              <><Save className="h-4 w-4 mr-2" /> {tc("save")}</>
             )}
           </Button>
         </div>
@@ -176,7 +185,7 @@ export default function AgentCustomizePage() {
 
       {/* Tabs */}
       <div className="flex gap-1 border-b border-border mb-4 overflow-x-auto">
-        {CUSTOMIZE_FILES.map((f) => (
+        {customizeFiles.map((f) => (
           <button
             key={f.name}
             onClick={() => setActiveTab(f.name)}
@@ -201,10 +210,15 @@ export default function AgentCustomizePage() {
         <div className="flex items-center gap-2 mb-2 text-xs text-muted-foreground">
           {sourceBadge(active?.source)}
           {active?.source === "db" && active.baseContent && (
-            <span>Override active — repo base is {active.baseContent.length} chars.</span>
+            <span>{t("overrideActive", { count: active.baseContent.length })}</span>
           )}
           {active?.source === "fs" && (
-            <span>Loaded from <code>{`<agent home>/${activeTab}`}</code>. Editing creates a per-agent override.</span>
+            <span>
+              {t.rich("loadedFromRepo", {
+                path: `<agent home>/${activeTab}`,
+                code: (chunks) => <code>{chunks}</code>,
+              })}
+            </span>
           )}
         </div>
       )}
@@ -227,7 +241,7 @@ export default function AgentCustomizePage() {
         // page usable too: still grows on tall screens, but stops
         // short of "fills the viewport".
         style={{ height: "min(55vh, 480px)", minHeight: 280 }}
-        placeholder={`# ${activeTab}\n\nWrite your content here...`}
+        placeholder={t("editorPlaceholder", { file: activeTab })}
       />
     </div>
   );

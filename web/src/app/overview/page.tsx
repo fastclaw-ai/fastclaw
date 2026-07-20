@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Separator } from "@/components/ui/separator";
 import {
   getStatus,
@@ -20,6 +21,7 @@ import {
 } from "lucide-react";
 
 export default function OverviewPage() {
+  const t = useTranslations("overview");
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [chats, setChats] = useState<number | null>(null);
   const [tools, setTools] = useState<ToolsConfig | null>(null);
@@ -93,9 +95,9 @@ export default function OverviewPage() {
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
       {/* Header */}
       <div>
-        <h2 className="text-2xl font-semibold tracking-tight">Dashboard</h2>
+        <h2 className="text-2xl font-semibold tracking-tight">{t("title")}</h2>
         <p className="text-sm text-muted-foreground mt-1">
-          Monitor your FastClaw gateway
+          {t("subtitle")}
         </p>
       </div>
 
@@ -113,7 +115,7 @@ export default function OverviewPage() {
         {/* Agents */}
         <div className="rounded-lg border border-border bg-card p-5">
           <div className="flex items-center justify-between mb-3">
-            <span className="text-sm text-muted-foreground">Agents</span>
+            <span className="text-sm text-muted-foreground">{t("statAgents")}</span>
             <div className="flex h-8 w-8 items-center justify-center rounded-full bg-violet-500/10">
               <Bot className="h-4 w-4 text-violet-500" />
             </div>
@@ -121,14 +123,14 @@ export default function OverviewPage() {
           <p className="text-3xl font-semibold tracking-tight">
             {status?.agents?.length || 0}
           </p>
-          <p className="text-xs text-muted-foreground mt-1">Active agents</p>
+          <p className="text-xs text-muted-foreground mt-1">{t("statAgentsHint")}</p>
         </div>
 
         {/* Users — admin-only */}
         {isAdmin && (
           <div className="rounded-lg border border-border bg-card p-5">
             <div className="flex items-center justify-between mb-3">
-              <span className="text-sm text-muted-foreground">Users</span>
+              <span className="text-sm text-muted-foreground">{t("statUsers")}</span>
               <div className="flex h-8 w-8 items-center justify-center rounded-full bg-cyan-500/10">
                 <Users className="h-4 w-4 text-cyan-500" />
               </div>
@@ -136,7 +138,7 @@ export default function OverviewPage() {
             <p className="text-3xl font-semibold tracking-tight">
               {status?.users ?? 0}
             </p>
-            <p className="text-xs text-muted-foreground mt-1">Registered</p>
+            <p className="text-xs text-muted-foreground mt-1">{t("statUsersHint")}</p>
           </div>
         )}
 
@@ -144,7 +146,7 @@ export default function OverviewPage() {
         {isAdmin && (
           <div className="rounded-lg border border-border bg-card p-5">
             <div className="flex items-center justify-between mb-3">
-              <span className="text-sm text-muted-foreground">Chats</span>
+              <span className="text-sm text-muted-foreground">{t("statChats")}</span>
               <div className="flex h-8 w-8 items-center justify-center rounded-full bg-amber-500/10">
                 <MessagesSquare className="h-4 w-4 text-amber-500" />
               </div>
@@ -152,7 +154,7 @@ export default function OverviewPage() {
             <p className="text-3xl font-semibold tracking-tight">
               {chats ?? "—"}
             </p>
-            <p className="text-xs text-muted-foreground mt-1">Total sessions</p>
+            <p className="text-xs text-muted-foreground mt-1">{t("statChatsHint")}</p>
           </div>
         )}
 
@@ -160,13 +162,13 @@ export default function OverviewPage() {
         {isAdmin && showChannels && (
           <div className="rounded-lg border border-border bg-card p-5">
             <div className="flex items-center justify-between mb-3">
-              <span className="text-sm text-muted-foreground">Channels</span>
+              <span className="text-sm text-muted-foreground">{t("statChannels")}</span>
               <div className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-500/10">
                 <Radio className="h-4 w-4 text-blue-500" />
               </div>
             </div>
             <p className="text-3xl font-semibold tracking-tight">{channelCount}</p>
-            <p className="text-xs text-muted-foreground mt-1">Connected</p>
+            <p className="text-xs text-muted-foreground mt-1">{t("statChannelsHint")}</p>
           </div>
         )}
 
@@ -179,15 +181,15 @@ export default function OverviewPage() {
           <div className="p-5 pb-3">
             <div className="flex items-center gap-2 mb-1">
               <Brain className="h-4 w-4 text-amber-500" />
-              <h3 className="font-medium">Configuration</h3>
+              <h3 className="font-medium">{t("configTitle")}</h3>
             </div>
             <p className="text-sm text-muted-foreground">
-              Model and tools wired into this gateway
+              {t("configSubtitle")}
             </p>
           </div>
           <div className="px-5 pb-5 space-y-3">
             <div className="flex items-center justify-between">
-              <span className="text-sm text-muted-foreground">Model</span>
+              <span className="text-sm text-muted-foreground">{t("configModel")}</span>
               {status?.provider?.model ? (
                 <code className="text-sm font-mono bg-muted px-2 py-0.5 rounded">
                   {status.provider.model}
@@ -198,11 +200,11 @@ export default function OverviewPage() {
             </div>
             <Separator />
             {toolSummary.length > 0 ? (
-              toolSummary.map((t) => (
-                <div key={t.name} className="space-y-3">
+              toolSummary.map((row) => (
+                <div key={row.name} className="space-y-3">
                   <div className="flex items-center justify-between gap-3">
-                    <span className="text-sm text-muted-foreground">{t.label}</span>
-                    <span className="text-sm truncate">{t.providers}</span>
+                    <span className="text-sm text-muted-foreground">{row.label}</span>
+                    <span className="text-sm truncate">{row.providers}</span>
                   </div>
                   <Separator />
                 </div>
@@ -210,20 +212,20 @@ export default function OverviewPage() {
             ) : (
               <>
                 <div className="flex items-center justify-between">
-                  <span className="text-sm text-muted-foreground">Tools</span>
-                  <span className="text-sm text-muted-foreground">None configured</span>
+                  <span className="text-sm text-muted-foreground">{t("configTools")}</span>
+                  <span className="text-sm text-muted-foreground">{t("configToolsNone")}</span>
                 </div>
                 <Separator />
               </>
             )}
             <div className="flex items-center justify-between gap-3">
-              <span className="text-sm text-muted-foreground">Runtime</span>
+              <span className="text-sm text-muted-foreground">{t("configRuntime")}</span>
               <span className="text-sm truncate">
                 {runtime?.enabled
                   ? `${runtime.backend === "e2b" ? "E2B" : "Docker"}${
                       runtime.image ? ` (${runtime.image})` : ""
                     }`
-                  : "Disabled"}
+                  : t("runtimeDisabled")}
               </span>
             </div>
           </div>
