@@ -477,11 +477,10 @@ func New(env *config.EnvConfig) (*Gateway, error) {
 			}
 		}()
 
-		// IM channels show only the final reply — no per-tool_call
-		// progress messages. Users see a typing indicator (above)
-		// during the run; intermediate "calling X…" lines added too
-		// much noise on multi-tool turns. Web UI subscribes to chat
-		// events directly via HandleWebChatStream and is unaffected.
+		// Most IM channels show only the final reply — no per-tool_call
+		// progress messages. WeCom is the exception: its native stream is
+		// updated from final-provider text chunks below. Web UI subscribes
+		// to chat events directly via HandleWebChatStream and is unaffected.
 
 		// Snapshot the workspace before the turn. The post-turn media
 		// fallback must only attach files created by this turn; sandbox
@@ -500,6 +499,12 @@ func New(env *config.EnvConfig) (*Gateway, error) {
 				ctx = agent.ContextWithStream(ctx, nil, g.store, g.chatEvents, task.OwnerUserID, task.AgentID, sess.SessionKey())
 				webStreamed = true
 			}
+		}
+
+		if task.Message.Channel == "wecom" {
+			reply, streamErr := g.handleWeComTaskStream(ctx, ag, task, workspaceBefore, workspaceSnapshotOK)
+			close(typingDone)
+			return reply, streamErr
 		}
 
 		reply := ag.HandleMessage(ctx, task.Message)
