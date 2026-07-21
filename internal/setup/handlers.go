@@ -1173,6 +1173,10 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	// cancels — at a true turn terminal (`done` / agentDone-without-
 	// continuation / the timeout).
 	defer cancel()
+	// Make this turn stoppable via POST /api/chat/stop. The handle is
+	// per-turn so a stop→resend race can't evict the new turn's entry.
+	stopHandle := s.registerTurnCancel(uid, agentID, req.SessionID, cancel)
+	defer s.unregisterTurnCancel(uid, agentID, req.SessionID, stopHandle)
 	agentCtx = agent.ContextWithStream(agentCtx, nil, s.dataStore, hub, uid, agentID, req.SessionID)
 
 	agentDone := make(chan struct{})
@@ -1395,6 +1399,14 @@ func (s *Server) handleChatSubscribe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	hub := s.chatEventHub()
+	// Snapshot the in-flight turn BEFORE subscribing: any content_delta
+	// published after Subscribe lands in the live channel, so taking
+	// the snapshot first guarantees no delta is both inside the
+	// snapshot text AND replayed live (duplicated text). The reverse
+	// gap — a delta emitted between snapshot and Subscribe is simply
+	// missing — self-heals when the round's `content` seal replaces
+	// the partial text with the full round text client-side.
+	turnPartial, turnActive := hub.TurnSnapshot(uid, agentID, sessionID)
 	// Subscribe BEFORE replay so any event that lands while we're
 	// scanning the DB ends up either in the replayed range OR in the
 	// live channel — never both, never lost.
@@ -1419,6 +1431,20 @@ func (s *Server) handleChatSubscribe(w http.ResponseWriter, r *http.Request) {
 				sinceSeq = rec.Seq
 			}
 		}
+	}
+
+	// A turn is in flight for this session: hand the client the
+	// half-generated text of the current round (content_delta is never
+	// persisted, so replay above cannot contain it) plus a "running"
+	// signal so the UI can attach visibly — typing bubble, Stop button
+	// — instead of sitting silent until the turn's `done`. Sent even
+	// with empty partial text: the running flag alone is information
+	// the client has no other way to get.
+	if turnActive {
+		forwardSyntheticEvent(w, flusher, agent.ChatEvent{
+			Type: "content_snapshot",
+			Data: map[string]any{"content": turnPartial, "running": true},
+		})
 	}
 
 	// Legacy webChan path: cron-fired bus.Outbound messages. Kept until

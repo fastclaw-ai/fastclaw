@@ -6,7 +6,7 @@ import { useAgentIdFromURL } from "@/hooks/use-agent-id";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { fileUrl, getAgent, getAgentKnowledgeFile, getChangedFiles, getChatHistoryWithCursor, getChatSessions, getChatTodo, getMe, getScopePreview, getScopePreviewLogs, getSessionHistory, listAgentFiles, listProjects, renameChatSession, restoreSessionHistory, revealAgentWorkspace, sendChatStream, steerChat, uploadAgentFiles, getSkills, type ChatHistoryMessage, type ChatStreamEvent, type KnowledgeSource, type ScopePreview, type SkillInfo, type TodoItem, type ToolResultMetadata, type WorkspaceFile, type WorkspaceHistoryEntry } from "@/lib/api";
+import { fileUrl, getAgent, getAgentKnowledgeFile, getChangedFiles, getChatHistoryWithCursor, getChatSessions, getChatTodo, getMe, getScopePreview, getScopePreviewLogs, getSessionHistory, listAgentFiles, listProjects, renameChatSession, restoreSessionHistory, revealAgentWorkspace, sendChatStream, steerChat, stopChat, uploadAgentFiles, getSkills, type ChatHistoryMessage, type ChatStreamEvent, type KnowledgeSource, type ScopePreview, type SkillInfo, type TodoItem, type ToolResultMetadata, type WorkspaceFile, type WorkspaceHistoryEntry } from "@/lib/api";
 import { Bot, Send, Copy, Check, Pencil, Wrench, ChevronDown, ChevronRight, Download, X, File, FileText, Folder, FolderSearch, Image as ImageIcon, FileCode, Film, Music, Puzzle, SlidersHorizontal, ShieldCheck, Paperclip, Square, FolderOpen, RefreshCw, Eye, Code2, RotateCcw, ListChecks, Terminal, ExternalLink, MoreHorizontal, PanelLeftClose, PanelLeftOpen, BookOpen } from "lucide-react";
 import Link from "next/link";
 import { ChatMarkdown } from "@/components/chat-markdown";
@@ -512,6 +512,11 @@ export function ChatScreen() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  // A turn is running server-side that THIS tab didn't start (or lost
+  // its POST stream to a refresh): set from subscribe-path signals
+  // (content_snapshot / live deltas / tool events), cleared on `done`.
+  // Drives the Stop button for attached-but-not-sending viewers.
+  const [remoteTurnActive, setRemoteTurnActive] = useState(false);
   // todo.md state for the current session — agent maintains the file,
   // we re-fetch on every write_file/edit_file event that touches
   // todo.md plus once at mount. Empty `items` hides the panel.
@@ -806,6 +811,18 @@ export function ChatScreen() {
     const since = subscribeSinceRef.current;
     const url = `/api/chat/subscribe?agentId=${encodeURIComponent(selectedAgent)}&sessionId=${encodeURIComponent(sessionId)}&since=${since}`;
     const es = new EventSource(url, { withCredentials: true });
+    // Per-connection render state for turns this tab did NOT start (or
+    // whose POST stream it lost to a refresh): mirrors the POST
+    // callback's closure state so an attached viewer sees deltas and
+    // tool activity live instead of a silent screen until `done`.
+    // subStreamId is the delta-accretion bubble of the current round;
+    // subGroupId/subCalls the current tool-group; subSawLive marks that
+    // this connection rendered in-flight turn content and must swap it
+    // for canonical history on `done`.
+    let subStreamId: string | null = null;
+    let subGroupId = "";
+    let subCalls: { id: string; name: string; arguments: string; result?: string; metadata?: ToolResultMetadata }[] = [];
+    let subSawLive = false;
     es.onmessage = (ev) => {
       let data: {
         seq?: number;
@@ -813,6 +830,12 @@ export function ChatScreen() {
         text?: string;
         data?: {
           content?: string;
+          delta?: string;
+          id?: string;
+          name?: string;
+          arguments?: string;
+          result?: string;
+          running?: boolean;
           message?: string;
           metadata?: ToolResultMetadata;
           // subagent_progress fields
@@ -838,21 +861,157 @@ export function ChatScreen() {
         // replies are event-only, so that reload clears the visible
         // answer and makes the send look like it did nothing.
         if (inFlightSendSessionRef.current === sessionId) return;
-        // CAREFUL: do NOT bump maxSeqRef before the switch. This handler
-        // intentionally drops tool_call / tool_result during catch-up
-        // (the post-`done` history reload renders them properly) — but
-        // a pre-switch bump would mark those seqs as "rendered" and the
-        // parallel POST sendChatStream callback would dedup-skip the
-        // very same events when it tries to actually render them. Bump
-        // only inside cases that really took ownership of this seq.
+        // CAREFUL: do NOT bump maxSeqRef before the switch — bump only
+        // inside cases that really took ownership of this seq (claim()).
+        // A pre-switch bump would mark seqs as "rendered" and make the
+        // parallel POST sendChatStream callback dedup-skip events it
+        // still needs to render itself.
         const claim = () => {
           if (seq >= 0) maxSeqRef.current = seq;
         };
         switch (data.type) {
+          case "content_snapshot": {
+            // Synthetic attach event from /api/chat/subscribe: a turn
+            // is in flight. data.content carries the half-generated
+            // text of the current round (deltas are never persisted so
+            // replay can't include it); live deltas append onto it from
+            // here. Empty content still means "running" — surface the
+            // Stop button either way.
+            subSawLive = true;
+            setRemoteTurnActive(true);
+            const text = data.data?.content || "";
+            if (text) {
+              const id = `sub-a-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+              subStreamId = id;
+              setMessages((prev) => [
+                ...prev,
+                { id, role: "agent", content: text, timestamp: Date.now() },
+              ]);
+            }
+            break;
+          }
+          case "content_delta": {
+            // Live token chunk of an in-flight turn (always seq=-1 —
+            // deltas are never persisted). Renders only when no POST
+            // stream owns this session (the guard above returned
+            // otherwise), i.e. exactly the re-attached / other-tab case.
+            const delta = data.data?.delta || "";
+            if (!delta) break;
+            subSawLive = true;
+            setRemoteTurnActive(true);
+            if (subCalls.length > 0 && !subStreamId) {
+              // Text after tool calls = new round; the finished group
+              // stays as its own message.
+              subGroupId = "";
+              subCalls = [];
+            }
+            if (!subStreamId) {
+              const id = `sub-a-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+              subStreamId = id;
+              setMessages((prev) => [
+                ...prev,
+                { id, role: "agent", content: delta, timestamp: Date.now() },
+              ]);
+            } else {
+              const id = subStreamId;
+              setMessages((prev) => {
+                const idx = prev.findIndex((m) => m.id === id);
+                if (idx < 0) return prev;
+                const updated = [...prev];
+                updated[idx] = { ...updated[idx], content: (updated[idx].content || "") + delta };
+                return updated;
+              });
+            }
+            break;
+          }
+          case "tool_call": {
+            // Render tool activity live for attached viewers instead of
+            // dropping it until the post-`done` history reload — the
+            // old behavior made a re-attached tab sit silent through
+            // tool-heavy turns, then dump everything at once.
+            claim();
+            subSawLive = true;
+            setRemoteTurnActive(true);
+            // Next round's deltas open a fresh bubble.
+            subStreamId = null;
+            if (subCalls.length > 0 && subCalls.every((c) => c.result !== undefined)) {
+              subGroupId = "";
+              subCalls = [];
+            }
+            if (!subGroupId) {
+              subGroupId = `sub-tg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+            }
+            subCalls.push({
+              id: data.data?.id || "",
+              name: data.data?.name || "",
+              arguments: data.data?.arguments || "{}",
+            });
+            {
+              const groupId = subGroupId;
+              const calls = [...subCalls];
+              setMessages((prev) => {
+                const idx = prev.findIndex((m) => m.id === groupId);
+                if (idx >= 0) {
+                  const updated = [...prev];
+                  updated[idx] = { ...updated[idx], toolCalls: calls };
+                  return updated;
+                }
+                return [
+                  ...prev,
+                  { id: groupId, role: "tool-group" as const, content: "", timestamp: Date.now(), toolCalls: calls },
+                ];
+              });
+            }
+            break;
+          }
+          case "tool_result": {
+            claim();
+            subSawLive = true;
+            const tc = subCalls.find((c) => c.id === (data.data?.id || ""));
+            if (tc) {
+              tc.result = data.data?.result || "";
+              if (data.data?.metadata) tc.metadata = data.data.metadata;
+            }
+            if (!subGroupId) break;
+            {
+              const groupId = subGroupId;
+              const calls = [...subCalls];
+              setMessages((prev) => {
+                const idx = prev.findIndex((m) => m.id === groupId);
+                if (idx < 0) return prev;
+                const updated = [...prev];
+                updated[idx] = { ...updated[idx], toolCalls: calls };
+                return updated;
+              });
+            }
+            break;
+          }
           case "content": {
             const content = data.data?.content || "";
             const meta = data.data?.metadata;
             if (!content && !meta) break;
+            // Seal the delta-accretion bubble: the round's `content`
+            // carries the full final text, and the bubble may hold a
+            // truncated prefix (snapshot taken mid-round misses deltas
+            // emitted before attach). REPLACE, don't append — appending
+            // would duplicate every delta already rendered.
+            if (subStreamId) {
+              const id = subStreamId;
+              subStreamId = null;
+              claim();
+              setMessages((prev) => {
+                const idx = prev.findIndex((m) => m.id === id);
+                if (idx < 0) return prev;
+                const updated = [...prev];
+                updated[idx] = {
+                  ...updated[idx],
+                  content: content || updated[idx].content,
+                  metadata: meta ? { ...updated[idx].metadata, ...meta } : updated[idx].metadata,
+                };
+                return updated;
+              });
+              break;
+            }
             // The active POST sendChatStream is rendering this turn
             // via content_delta into streamingMsgIdRef. Both
             // subscriptions sit on the same hub, so the `content`
@@ -935,23 +1094,27 @@ export function ChatScreen() {
           }
           case "done": {
             claim();
+            setRemoteTurnActive(false);
             // Defensive clear — content events should already have
             // sealed the streaming bubble, but a turn that errors out
             // before the trailing `content` event lands would leave
             // the ref dangling and cause the next turn's first
             // content_delta to write into the stale id.
             streamingMsgIdRef.current = null;
-            // Only reload history when we actually built a transient
-            // bubble from subscribe-replayed content events (i.e. the
-            // user reloaded mid-turn and we need to swap the
-            // placeholder for the canonical message saved in
-            // session_messages). When the active POST stream rendered
-            // the turn directly, transient bubble is null — a reload
-            // here would clobber any rendered error bubbles too,
-            // because LLM-error turns never write an assistant
-            // message to session_messages.
-            if (transientBubbleIdRef.current) {
+            // Reload history when this connection rendered any live /
+            // transient content for the turn (delta bubbles, tool
+            // groups, replayed-content placeholder): the reload swaps
+            // them for the canonical messages in session_messages.
+            // When the active POST stream rendered the turn directly,
+            // both flags are unset — a reload here would clobber any
+            // rendered error bubbles too, because LLM-error turns
+            // never write an assistant message to session_messages.
+            if (transientBubbleIdRef.current || subSawLive) {
               transientBubbleIdRef.current = null;
+              subSawLive = false;
+              subStreamId = null;
+              subGroupId = "";
+              subCalls = [];
               getChatHistoryWithCursor(selectedAgent, sessionId)
                 .then(({ history, latestEventSeq }) => {
                   if (latestEventSeq > maxSeqRef.current) maxSeqRef.current = latestEventSeq;
@@ -971,9 +1134,6 @@ export function ChatScreen() {
             }
             break;
           }
-          // tool_call / tool_result during catch-up are skipped here —
-          // the next history reload (on `done`) will render them
-          // properly via buildChatMessages.
         }
         return;
       }
@@ -996,6 +1156,7 @@ export function ChatScreen() {
       // keep flapping but is harmless.
     };
     return () => {
+      setRemoteTurnActive(false);
       es.close();
     };
   }, [selectedAgent, sessionId, loadedSessionId]);
@@ -1793,9 +1954,26 @@ export function ChatScreen() {
     }
   }, [input, attachments, selectedAgent, sessionId, sending, isReadOnlyView, isReadOnlySafeSlashCommand, loadSessions, pathname, router, urlProjectId]);
 
+  // Stop = cancel the turn server-side (POST /api/chat/stop), THEN
+  // abort the local fetch. The local abort alone no longer stops
+  // anything — the stream handler deliberately keeps the agent running
+  // when the client drops (that's the detach fix) — so without the
+  // server call this button would only stop the *display*. The abort
+  // still runs afterwards (and as the fallback when no stoppable turn
+  // was registered, e.g. IM/cron-started turns) so the composer resets
+  // immediately instead of waiting for the terminal events.
   const handleStop = useCallback(() => {
+    const agentId = selectedAgent;
+    const sid = sessionId;
+    setRemoteTurnActive(false);
+    if (agentId && sid) {
+      stopChat(agentId, sid)
+        .catch(() => {})
+        .finally(() => abortRef.current?.abort());
+      return;
+    }
     abortRef.current?.abort();
-  }, []);
+  }, [selectedAgent, sessionId]);
 
   // handleSteer fires while a turn is streaming: it buffers the message
   // into the running turn (the agent folds it in between tool rounds and
@@ -2539,7 +2717,7 @@ export function ChatScreen() {
                         </div>
                       )}
                     </div>
-                    {sending ? (
+                    {sending || remoteTurnActive ? (
                       <Button
                         onClick={handleStop}
                         size="icon"
@@ -2604,7 +2782,7 @@ export function ChatScreen() {
                     className="flex-1 resize-none bg-transparent text-[15px] leading-8 placeholder:text-muted-foreground/50 outline-none disabled:opacity-50"
                     style={{ maxHeight: 200, minHeight: 32 }}
                   />
-                  {sending ? (
+                  {sending || remoteTurnActive ? (
                     <Button
                       onClick={handleStop}
                       size="icon"

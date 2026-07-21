@@ -3,6 +3,7 @@ package agent
 import (
 	"sync"
 	"testing"
+	"time"
 )
 
 // TestEventHubPublishUnsubscribeRace hammers Publish concurrently with
@@ -61,5 +62,65 @@ func TestEventHubPublishUnsubscribeRace(t *testing.T) {
 	defer hub.mu.Unlock()
 	if got := len(hub.subs["u/a/s"]); got != 0 {
 		t.Fatalf("expected no lingering subscribers, got %d", got)
+	}
+}
+
+// TestTurnSnapshotLifecycle covers the in-flight turn tracking that
+// backs the subscribe handler's content_snapshot event: deltas
+// accumulate, a content seal clears the partial, done ends the turn.
+func TestTurnSnapshotLifecycle(t *testing.T) {
+	hub := NewEventHub()
+
+	// No events yet → no active turn.
+	if _, active := hub.TurnSnapshot("u", "a", "s"); active {
+		t.Fatal("expected inactive turn before any publish")
+	}
+
+	pub := func(evt ChatEvent) { hub.Publish("u", "a", "s", EventEnvelope{Seq: -1, Event: evt}) }
+
+	pub(ChatEvent{Type: "content_delta", Data: map[string]any{"delta": "Hel"}})
+	pub(ChatEvent{Type: "content_delta", Data: map[string]any{"delta": "lo"}})
+	partial, active := hub.TurnSnapshot("u", "a", "s")
+	if !active || partial != "Hello" {
+		t.Fatalf("expected active turn with partial %q, got active=%v partial=%q", "Hello", active, partial)
+	}
+
+	// Round seal clears the partial but the turn stays active.
+	pub(ChatEvent{Type: "content", Data: map[string]any{"content": "Hello"}})
+	partial, active = hub.TurnSnapshot("u", "a", "s")
+	if !active || partial != "" {
+		t.Fatalf("expected active turn with empty partial after seal, got active=%v partial=%q", active, partial)
+	}
+
+	// Tool activity keeps the turn active with no partial change.
+	pub(ChatEvent{Type: "tool_call", Data: map[string]any{"name": "exec"}})
+	if _, active = hub.TurnSnapshot("u", "a", "s"); !active {
+		t.Fatal("expected turn active during tool round")
+	}
+
+	// done terminates the turn and drops the state entry.
+	pub(ChatEvent{Type: "done"})
+	if _, active = hub.TurnSnapshot("u", "a", "s"); active {
+		t.Fatal("expected inactive turn after done")
+	}
+	hub.mu.RLock()
+	_, leaked := hub.turns["u/a/s"]
+	hub.mu.RUnlock()
+	if leaked {
+		t.Fatal("expected turn state entry removed after done")
+	}
+}
+
+// TestTurnSnapshotStaleness: a turn whose last event is older than
+// turnStaleAfter no longer reports active (crash / timeout without a
+// terminal done).
+func TestTurnSnapshotStaleness(t *testing.T) {
+	hub := NewEventHub()
+	hub.Publish("u", "a", "s", EventEnvelope{Seq: -1, Event: ChatEvent{Type: "content_delta", Data: map[string]any{"delta": "x"}}})
+	hub.mu.Lock()
+	hub.turns["u/a/s"].lastEvent = time.Now().Add(-turnStaleAfter - time.Minute)
+	hub.mu.Unlock()
+	if _, active := hub.TurnSnapshot("u", "a", "s"); active {
+		t.Fatal("expected stale turn to report inactive")
 	}
 }

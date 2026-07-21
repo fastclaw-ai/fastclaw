@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"sync"
+	"time"
 )
 
 // EventEnvelope is a ChatEvent stamped with the persistent seq the
@@ -25,11 +26,35 @@ type EventEnvelope struct {
 type EventHub struct {
 	mu   sync.RWMutex
 	subs map[string][]chan EventEnvelope
+	// turns tracks the in-flight turn per (user, agent, session):
+	// whether one is running and the partial text of the current
+	// round accumulated from content_delta events. content_delta is
+	// deliberately never persisted (see emitEvent), so a client that
+	// attaches mid-round has no way to recover the half-generated
+	// text from session_events — this buffer is what the subscribe
+	// handler snapshots into a synthetic `content_snapshot` event on
+	// attach. Entries are dropped on `done`; turnStaleAfter guards
+	// against turns that died without one (process kill, timeout path).
+	turns map[string]*turnState
 }
+
+type turnState struct {
+	partial   string
+	lastEvent time.Time
+}
+
+// turnStaleAfter bounds how long a turn with no terminal `done` event
+// still counts as active. Slightly above the chat handler's 45-minute
+// agentTurnTimeout so a legitimately long turn is never declared dead
+// while it can still emit.
+const turnStaleAfter = 50 * time.Minute
 
 // NewEventHub returns an empty hub.
 func NewEventHub() *EventHub {
-	return &EventHub{subs: make(map[string][]chan EventEnvelope)}
+	return &EventHub{
+		subs:  make(map[string][]chan EventEnvelope),
+		turns: make(map[string]*turnState),
+	}
 }
 
 // Subscribe registers a buffered channel for one (user, agent,
@@ -78,12 +103,55 @@ func (h *EventHub) Publish(userID, agentID, sessionKey string, env EventEnvelope
 	key := hubKey(userID, agentID, sessionKey)
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.trackTurnLocked(key, env.Event)
 	for _, ch := range h.subs[key] {
 		select {
 		case ch <- env:
 		default:
 		}
 	}
+}
+
+// trackTurnLocked updates the in-flight turn state for one published
+// event. Caller must hold h.mu.
+func (h *EventHub) trackTurnLocked(key string, evt ChatEvent) {
+	if evt.Type == "done" {
+		delete(h.turns, key)
+		return
+	}
+	st := h.turns[key]
+	if st == nil {
+		st = &turnState{}
+		h.turns[key] = st
+	}
+	st.lastEvent = time.Now()
+	switch evt.Type {
+	case "content_delta":
+		if d, _ := evt.Data["delta"].(string); d != "" {
+			st.partial += d
+		}
+	case "content":
+		// Round sealed — the full text is persisted now, so the
+		// partial buffer would only duplicate it on the next attach.
+		st.partial = ""
+	}
+}
+
+// TurnSnapshot reports whether a turn is currently in flight for the
+// (user, agent, session) tuple and the partial text of its current
+// round (accumulated content_delta chunks not yet sealed by a
+// `content` event). Used by the subscribe handler to give a client
+// that attaches mid-turn the half-generated text plus a "something is
+// running" signal, neither of which exists in session_events.
+func (h *EventHub) TurnSnapshot(userID, agentID, sessionKey string) (partial string, active bool) {
+	key := hubKey(userID, agentID, sessionKey)
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	st := h.turns[key]
+	if st == nil || time.Since(st.lastEvent) > turnStaleAfter {
+		return "", false
+	}
+	return st.partial, true
 }
 
 func hubKey(userID, agentID, sessionKey string) string {
