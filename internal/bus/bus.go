@@ -307,7 +307,15 @@ func (r *redisBridge) publishOutbound(ctx context.Context) {
 				deliver(ctx, r.outboundLocal, msg)
 				continue
 			}
-			if err := r.xadd(ctx, r.outboundKey, msg); err != nil {
+			stream := r.outboundKey
+			if targetedOutboundChannel(msg.Channel) {
+				if msg.AccountID == "" {
+					slog.Error("redis targeted outbound missing account", "channel", msg.Channel)
+					continue
+				}
+				stream = targetedOutboundKey(r.prefix, msg.Channel, msg.AccountID)
+			}
+			if err := r.xadd(ctx, stream, msg); err != nil {
 				slog.Error("redis outbound enqueue failed", "channel", msg.Channel, "account", msg.AccountID, "error", err)
 			}
 		}
