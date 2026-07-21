@@ -241,6 +241,111 @@ type connectTelegramRequest struct {
 	BotToken string `json:"botToken"`
 }
 
+type connectWeComRequest struct {
+	BotID  string `json:"botId"`
+	Secret string `json:"secret"`
+}
+
+// handleConnectAgentWeCom validates an Intelligent Bot credential pair,
+// persists it under the stable Bot ID, and starts its authenticated
+// WebSocket immediately. Secrets are never returned to the caller.
+func (s *Server) handleConnectAgentWeCom(w http.ResponseWriter, r *http.Request) {
+	if !s.requireWritable(w, r) {
+		return
+	}
+	agentID := r.PathValue("id")
+	userID, resolvedAgentID, ok := s.resolveChannelBindingScope(w, r, agentID)
+	if !ok {
+		return
+	}
+
+	var req connectWeComRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	botID := strings.TrimSpace(req.BotID)
+	secret := strings.TrimSpace(req.Secret)
+	if botID == "" {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "botId required"})
+		return
+	}
+	if secret == "" {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "secret required"})
+		return
+	}
+
+	validator := s.weComValidateCredentials
+	if validator == nil {
+		validator = channels.WeComValidateCredentials
+	}
+	validationCtx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	if err := validator(validationCtx, botID, secret); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+
+	// Bot ID is the global routing identity for this persistent socket.
+	// Never let SaveChannel's upsert silently move it between users/agents.
+	if existing, err := s.dataStore.LookupChannel(r.Context(), "wecom", botID); err == nil && existing != nil {
+		jsonResponse(w, http.StatusConflict, map[string]any{
+			"error": "this WeCom Bot ID is already connected — disconnect it first",
+		})
+		return
+	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+
+	cc := config.ChannelConfig{
+		Enabled: true,
+		Accounts: map[string]config.AccountConfig{
+			botID: {BotToken: secret},
+		},
+	}
+	if err := s.saveChannelRecord(r.Context(), userID, resolvedAgentID, "wecom", botID, true, cc); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	if err := s.appendBinding(r, "", "", config.Binding{
+		AgentID: agentID,
+		Match:   config.Match{Channel: "wecom", AccountID: botID},
+	}); err != nil {
+		if stored, lookupErr := s.dataStore.LookupChannel(r.Context(), "wecom", botID); lookupErr == nil && stored != nil {
+			_ = s.dataStore.DeleteChannel(r.Context(), stored.ID)
+		}
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+
+	stored, err := s.dataStore.LookupChannel(r.Context(), "wecom", botID)
+	if err != nil || stored == nil {
+		if err == nil {
+			err = errors.New("saved WeCom channel could not be loaded")
+		}
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	stored.SharedIdentity = false
+	if err := s.dataStore.SaveChannel(r.Context(), stored); err != nil {
+		_ = s.dataStore.DeleteChannel(r.Context(), stored.ID)
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+
+	s.invalidateOwner(userID, resolvedAgentID)
+	if err := s.tryHotRegisterChannelRecord(*stored); err != nil {
+		_ = s.dataStore.DeleteChannel(r.Context(), stored.ID)
+		_ = s.removeBinding(r, "", "", agentID, "wecom", botID)
+		s.invalidateOwner(userID, resolvedAgentID)
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]any{"ok": true, "botId": botID})
+}
+
 // handleConnectAgentTelegram validates the bot token by hitting
 // Telegram's getMe, then persists a kind=channel + binding pair scoped
 // to this agent and hot-starts the adapter so the bot starts polling
@@ -365,7 +470,14 @@ func (s *Server) handleUpdateAgentChannel(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if req.SharedIdentity != nil {
+	if channelType == "wecom" {
+		if req.SharedIdentity != nil && *req.SharedIdentity {
+			jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "shared identity is not supported for WeCom"})
+			return
+		}
+		// Heal any legacy or hand-edited row while accepting an explicit false.
+		target.SharedIdentity = false
+	} else if req.SharedIdentity != nil {
 		target.SharedIdentity = *req.SharedIdentity
 	}
 	if err := s.dataStore.SaveChannel(r.Context(), target); err != nil {

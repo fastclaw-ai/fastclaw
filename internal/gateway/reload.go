@@ -122,10 +122,8 @@ func (g *Gateway) RegisterChannel(rec store.ChannelRecord) error {
 	return registerChannelFromRecord(rec, g.bus, g.chanMgr, g.store, true)
 }
 
-// UnregisterChannel removes a channel from the routing table. Note:
-// the bot's polling goroutine is left to die when the root ctx ends —
-// see channels.Manager.Unregister for why. Inbound messages stop
-// routing to the agent the moment the binding row is deleted.
+// UnregisterChannel removes a channel from the routing table and cancels the
+// adapter's active child context. Inbound routing stops immediately.
 func (g *Gateway) UnregisterChannel(channelType, accountID string) {
 	if g.chanMgr == nil {
 		return

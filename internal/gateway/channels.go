@@ -41,6 +41,9 @@ func (s storeLeaser) Release(ctx context.Context, channel, accountID, holderID s
 // RegisterAndStart so a freshly-saved bot starts receiving updates
 // without restarting the process.
 func registerChannelInstance(rec store.ConfigRecord, mb *bus.MessageBus, chanMgr *channels.Manager, st store.Store, hot bool) error {
+	if !rec.Enabled {
+		return nil
+	}
 	cc := decodeChannelConfig(rec)
 	switch rec.Name {
 	case "telegram":
@@ -55,6 +58,8 @@ func registerChannelInstance(rec store.ConfigRecord, mb *bus.MessageBus, chanMgr
 		return registerWeChatChannels(rec, cc, mb, chanMgr, st, hot)
 	case "feishu":
 		return registerFeishuChannels(cc, mb, chanMgr, hot)
+	case "wecom":
+		return registerWeComChannels(cc, mb, chanMgr, hot)
 	}
 	return nil
 }
@@ -62,6 +67,9 @@ func registerChannelInstance(rec store.ConfigRecord, mb *bus.MessageBus, chanMgr
 // registerChannelFromRecord starts a channel adapter from a ChannelRecord.
 // This is the new-table equivalent of registerChannelInstance.
 func registerChannelFromRecord(rec store.ChannelRecord, mb *bus.MessageBus, chanMgr *channels.Manager, st store.Store, hot bool) error {
+	if !rec.Enabled {
+		return nil
+	}
 	cc := decodeChannelFromRecord(rec)
 	switch rec.Type {
 	case "telegram":
@@ -77,6 +85,8 @@ func registerChannelFromRecord(rec store.ChannelRecord, mb *bus.MessageBus, chan
 		return registerWeChatChannels(cfgRec, cc, mb, chanMgr, st, hot)
 	case "feishu":
 		return registerFeishuChannels(cc, mb, chanMgr, hot)
+	case "wecom":
+		return registerWeComChannels(cc, mb, chanMgr, hot)
 	}
 	return nil
 }
@@ -283,6 +293,28 @@ func registerFeishuChannels(chCfg config.ChannelConfig, mb *bus.MessageBus, chan
 	return nil
 }
 
+func registerWeComChannels(chCfg config.ChannelConfig, mb *bus.MessageBus, chanMgr *channels.Manager, hot bool) error {
+	// WeCom Intelligent Bots use one authenticated WebSocket per Bot ID.
+	// The account map key is therefore both the platform Bot ID and the
+	// stable routing account ID persisted in the channels table.
+	for botID, acct := range chCfg.Accounts {
+		secret := acct.BotToken
+		if secret == "" {
+			secret = chCfg.BotToken
+		}
+		wc, err := channels.NewWeCom(channels.WeComOptions{
+			BotID:     botID,
+			Secret:    secret,
+			AccountID: botID,
+		}, mb)
+		if err != nil {
+			return err
+		}
+		registerSingleton(chanMgr, wc, hot)
+	}
+	return nil
+}
+
 func registerWeChatChannels(rec store.ConfigRecord, chCfg config.ChannelConfig, mb *bus.MessageBus, chanMgr *channels.Manager, st store.Store, hot bool) error {
 	// WeChat is multi-account by design — every QR scan mints a new
 	// (botToken, ilink_user_id, baseURL) triple keyed under a fresh
@@ -361,4 +393,3 @@ func purgeWeChatAccount(st store.Store, rowID, deadAccount string) error {
 	rec.Data = data
 	return st.SaveConfig(ctx, rec)
 }
-

@@ -672,23 +672,27 @@ func (s *Server) invalidateScope(sc, scopeID string) {
 	}
 }
 
-// hotRegisterChannel asks the gateway to start the channel adapter for
-// `rec` immediately. Best-effort — no-op when the resolver doesn't
-// implement the hook (e.g. in tests with a stub resolver).
-func (s *Server) hotRegisterChannel(rec store.ConfigRecord) {
+// tryHotRegisterChannel asks the gateway to start the channel adapter for
+// `rec` immediately. A missing optional hook is a successful no-op.
+func (s *Server) tryHotRegisterChannel(rec store.ConfigRecord) error {
 	if s.userResolver == nil {
-		return
+		return nil
 	}
 	type chanRegistrar interface {
 		RegisterChannelFromConfig(rec store.ConfigRecord) error
 	}
 	if r, ok := s.userResolver.(chanRegistrar); ok {
-		if err := r.RegisterChannelFromConfig(rec); err != nil {
-			// Don't fail the request — the row is saved, the next
-			// process restart will pick it up. But surface the error
-			// in logs so an obviously-broken bot token is debuggable.
-			slog.Warn("hot-register channel failed", "type", rec.Name, "error", err)
-		}
+		return r.RegisterChannelFromConfig(rec)
+	}
+	return nil
+}
+
+// hotRegisterChannel preserves the best-effort behavior used by existing
+// channel handlers. New flows that require atomic persistence + startup call
+// tryHotRegisterChannel directly and roll back on failure.
+func (s *Server) hotRegisterChannel(rec store.ConfigRecord) {
+	if err := s.tryHotRegisterChannel(rec); err != nil {
+		slog.Warn("hot-register channel failed", "type", rec.Name, "error", err)
 	}
 }
 
@@ -696,18 +700,15 @@ func (s *Server) hotRegisterChannel(rec store.ConfigRecord) {
 // from a ChannelRecord. Best-effort — falls back to hotRegisterChannel
 // via a synthesized ConfigRecord when the resolver doesn't implement the
 // new interface (e.g. older test stubs).
-func (s *Server) hotRegisterChannelRecord(rec store.ChannelRecord) {
+func (s *Server) tryHotRegisterChannelRecord(rec store.ChannelRecord) error {
 	if s.userResolver == nil {
-		return
+		return nil
 	}
 	type chanRecordRegistrar interface {
 		RegisterChannel(rec store.ChannelRecord) error
 	}
 	if r, ok := s.userResolver.(chanRecordRegistrar); ok {
-		if err := r.RegisterChannel(rec); err != nil {
-			slog.Warn("hot-register channel record failed", "type", rec.Type, "error", err)
-		}
-		return
+		return r.RegisterChannel(rec)
 	}
 	// Fallback: synthesize a ConfigRecord for legacy resolvers.
 	cfgRec := store.ConfigRecord{
@@ -722,7 +723,13 @@ func (s *Server) hotRegisterChannelRecord(rec store.ChannelRecord) {
 		CreatedAt:     rec.CreatedAt,
 		UpdatedAt:     rec.UpdatedAt,
 	}
-	s.hotRegisterChannel(cfgRec)
+	return s.tryHotRegisterChannel(cfgRec)
+}
+
+func (s *Server) hotRegisterChannelRecord(rec store.ChannelRecord) {
+	if err := s.tryHotRegisterChannelRecord(rec); err != nil {
+		slog.Warn("hot-register channel record failed", "type", rec.Type, "error", err)
+	}
 }
 
 // hotUnregisterChannel — paired with hotRegisterChannel for delete paths.
