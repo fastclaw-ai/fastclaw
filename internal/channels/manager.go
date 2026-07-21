@@ -36,6 +36,12 @@ type Manager struct {
 	// Captured by Start so RegisterAndStart can hot-launch goroutines for
 	// channels added after the initial bootstrap. nil until Start runs.
 	rootCtx context.Context
+	// runCancels owns the child context for the currently running adapter at
+	// each channel key. Replacing or unregistering a persistent adapter must
+	// cancel that child without stopping the rest of the manager.
+	runCancels     map[string]context.CancelFunc
+	runGenerations map[string]uint64
+	nextGeneration uint64
 }
 
 // NewManager creates a new channel manager with no cross-process
@@ -54,12 +60,14 @@ func NewManagerWithLeaser(mb *bus.MessageBus, leaser Leaser, holderID string) *M
 		leaser = NopLeaser{}
 	}
 	return &Manager{
-		channels:  make(map[string]Channel),
-		singleton: make(map[string]struct{}),
-		tgTokens:  make(map[string]struct{}),
-		bus:       mb,
-		leaser:    leaser,
-		holderID:  holderID,
+		channels:       make(map[string]Channel),
+		singleton:      make(map[string]struct{}),
+		tgTokens:       make(map[string]struct{}),
+		bus:            mb,
+		leaser:         leaser,
+		holderID:       holderID,
+		runCancels:     make(map[string]context.CancelFunc),
+		runGenerations: make(map[string]uint64),
 	}
 }
 
@@ -128,38 +136,33 @@ func (m *Manager) registerAndStart(ch Channel, singleton bool) {
 	m.channels[key] = ch
 	if singleton {
 		m.singleton[key] = struct{}{}
+	} else {
+		delete(m.singleton, key)
 	}
 	ctx := m.rootCtx
-	leaser := m.leaser
-	holderID := m.holderID
 	m.mu.Unlock()
 	if ctx == nil {
 		return
 	}
-	go func() {
-		slog.Info("hot-starting channel", "key", key, "singleton", singleton)
-		if singleton {
-			runWithLease(ctx, ch, leaser, holderID)
-			return
-		}
-		if err := ch.Start(ctx); err != nil {
-			slog.Error("channel stopped with error", "key", key, "error", err)
-		}
-	}()
+	go m.startChannel(ctx, key, ch, singleton, "hot-starting channel")
 }
 
-// Unregister removes a channel from the routing table. The channel's
-// own Start goroutine doesn't get cancelled here — it'll exit when the
-// root ctx ends. For now this just stops outbound routing; the bot
-// adapter's polling loop is left alone (Telegram's GetUpdatesChan
-// can't be cancelled mid-poll without tearing the whole manager down).
-// Good enough for delete-from-UI: the next process restart starts
-// clean and the binding is gone from DB so inbound messages no longer
-// route to the agent.
+// Unregister removes a channel from the routing table and cancels its active
+// adapter. Telegram token claims intentionally remain sticky for the process
+// lifetime because the Telegram polling implementation cannot safely reuse a
+// token after an interrupted poll.
 func (m *Manager) Unregister(channelType, accountID string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	delete(m.channels, channelKey(channelType, accountID))
+	key := channelKey(channelType, accountID)
+	delete(m.channels, key)
+	delete(m.singleton, key)
+	cancel := m.runCancels[key]
+	delete(m.runCancels, key)
+	delete(m.runGenerations, key)
+	m.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 // Start launches all channels and the outbound message router.
@@ -172,8 +175,6 @@ func (m *Manager) Start(ctx context.Context) {
 		chans[k] = v
 		_, singletons[k] = m.singleton[k]
 	}
-	leaser := m.leaser
-	holderID := m.holderID
 	m.mu.Unlock()
 
 	var wg sync.WaitGroup
@@ -191,18 +192,47 @@ func (m *Manager) Start(ctx context.Context) {
 		wg.Add(1)
 		go func(k string, c Channel, s bool) {
 			defer wg.Done()
-			slog.Info("starting channel", "key", k, "singleton", s)
-			if s {
-				runWithLease(ctx, c, leaser, holderID)
-				return
-			}
-			if err := c.Start(ctx); err != nil {
-				slog.Error("channel stopped with error", "key", k, "error", err)
-			}
+			m.startChannel(ctx, k, c, s, "starting channel")
 		}(key, ch, singleton)
 	}
 
 	wg.Wait()
+}
+
+func (m *Manager) startChannel(parent context.Context, key string, ch Channel, singleton bool, logMessage string) {
+	ctx, cancel := context.WithCancel(parent)
+
+	m.mu.Lock()
+	previous := m.runCancels[key]
+	m.nextGeneration++
+	generation := m.nextGeneration
+	m.runCancels[key] = cancel
+	m.runGenerations[key] = generation
+	leaser := m.leaser
+	holderID := m.holderID
+	m.mu.Unlock()
+
+	if previous != nil {
+		previous()
+	}
+	defer func() {
+		cancel()
+		m.mu.Lock()
+		if m.runGenerations[key] == generation {
+			delete(m.runCancels, key)
+			delete(m.runGenerations, key)
+		}
+		m.mu.Unlock()
+	}()
+
+	slog.Info(logMessage, "key", key, "singleton", singleton)
+	if singleton {
+		runWithLease(ctx, ch, leaser, holderID)
+		return
+	}
+	if err := ch.Start(ctx); err != nil {
+		slog.Error("channel stopped with error", "key", key, "error", err)
+	}
 }
 
 func (m *Manager) routeOutbound(ctx context.Context) {
