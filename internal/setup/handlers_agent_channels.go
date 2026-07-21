@@ -34,7 +34,7 @@ import (
 type channelOut struct {
 	Type           string `json:"type"`
 	AccountID      string `json:"accountId"`
-	BotUsername     string `json:"botUsername,omitempty"`
+	BotUsername    string `json:"botUsername,omitempty"`
 	BotToken       string `json:"botToken"` // masked
 	Enabled        bool   `json:"enabled"`
 	SharedIdentity bool   `json:"sharedIdentity"`
@@ -225,7 +225,7 @@ func flattenChannelRecords(rows []store.ChannelRecord, source string) []channelO
 			out = append(out, channelOut{
 				Type:           rec.Type,
 				AccountID:      accountID,
-				BotUsername:     accountID,
+				BotUsername:    accountID,
 				BotToken:       maskAPIKey(tok),
 				Enabled:        rec.Enabled,
 				SharedIdentity: rec.SharedIdentity,
@@ -1347,11 +1347,11 @@ func (s *Server) handleConnectAgentLINE(w http.ResponseWriter, r *http.Request) 
 		s.hotRegisterChannelRecord(*ch)
 	}
 	jsonResponse(w, http.StatusOK, map[string]any{
-		"ok":          true,
-		"botUserId":   userID,
-		"botName":     displayName,
-		"basicId":     basicID,
-		"webhookUrl":  lineWebhookPathFor(r, userID),
+		"ok":         true,
+		"botUserId":  userID,
+		"botName":    displayName,
+		"basicId":    basicID,
+		"webhookUrl": lineWebhookPathFor(r, userID),
 	})
 }
 
