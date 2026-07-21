@@ -278,6 +278,92 @@ func TestWeComRevokedCredentialsStopAuthRetry(t *testing.T) {
 	}
 }
 
+func TestWeComMapsDirectText(t *testing.T) {
+	w, mb := newInboundTestWeCom(t)
+	frame := weComCallbackTestFrame("callback-1", map[string]any{
+		"msgid": "msg-1", "aibotid": "bot-1", "chattype": "single",
+		"from":    map[string]string{"userid": "member-1"},
+		"msgtype": "text", "text": map[string]string{"content": "hello"},
+	})
+	if err := w.handleCallbackFrame(context.Background(), frame); err != nil {
+		t.Fatal(err)
+	}
+	got := waitInboundMessage(t, mb)
+	if got.Channel != "wecom" || got.AccountID != "bot-1" || got.ChatID != "member-1" || got.UserID != "member-1" {
+		t.Fatalf("direct identity = %#v", got)
+	}
+	if got.PeerKind != "dm" || got.MessageID != "msg-1" || got.Text != "hello" || got.SharedIdentity {
+		t.Fatalf("direct message = %#v", got)
+	}
+}
+
+func TestWeComMapsAddressedGroupToSharedChatWithSenderIdentity(t *testing.T) {
+	w, mb := newInboundTestWeCom(t)
+	frame := weComCallbackTestFrame("callback-9", map[string]any{
+		"msgid": "msg-9", "aibotid": "bot-1", "chatid": "group-1", "chattype": "group",
+		"from":    map[string]string{"userid": "member-7"},
+		"msgtype": "text", "text": map[string]string{"content": "group question"},
+	})
+	if err := w.handleCallbackFrame(context.Background(), frame); err != nil {
+		t.Fatal(err)
+	}
+	got := waitInboundMessage(t, mb)
+	if got.Channel != "wecom" || got.AccountID != "bot-1" || got.ChatID != "group-1" || got.UserID != "member-7" {
+		t.Fatalf("group identity = %#v", got)
+	}
+	if got.PeerKind != "group" || got.MessageID != "msg-9" || got.SharedIdentity {
+		t.Fatalf("group message = %#v", got)
+	}
+	if len(got.Mentions) != 1 || got.Mentions[0] != "bot-1" {
+		t.Fatalf("group mentions = %#v", got.Mentions)
+	}
+}
+
+func TestWeComIgnoresSelfMessage(t *testing.T) {
+	w, mb := newInboundTestWeCom(t)
+	frame := weComCallbackTestFrame("callback-self", map[string]any{
+		"msgid": "msg-self", "aibotid": "bot-1", "chattype": "single",
+		"from":    map[string]string{"userid": "bot-1"},
+		"msgtype": "text", "text": map[string]string{"content": "echo"},
+	})
+	if err := w.handleCallbackFrame(context.Background(), frame); err != nil {
+		t.Fatal(err)
+	}
+	assertNoInboundMessage(t, mb)
+}
+
+func TestWeComRejectsMalformedGroupWithoutChatID(t *testing.T) {
+	w, mb := newInboundTestWeCom(t)
+	frame := weComCallbackTestFrame("callback-bad", map[string]any{
+		"msgid": "msg-bad", "aibotid": "bot-1", "chattype": "group",
+		"from":    map[string]string{"userid": "member-1"},
+		"msgtype": "text", "text": map[string]string{"content": "missing chat"},
+	})
+	if err := w.handleCallbackFrame(context.Background(), frame); err == nil {
+		t.Fatal("malformed group callback succeeded")
+	}
+	assertNoInboundMessage(t, mb)
+}
+
+func TestWeComUsesMsgIDAndStoresReplyReqID(t *testing.T) {
+	w, mb := newInboundTestWeCom(t)
+	frame := weComCallbackTestFrame("callback-req-id", map[string]any{
+		"msgid": "msg-1", "aibotid": "bot-1", "chattype": "single",
+		"from":    map[string]string{"userid": "member-1"},
+		"msgtype": "text", "text": map[string]string{"content": "hello"},
+	})
+	if err := w.handleCallbackFrame(context.Background(), frame); err != nil {
+		t.Fatal(err)
+	}
+	if got := waitInboundMessage(t, mb); got.MessageID != "msg-1" {
+		t.Fatalf("MessageID = %q", got.MessageID)
+	}
+	ref, ok := w.lookupReplyRef("msg-1")
+	if !ok || ref.ReqID != "callback-req-id" || ref.ChatID != "member-1" {
+		t.Fatalf("reply ref = %#v, %v", ref, ok)
+	}
+}
+
 func newTestWeCom(t *testing.T, wsURL string) *WeCom {
 	t.Helper()
 	w, err := NewWeCom(WeComOptions{
@@ -292,6 +378,41 @@ func newTestWeCom(t *testing.T, wsURL string) *WeCom {
 		t.Fatal(err)
 	}
 	return w
+}
+
+func newInboundTestWeCom(t *testing.T) (*WeCom, *bus.MessageBus) {
+	t.Helper()
+	mb := bus.New()
+	w, err := NewWeCom(WeComOptions{BotID: "bot-1", Secret: "fixture-secret"}, mb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return w, mb
+}
+
+func weComCallbackTestFrame(reqID string, body any) weComFrame {
+	data, _ := json.Marshal(body)
+	return weComFrame{Cmd: weComCmdMsgCallback, Headers: weComHeaders{ReqID: reqID}, Body: data}
+}
+
+func waitInboundMessage(t *testing.T, mb *bus.MessageBus) bus.InboundMessage {
+	t.Helper()
+	select {
+	case msg := <-mb.Inbound:
+		return msg
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for WeCom inbound message")
+		return bus.InboundMessage{}
+	}
+}
+
+func assertNoInboundMessage(t *testing.T, mb *bus.MessageBus) {
+	t.Helper()
+	select {
+	case msg := <-mb.Inbound:
+		t.Fatalf("unexpected inbound message: %#v", msg)
+	case <-time.After(30 * time.Millisecond):
+	}
 }
 
 func newWeComWSServer(t *testing.T, handle func(*websocket.Conn)) string {

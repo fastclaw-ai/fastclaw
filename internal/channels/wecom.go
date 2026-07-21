@@ -40,6 +40,44 @@ type weComAck struct {
 	err   error
 }
 
+type weComReplyRef struct {
+	ReqID     string
+	ChatID    string
+	ExpiresAt time.Time
+}
+
+type weComInboundMessage struct {
+	MsgID    string `json:"msgid"`
+	AIBotID  string `json:"aibotid"`
+	ChatID   string `json:"chatid,omitempty"`
+	ChatType string `json:"chattype"`
+	From     struct {
+		UserID string `json:"userid"`
+	} `json:"from"`
+	MsgType string `json:"msgtype"`
+	Text    struct {
+		Content string `json:"content"`
+	} `json:"text,omitempty"`
+	Image weComInboundMedia `json:"image,omitempty"`
+	File  weComInboundMedia `json:"file,omitempty"`
+	Mixed struct {
+		Items []struct {
+			MsgType string            `json:"msgtype"`
+			Text    weComInboundText  `json:"text,omitempty"`
+			Image   weComInboundMedia `json:"image,omitempty"`
+		} `json:"msg_item"`
+	} `json:"mixed,omitempty"`
+}
+
+type weComInboundText struct {
+	Content string `json:"content"`
+}
+
+type weComInboundMedia struct {
+	URL    string `json:"url"`
+	AESKey string `json:"aeskey,omitempty"`
+}
+
 type WeCom struct {
 	botID     string
 	secret    string
@@ -64,6 +102,15 @@ type WeCom struct {
 	requestMu sync.Mutex
 	pendingMu sync.Mutex
 	pending   map[string]chan weComAck
+	// sendRequestHook is test-only injection for callback error paths. Normal
+	// construction leaves it nil and request() uses the authenticated socket.
+	sendRequestHook func(context.Context, string, string, any) (weComFrame, error)
+
+	replyMu      sync.Mutex
+	replyRefs    map[string]weComReplyRef
+	replyRefTTL  time.Duration
+	maxReplyRefs int
+	now          func() time.Time
 }
 
 func NewWeCom(opts WeComOptions, mb *bus.MessageBus) (*WeCom, error) {
@@ -130,7 +177,8 @@ func NewWeCom(opts WeComOptions, mb *bus.MessageBus) (*WeCom, error) {
 		heartbeatInterval: heartbeatInterval, requestTimeout: requestTimeout,
 		reconnectBaseDelay: reconnectBaseDelay, reconnectMaxDelay: reconnectMaxDelay,
 		maxReconnects: maxReconnects, requestID: requestID, reconnectJitter: reconnectJitter,
-		pending: make(map[string]chan weComAck),
+		pending: make(map[string]chan weComAck), replyRefs: make(map[string]weComReplyRef),
+		replyRefTTL: 5 * time.Minute, maxReplyRefs: 2048, now: time.Now,
 	}, nil
 }
 
@@ -277,10 +325,122 @@ func isWeComDisconnectedEvent(body json.RawMessage) bool {
 	return json.Unmarshal(body, &envelope) == nil && envelope.Event.EventType == "disconnected_event"
 }
 
-func (w *WeCom) handleCallbackFrame(context.Context, weComFrame) error {
-	// Message/event mapping is implemented separately from the connection
-	// lifecycle so malformed callbacks cannot interfere with ack handling.
-	return nil
+func (w *WeCom) handleCallbackFrame(ctx context.Context, frame weComFrame) error {
+	if frame.Cmd == weComCmdEventCallback {
+		return nil
+	}
+	if frame.Cmd != weComCmdMsgCallback {
+		return fmt.Errorf("unsupported wecom callback command %q", frame.Cmd)
+	}
+	if strings.TrimSpace(frame.Headers.ReqID) == "" {
+		return errors.New("wecom callback missing request ID")
+	}
+	var callback weComInboundMessage
+	if err := json.Unmarshal(frame.Body, &callback); err != nil {
+		return fmt.Errorf("decode wecom message callback: %w", err)
+	}
+	callback.MsgID = strings.TrimSpace(callback.MsgID)
+	callback.AIBotID = strings.TrimSpace(callback.AIBotID)
+	callback.ChatID = strings.TrimSpace(callback.ChatID)
+	callback.ChatType = strings.TrimSpace(callback.ChatType)
+	callback.From.UserID = strings.TrimSpace(callback.From.UserID)
+	if callback.MsgID == "" || callback.AIBotID == "" || callback.From.UserID == "" {
+		return errors.New("wecom callback missing required message identity")
+	}
+	if callback.AIBotID != w.botID {
+		return fmt.Errorf("wecom callback addressed unexpected bot %q", callback.AIBotID)
+	}
+	if callback.From.UserID == w.botID {
+		return nil
+	}
+
+	peerKind := ""
+	chatID := ""
+	var mentions []string
+	switch callback.ChatType {
+	case "single":
+		peerKind = "dm"
+		chatID = callback.From.UserID
+	case "group":
+		if callback.ChatID == "" {
+			return errors.New("wecom group callback missing chat ID")
+		}
+		peerKind = "group"
+		chatID = callback.ChatID
+		mentions = []string{w.botID}
+	default:
+		return fmt.Errorf("unsupported wecom chat type %q", callback.ChatType)
+	}
+
+	text, mediaItems, err := w.mapInboundContent(ctx, callback)
+	if err != nil {
+		if replyErr := w.respondCallbackError(ctx, frame.Headers.ReqID, callback.MsgID, err); replyErr != nil {
+			return fmt.Errorf("%w; passive error reply failed: %v", err, replyErr)
+		}
+		return err
+	}
+	if strings.TrimSpace(text) == "" && len(mediaItems) == 0 {
+		return errors.New("wecom callback has no supported content")
+	}
+
+	inbound := bus.InboundMessage{
+		Channel: "wecom", AccountID: w.accountID, ChatID: chatID,
+		UserID: callback.From.UserID, PeerKind: peerKind,
+		MessageID: callback.MsgID, Text: text, Mentions: mentions, MediaItems: mediaItems,
+		SharedIdentity: false,
+	}
+	w.storeReplyRef(callback.MsgID, weComReplyRef{
+		ReqID: frame.Headers.ReqID, ChatID: chatID, ExpiresAt: w.now().Add(w.replyRefTTL),
+	})
+	select {
+	case w.bus.Inbound <- inbound:
+		return nil
+	case <-ctx.Done():
+		w.deleteReplyRef(callback.MsgID)
+		return ctx.Err()
+	}
+}
+
+func (w *WeCom) storeReplyRef(messageID string, ref weComReplyRef) {
+	w.replyMu.Lock()
+	defer w.replyMu.Unlock()
+	now := w.now()
+	for id, existing := range w.replyRefs {
+		if !existing.ExpiresAt.After(now) {
+			delete(w.replyRefs, id)
+		}
+	}
+	if len(w.replyRefs) >= w.maxReplyRefs {
+		var oldestID string
+		var oldest time.Time
+		for id, existing := range w.replyRefs {
+			if oldestID == "" || existing.ExpiresAt.Before(oldest) {
+				oldestID, oldest = id, existing.ExpiresAt
+			}
+		}
+		delete(w.replyRefs, oldestID)
+	}
+	w.replyRefs[messageID] = ref
+}
+
+func (w *WeCom) lookupReplyRef(messageID string) (weComReplyRef, bool) {
+	w.replyMu.Lock()
+	defer w.replyMu.Unlock()
+	ref, ok := w.replyRefs[messageID]
+	if !ok {
+		return weComReplyRef{}, false
+	}
+	if !ref.ExpiresAt.After(w.now()) {
+		delete(w.replyRefs, messageID)
+		return weComReplyRef{}, false
+	}
+	return ref, true
+}
+
+func (w *WeCom) deleteReplyRef(messageID string) {
+	w.replyMu.Lock()
+	delete(w.replyRefs, messageID)
+	w.replyMu.Unlock()
 }
 
 func (w *WeCom) runHeartbeat(ctx context.Context, conn *websocket.Conn) {
@@ -292,7 +452,7 @@ func (w *WeCom) runHeartbeat(ctx context.Context, conn *websocket.Conn) {
 			return
 		case <-ticker.C:
 			reqID := w.requestID(weComCmdPing)
-			if _, err := w.sendRequest(ctx, reqID, weComCmdPing, nil); err != nil && ctx.Err() == nil {
+			if _, err := w.request(ctx, reqID, weComCmdPing, nil); err != nil && ctx.Err() == nil {
 				slog.Warn("wecom heartbeat failed", "account", w.accountID, "error", err)
 				_ = conn.Close()
 				return
@@ -316,11 +476,18 @@ func (w *WeCom) SendMessage(msg bus.OutboundMessage) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), w.requestTimeout)
 	defer cancel()
-	_, err := w.sendRequest(ctx, w.requestID(weComCmdSend), weComCmdSend, body)
+	_, err := w.request(ctx, w.requestID(weComCmdSend), weComCmdSend, body)
 	return err
 }
 
 func (w *WeCom) SendTyping(string) error { return nil }
+
+func (w *WeCom) request(ctx context.Context, reqID, cmd string, body any) (weComFrame, error) {
+	if w.sendRequestHook != nil {
+		return w.sendRequestHook(ctx, reqID, cmd, body)
+	}
+	return w.sendRequest(ctx, reqID, cmd, body)
+}
 
 func (w *WeCom) sendRequest(ctx context.Context, reqID, cmd string, body any) (weComFrame, error) {
 	w.requestMu.Lock()
