@@ -1851,6 +1851,18 @@ export async function connectAgentSlack(
   return res.json();
 }
 
+export async function connectAgentWeCom(
+  agentId: string,
+  input: { botId: string; secret: string },
+): Promise<{ ok: boolean; botId?: string; error?: string }> {
+  const res = await apiFetch(`/api/agents/${agentId}/channels/wecom`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return res.json();
+}
+
 export async function startAgentWeChatLogin(
   agentId: string,
 ): Promise<{ sessionId?: string; qrCode?: string; qrCodeImg?: string; error?: string }> {

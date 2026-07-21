@@ -1,6 +1,6 @@
-// Brand asset paths copied to /public/channels/. Same set the
-// dashboard's Channels page uses, so the sidebar / chats list and the
-// connect dialog share one visual identity.
+// Central brand asset map shared by the Channels page, sidebar, chat lists,
+// and connection dialogs. Existing marks are bundled locally; WeCom uses the
+// verified official mark persisted to the configured R2 asset domain.
 const ASSETS: Record<string, string> = {
   telegram: "/channels/telegram.svg",
   discord: "/channels/discord.svg",
@@ -8,6 +8,7 @@ const ASSETS: Record<string, string> = {
   line: "/channels/line.png",
   feishu: "/channels/feishu.png",
   wechat: "/channels/wechat.svg",
+  wecom: "https://cdn.www-agents.com/brand/channels/wecom-logo-20260721.webp",
 };
 
 // ChannelIcon renders the per-channel brand mark next to a chat title.
@@ -55,6 +56,8 @@ export function channelLabel(channel?: string): string {
       return "Slack";
     case "feishu":
       return "Feishu";
+    case "wecom":
+      return "WeCom";
     case "web":
     case "":
     case undefined:
