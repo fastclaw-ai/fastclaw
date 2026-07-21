@@ -186,6 +186,13 @@ func slashRequiresAdmin(cmd string, msg bus.InboundMessage) bool {
 // "anyone can run it" (the legacy behavior). Operators who care about
 // group-chat protection populate the list to lock it down.
 func (a *Agent) isAdminChatter(msg bus.InboundMessage) bool {
+	// WeCom groups are shared conversations whose members retain their own
+	// platform identities. Product policy is stricter than the generic IM
+	// allowlist: no group member, including an owner/allowlisted identity,
+	// may gain admin or host-level trust through the group.
+	if msg.Channel == "wecom" && msg.PeerKind == "group" {
+		return false
+	}
 	// Web / api carry FastClaw UUIDs directly; owner check is sufficient.
 	if msg.Channel == "web" || msg.Channel == "api" {
 		return msg.UserID != "" && msg.UserID == a.ownerUserID
@@ -229,6 +236,9 @@ func (a *Agent) isAdminChatter(msg bus.InboundMessage) bool {
 // a hostile command in a cron job and have it replayed with elevated
 // rights.
 func (a *Agent) isTrustedTurn(msg bus.InboundMessage) bool {
+	if msg.Channel == "wecom" && msg.PeerKind == "group" {
+		return false
+	}
 	if msg.Source == bus.SourceHeartbeat {
 		return true
 	}
