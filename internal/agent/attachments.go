@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/fastclaw-ai/fastclaw/internal/agent/imageproc"
 )
 
 // maxAttachmentBytes caps a single attachment regardless of whether it
@@ -48,6 +50,58 @@ type Attachment struct {
 	Name string
 }
 
+// AttachmentResult reports what happened to one input attachment during
+// WriteSessionAttachments. Index is the attachment's position in the
+// input slice, so callers can zip results back onto their own ordered
+// lists (e.g. the inline-vision candidates, which are always a prefix of
+// the materialization order).
+type AttachmentResult struct {
+	Index int    // position in the input atts slice
+	Path  string // workspace-relative filename the bytes were stored under
+	// VisionSafe is true when the bytes passed the imageproc allowlist
+	// and may be inlined as an `image_url` content part. Downgraded
+	// images (and all non-images) are still stored in the workspace —
+	// they reach the LLM via the `[Attached: /workspace/<file>]`
+	// breadcrumb, never via vision.
+	VisionSafe bool
+	// URL is the canonical URL to inline when VisionSafe is true. For
+	// data URLs whose bytes were re-encoded it carries the compressed
+	// data URL; otherwise it is the original input URL.
+	URL string
+}
+
+// VisionGate filters inline-vision candidate URLs against
+// materialization results: downgraded candidates are dropped (their
+// bytes still reached /workspace) and accepted-but-re-encoded data URLs
+// are swapped for their compressed form. candidates must align
+// index-for-index with the FIRST len(candidates) attachments passed to
+// WriteSessionAttachments — allAttachments() orders Images then
+// ImageURLs first, so inlineImageURLs() satisfies this. Candidates with
+// no matching result (decode failed server-side) pass through unchanged,
+// preserving the previous behavior.
+func VisionGate(candidates []string, results []AttachmentResult) []string {
+	if len(candidates) == 0 {
+		return nil
+	}
+	byIndex := make(map[int]AttachmentResult, len(results))
+	for _, r := range results {
+		byIndex[r.Index] = r
+	}
+	out := make([]string, 0, len(candidates))
+	for i, u := range candidates {
+		if r, ok := byIndex[i]; ok {
+			if !r.VisionSafe {
+				continue
+			}
+			if r.URL != "" {
+				u = r.URL
+			}
+		}
+		out = append(out, u)
+	}
+	return out
+}
+
 // WriteSessionAttachments materializes user-attached bytes into the
 // agent's session workspace so skills (image-tool, file readers, etc.)
 // can reach them via /workspace/<filename>. Each URL is one of:
@@ -55,8 +109,15 @@ type Attachment struct {
 //   - HTTPS URL: "https://example.com/report.pdf"
 //
 // Per-item errors are logged and skipped — a single bad URL must not
-// sink the whole turn. Returns the relative filenames in input order,
-// omitting any that failed.
+// sink the whole turn. Returns one AttachmentResult per successfully
+// materialized item, in input order, each carrying its input Index so
+// callers can zip results back onto their own lists.
+//
+// Image handling (issue #106): decoded bytes run through
+// imageproc.Process. Accepted-but-oversized images are re-encoded and
+// the COMPRESSED bytes are stored (under the effective MIME's
+// extension); downgraded items are stored as-is but flagged not
+// vision-safe so callers exclude them from `image_url` inlining.
 //
 // Why three writes:
 //
@@ -72,11 +133,11 @@ type Attachment struct {
 // Docker doesn't need the third write (bind mount makes host writes show
 // up instantly), but calling it is harmless. The host write is also
 // harmless for E2B (gateway-local bytes nobody reads).
-func (a *Agent) WriteSessionAttachments(ctx context.Context, sessionID, projectID string, atts []Attachment) []string {
+func (a *Agent) WriteSessionAttachments(ctx context.Context, sessionID, projectID string, atts []Attachment) []AttachmentResult {
 	if len(atts) == 0 {
 		return nil
 	}
-	var paths []string
+	var results []AttachmentResult
 	// Short, base36-ish token derived from the millisecond timestamp.
 	// Long enough to avoid collision in any realistic chat cadence (a
 	// human would have to upload twice within the same millisecond);
@@ -95,10 +156,20 @@ func (a *Agent) WriteSessionAttachments(ctx context.Context, sessionID, projectI
 	// `notes.md` should replace, not accumulate `notes-1.md` forever.
 	used := make(map[string]struct{}, len(atts))
 	for i, att := range atts {
-		data, ext, err := decodeAttachment(ctx, att.URL)
+		data, ext, mime, err := decodeAttachment(ctx, att.URL)
 		if err != nil {
 			slog.Warn("attachment decode failed", "agent", a.name, "session", sessionID, "index", i, "error", err)
 			continue
+		}
+		// Sniff + policy-gate + (when oversized) compress images before
+		// they are stored. Non-image attachments pass through untouched;
+		// downgraded images keep their original bytes but are flagged not
+		// vision-safe in the result.
+		data, ext, proc := processImageAttachment(data, mime, ext)
+		if proc.Reencoded {
+			slog.Info("attachment image re-encoded",
+				"agent", a.name, "session", sessionID, "index", i,
+				"mime", proc.MIME, "bytes", len(data), "note", proc.Note)
 		}
 		name := buildAttachmentName(att.Name, token, i, ext, used)
 		used[name] = struct{}{}
@@ -131,60 +202,92 @@ func (a *Agent) WriteSessionAttachments(ctx context.Context, sessionID, projectI
 			}
 		}
 
-		paths = append(paths, name)
+		inlineURL := att.URL
+		if proc.Decision == imageproc.DecisionAccept && proc.Reencoded && strings.HasPrefix(att.URL, "data:") {
+			// Point vision inlining at the compressed bytes so the model
+			// sees exactly what we stored. http(s) URLs stay as-is (the
+			// provider fetches the remote copy itself).
+			inlineURL = "data:" + proc.MIME + ";base64," + base64.StdEncoding.EncodeToString(proc.Bytes)
+		}
+		results = append(results, AttachmentResult{
+			Index:      i,
+			Path:       name,
+			VisionSafe: proc.Decision == imageproc.DecisionAccept,
+			URL:        inlineURL,
+		})
 	}
-	return paths
+	return results
+}
+
+// processImageAttachment runs the imageproc gate over decoded attachment
+// bytes. It returns the bytes to store (compressed when an accepted
+// image was re-encoded), the filename extension derived from the
+// EFFECTIVE MIME (so a PNG re-encoded as JPEG lands as .jpg), and the
+// raw imageproc.Result for the caller's vision-safety decision.
+// Non-image attachments and downgraded images pass through byte-for-byte
+// unchanged.
+func processImageAttachment(data []byte, declaredMIME, ext string) ([]byte, string, imageproc.Result) {
+	proc := imageproc.Process(data, declaredMIME)
+	if proc.Decision == imageproc.DecisionAccept && proc.Reencoded {
+		if newExt := extFromMIME(proc.MIME); newExt != "" {
+			ext = newExt
+		}
+		return proc.Bytes, ext, proc
+	}
+	return data, ext, proc
 }
 
 // decodeAttachment turns a data URL or HTTPS URL into raw bytes plus a
-// best-effort filename extension (".png", ".jpg", …). Unknown / missing
+// best-effort filename extension (".png", ".jpg", …) and the declared
+// MIME type ("" when the source didn't provide one). Unknown / missing
 // MIME maps to ".bin".
-func decodeAttachment(ctx context.Context, u string) ([]byte, string, error) {
+func decodeAttachment(ctx context.Context, u string) ([]byte, string, string, error) {
 	if strings.HasPrefix(u, "data:") {
 		return decodeDataURL(u)
 	}
 	parsed, err := url.Parse(u)
 	if err != nil {
-		return nil, "", fmt.Errorf("parse url: %w", err)
+		return nil, "", "", fmt.Errorf("parse url: %w", err)
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return nil, "", fmt.Errorf("unsupported scheme %q", parsed.Scheme)
+		return nil, "", "", fmt.Errorf("unsupported scheme %q", parsed.Scheme)
 	}
 	httpCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(httpCtx, http.MethodGet, u, nil)
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, "", fmt.Errorf("fetch: %w", err)
+		return nil, "", "", fmt.Errorf("fetch: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, "", fmt.Errorf("HTTP %d", resp.StatusCode)
+		return nil, "", "", fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxAttachmentBytes+1))
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	if len(body) > maxAttachmentBytes {
-		return nil, "", fmt.Errorf("attachment exceeds %d bytes", maxAttachmentBytes)
+		return nil, "", "", fmt.Errorf("attachment exceeds %d bytes", maxAttachmentBytes)
 	}
-	ext := extFromMIME(resp.Header.Get("Content-Type"))
+	mime := resp.Header.Get("Content-Type")
+	ext := extFromMIME(mime)
 	if ext == "" {
 		ext = filepath.Ext(parsed.Path) // fallback to URL extension
 	}
 	if ext == "" {
 		ext = ".bin"
 	}
-	return body, ext, nil
+	return body, ext, mime, nil
 }
 
-func decodeDataURL(u string) ([]byte, string, error) {
+func decodeDataURL(u string) ([]byte, string, string, error) {
 	comma := strings.IndexByte(u, ',')
 	if comma < 0 {
-		return nil, "", fmt.Errorf("data url missing comma")
+		return nil, "", "", fmt.Errorf("data url missing comma")
 	}
 	header := u[5:comma] // strip "data:"
 	payload := u[comma+1:]
@@ -205,24 +308,24 @@ func decodeDataURL(u string) ([]byte, string, error) {
 	if isB64 {
 		decoded, err := base64.StdEncoding.DecodeString(payload)
 		if err != nil {
-			return nil, "", fmt.Errorf("base64 decode: %w", err)
+			return nil, "", "", fmt.Errorf("base64 decode: %w", err)
 		}
 		data = decoded
 	} else {
 		decoded, err := url.QueryUnescape(payload)
 		if err != nil {
-			return nil, "", fmt.Errorf("urlencoded decode: %w", err)
+			return nil, "", "", fmt.Errorf("urlencoded decode: %w", err)
 		}
 		data = []byte(decoded)
 	}
 	if len(data) > maxAttachmentBytes {
-		return nil, "", fmt.Errorf("attachment exceeds %d bytes", maxAttachmentBytes)
+		return nil, "", "", fmt.Errorf("attachment exceeds %d bytes", maxAttachmentBytes)
 	}
 	ext := extFromMIME(mime)
 	if ext == "" {
 		ext = ".bin"
 	}
-	return data, ext, nil
+	return data, ext, mime, nil
 }
 
 func extFromMIME(ct string) string {

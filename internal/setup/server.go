@@ -48,9 +48,12 @@ type AgentHandle interface {
 	ReloadWorkspaceFiles()
 	// WriteSessionAttachments materializes user-uploaded bytes (data
 	// URLs / HTTPS URLs) into the agent's session workspace so skills can
-	// read them via /workspace/<filename>. Returns the relative filenames
-	// in input order; per-item errors are skipped.
-	WriteSessionAttachments(ctx context.Context, sessionID, projectID string, atts []agent.Attachment) []string
+	// read them via /workspace/<filename>. Returns one AttachmentResult
+	// per successfully written item (input order, each tagged with its
+	// input Index); per-item errors are skipped. Images are sniffed,
+	// policy-gated and compressed inside — downgraded images are stored
+	// but flagged not vision-safe (see agent.VisionGate).
+	WriteSessionAttachments(ctx context.Context, sessionID, projectID string, atts []agent.Attachment) []agent.AttachmentResult
 	// RegisteredTools returns the live tool registry projection — what
 	// this agent currently has loaded (built-ins + MCP + plugin tools).
 	// Used by the Tools tab to render the allowlist checkbox picker.
