@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/fastclaw-ai/fastclaw/internal/bus"
 	"github.com/gorilla/websocket"
@@ -283,11 +284,26 @@ func (w *WeCom) runConnection(ctx context.Context) (bool, error) {
 		_ = conn.Close()
 	}()
 	go w.runHeartbeat(connCtx, conn)
+	targetedErrors := make(chan error, 1)
+	if w.bus.HasTargetedOutbound() {
+		go func() {
+			err := w.bus.ConsumeTargetedOutbound(connCtx, "wecom", w.accountID, w.SendMessage)
+			if err != nil && connCtx.Err() == nil {
+				targetedErrors <- err
+				_ = conn.Close()
+			}
+		}()
+	}
 
 	err = w.readLoop(connCtx, conn)
 	cancel()
 	if ctx.Err() != nil {
 		return true, ctx.Err()
+	}
+	select {
+	case targetedErr := <-targetedErrors:
+		return true, fmt.Errorf("consume wecom targeted outbound: %w", targetedErr)
+	default:
 	}
 	return true, err
 }
@@ -469,18 +485,45 @@ func (w *WeCom) SendMessage(msg bus.OutboundMessage) error {
 	if strings.TrimSpace(msg.ChatID) == "" {
 		return errors.New("wecom outbound message requires chat ID")
 	}
-	body := map[string]any{
-		"chatid":   msg.ChatID,
-		"msgtype":  "markdown",
-		"markdown": map[string]string{"content": msg.Text},
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), w.requestTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	_, err := w.request(ctx, w.requestID(weComCmdSend), weComCmdSend, body)
-	return err
+	if msg.StreamState != bus.StreamNone {
+		return w.sendPassiveStream(ctx, msg)
+	}
+	return w.sendProactiveMessage(ctx, msg)
 }
 
 func (w *WeCom) SendTyping(string) error { return nil }
+
+func splitWeComMarkdown(text string, maxBytes int) []string {
+	if maxBytes <= 0 {
+		return nil
+	}
+	if text == "" {
+		return []string{""}
+	}
+	remaining := text
+	chunks := make([]string, 0, len(text)/maxBytes+1)
+	for len(remaining) > maxBytes {
+		cut := maxBytes
+		for cut > 0 && !utf8.RuneStart(remaining[cut]) {
+			cut--
+		}
+		if cut == 0 {
+			_, size := utf8.DecodeRuneInString(remaining)
+			cut = size
+		}
+		if newline := strings.LastIndexByte(remaining[:cut], '\n'); newline >= cut/2 {
+			cut = newline + 1
+		}
+		chunks = append(chunks, remaining[:cut])
+		remaining = remaining[cut:]
+	}
+	if remaining != "" {
+		chunks = append(chunks, remaining)
+	}
+	return chunks
+}
 
 func (w *WeCom) request(ctx context.Context, reqID, cmd string, body any) (weComFrame, error) {
 	if w.sendRequestHook != nil {

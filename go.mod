@@ -21,6 +21,7 @@ require (
 	github.com/slack-go/slack v0.23.1
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/crypto v0.52.0
+	golang.org/x/image v0.28.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.48.2
 )
