@@ -287,7 +287,8 @@ func (s *Server) handleConnectAgentWeCom(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Bot ID is the global routing identity for this persistent socket.
-	// Never let SaveChannel's upsert silently move it between users/agents.
+	// Keep the fast conflict response, then atomically claim below so two
+	// concurrent misses still cannot move the bot between users/agents.
 	if existing, err := s.dataStore.LookupChannel(r.Context(), "wecom", botID); err == nil && existing != nil {
 		jsonResponse(w, http.StatusConflict, map[string]any{
 			"error": "this WeCom Bot ID is already connected — disconnect it first",
@@ -304,7 +305,23 @@ func (s *Server) handleConnectAgentWeCom(w http.ResponseWriter, r *http.Request)
 			botID: {BotToken: secret},
 		},
 	}
-	if err := s.saveChannelRecord(r.Context(), userID, resolvedAgentID, "wecom", botID, true, cc); err != nil {
+	stored := &store.ChannelRecord{
+		UserID:         userID,
+		AgentID:        resolvedAgentID,
+		Type:           "wecom",
+		AccountID:      botID,
+		Enabled:        true,
+		BotToken:       secret,
+		SharedIdentity: false,
+		Data:           channelConfigToData(cc),
+	}
+	if err := s.dataStore.CreateChannel(r.Context(), stored); err != nil {
+		if errors.Is(err, store.ErrChannelAlreadyExists) {
+			jsonResponse(w, http.StatusConflict, map[string]any{
+				"error": "this WeCom Bot ID is already connected — disconnect it first",
+			})
+			return
+		}
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
@@ -312,38 +329,36 @@ func (s *Server) handleConnectAgentWeCom(w http.ResponseWriter, r *http.Request)
 		AgentID: agentID,
 		Match:   config.Match{Channel: "wecom", AccountID: botID},
 	}); err != nil {
-		if stored, lookupErr := s.dataStore.LookupChannel(r.Context(), "wecom", botID); lookupErr == nil && stored != nil {
-			_ = s.dataStore.DeleteChannel(r.Context(), stored.ID)
+		if rollbackErr := s.rollbackCreatedWeComChannel(stored.ID); rollbackErr != nil {
+			slog.Error("failed to roll back WeCom channel after binding error", "channel_id", stored.ID, "error", rollbackErr)
+			err = fmt.Errorf("%w; rollback channel delete failed", err)
 		}
-		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-		return
-	}
-
-	stored, err := s.dataStore.LookupChannel(r.Context(), "wecom", botID)
-	if err != nil || stored == nil {
-		if err == nil {
-			err = errors.New("saved WeCom channel could not be loaded")
-		}
-		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-		return
-	}
-	stored.SharedIdentity = false
-	if err := s.dataStore.SaveChannel(r.Context(), stored); err != nil {
-		_ = s.dataStore.DeleteChannel(r.Context(), stored.ID)
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
 
 	s.invalidateOwner(userID, resolvedAgentID)
 	if err := s.tryHotRegisterChannelRecord(*stored); err != nil {
-		_ = s.dataStore.DeleteChannel(r.Context(), stored.ID)
-		_ = s.removeBinding(r, "", "", agentID, "wecom", botID)
+		if rollbackErr := s.rollbackCreatedWeComChannel(stored.ID); rollbackErr != nil {
+			slog.Error("failed to roll back WeCom channel after hot-start error", "channel_id", stored.ID, "error", rollbackErr)
+			err = fmt.Errorf("%w; rollback channel delete failed", err)
+		}
+		if rollbackErr := s.removeBinding(r, "", "", agentID, "wecom", botID); rollbackErr != nil {
+			slog.Error("failed to roll back WeCom binding after hot-start error", "channel_id", stored.ID, "error", rollbackErr)
+			err = fmt.Errorf("%w; rollback binding removal failed", err)
+		}
 		s.invalidateOwner(userID, resolvedAgentID)
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
 
 	jsonResponse(w, http.StatusOK, map[string]any{"ok": true, "botId": botID})
+}
+
+func (s *Server) rollbackCreatedWeComChannel(channelID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return s.dataStore.DeleteChannel(ctx, channelID)
 }
 
 // handleConnectAgentTelegram validates the bot token by hitting

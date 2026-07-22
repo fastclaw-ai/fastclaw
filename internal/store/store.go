@@ -15,6 +15,10 @@ import (
 // errors.Is(err, store.ErrNotFound) at call sites.
 var ErrNotFound = errors.New("store: not found")
 
+// ErrChannelAlreadyExists is returned by CreateChannel when another row
+// already owns the same (type, account_id) routing identity.
+var ErrChannelAlreadyExists = errors.New("store: channel already exists")
+
 // Store is the unified interface for all persistent data.
 //
 // Tables fall into three buckets:
@@ -236,6 +240,7 @@ type Store interface {
 	ListChannels(ctx context.Context, userID, agentID string) ([]ChannelRecord, error)
 	ListAllChannels(ctx context.Context) ([]ChannelRecord, error)
 	GetChannel(ctx context.Context, id string) (*ChannelRecord, error)
+	CreateChannel(ctx context.Context, ch *ChannelRecord) error
 	SaveChannel(ctx context.Context, ch *ChannelRecord) error
 	DeleteChannel(ctx context.Context, id string) error
 	LookupChannel(ctx context.Context, channelType, accountID string) (*ChannelRecord, error)

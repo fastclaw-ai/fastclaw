@@ -14,8 +14,15 @@ import (
 )
 
 const (
-	targetedOutboundClaimIdle = 15 * time.Second
-	targetedOutboundReadBlock = 5 * time.Second
+	// Keep the reclaim threshold beyond WeCom SendMessage's two-minute
+	// processing deadline, with one channel lease TTL of failover margin.
+	// This prevents a new leaseholder from claiming work that the previous
+	// leaseholder may still be completing.
+	targetedOutboundMaxHandlerDuration = 2 * time.Minute
+	targetedOutboundLeaseFailoverGrace = 30 * time.Second
+	targetedOutboundClaimIdle          = targetedOutboundMaxHandlerDuration + targetedOutboundLeaseFailoverGrace
+	targetedOutboundReadBlock          = 5 * time.Second
+	targetedOutboundRetryDelay         = 250 * time.Millisecond
 )
 
 func targetedOutboundKey(prefix, channel, accountID string) string {
@@ -61,11 +68,28 @@ func (b *MessageBus) ConsumeTargetedOutbound(
 	}
 
 	for ctx.Err() == nil {
-		if err := r.claimTargetedPending(ctx, stream, handle); err != nil && ctx.Err() == nil {
+		blocked, err := r.claimTargetedPending(ctx, stream, handle)
+		if err != nil && ctx.Err() == nil {
 			slog.Warn("redis targeted pending claim failed", "channel", channel, "account", accountID, "error", err)
+		}
+		if blocked {
+			if !waitTargetedRetry(ctx) {
+				break
+			}
+			continue
 		}
 		if ctx.Err() != nil {
 			break
+		}
+		blocked, err = r.handleOwnedTargetedPending(ctx, stream, handle)
+		if err != nil && ctx.Err() == nil {
+			slog.Warn("redis targeted pending read failed", "channel", channel, "account", accountID, "error", err)
+		}
+		if blocked {
+			if !waitTargetedRetry(ctx) {
+				break
+			}
+			continue
 		}
 
 		streams, err := r.client.XReadGroup(ctx, &redis.XReadGroupArgs{
@@ -82,8 +106,15 @@ func (b *MessageBus) ConsumeTargetedOutbound(
 			slog.Warn("redis targeted outbound read failed", "channel", channel, "account", accountID, "error", err)
 			continue
 		}
+		blocked = false
 		for _, xs := range streams {
-			r.handleTargetedMessages(ctx, stream, xs.Messages, handle)
+			if !r.handleTargetedMessages(ctx, stream, xs.Messages, handle) {
+				blocked = true
+				break
+			}
+		}
+		if blocked && !waitTargetedRetry(ctx) {
+			break
 		}
 	}
 	return nil
@@ -100,7 +131,7 @@ func (r *redisBridge) claimTargetedPending(
 	ctx context.Context,
 	stream string,
 	handle func(OutboundMessage) error,
-) error {
+) (bool, error) {
 	start := "0-0"
 	for ctx.Err() == nil {
 		messages, next, err := r.client.XAutoClaim(ctx, &redis.XAutoClaimArgs{
@@ -113,17 +144,58 @@ func (r *redisBridge) claimTargetedPending(
 		}).Result()
 		if err != nil {
 			if errors.Is(err, redis.Nil) || ctx.Err() != nil {
-				return nil
+				return false, nil
 			}
-			return err
+			return false, err
 		}
-		r.handleTargetedMessages(ctx, stream, messages, handle)
+		if !r.handleTargetedMessages(ctx, stream, messages, handle) {
+			return true, nil
+		}
 		if next == "0-0" || next == start {
-			return nil
+			return false, nil
 		}
 		start = next
 	}
-	return nil
+	return false, nil
+}
+
+func (r *redisBridge) handleOwnedTargetedPending(
+	ctx context.Context,
+	stream string,
+	handle func(OutboundMessage) error,
+) (bool, error) {
+	for ctx.Err() == nil {
+		streams, err := r.client.XReadGroup(ctx, &redis.XReadGroupArgs{
+			Group:    r.group,
+			Consumer: r.consumer,
+			Streams:  []string{stream, "0"},
+			Count:    10,
+			Block:    -1,
+		}).Result()
+		if err != nil {
+			if errors.Is(err, redis.Nil) || ctx.Err() != nil {
+				return false, nil
+			}
+			return false, err
+		}
+		if len(streams) == 0 {
+			return false, nil
+		}
+		hadMessages := false
+		for _, xs := range streams {
+			if len(xs.Messages) == 0 {
+				continue
+			}
+			hadMessages = true
+			if !r.handleTargetedMessages(ctx, stream, xs.Messages, handle) {
+				return true, nil
+			}
+		}
+		if !hadMessages {
+			return false, nil
+		}
+	}
+	return false, nil
 }
 
 func (r *redisBridge) handleTargetedMessages(
@@ -131,7 +203,7 @@ func (r *redisBridge) handleTargetedMessages(
 	stream string,
 	messages []redis.XMessage,
 	handle func(OutboundMessage) error,
-) {
+) bool {
 	for _, xm := range messages {
 		raw, ok := xm.Values["payload"]
 		if !ok {
@@ -150,10 +222,22 @@ func (r *redisBridge) handleTargetedMessages(
 		}
 		if err := handle(msg); err != nil {
 			slog.Error("redis targeted outbound handler failed", "channel", msg.Channel, "account", msg.AccountID, "id", xm.ID, "error", err)
-			continue
+			return false
 		}
 		if err := r.client.XAck(ctx, stream, r.group, xm.ID).Err(); err != nil && ctx.Err() == nil {
 			slog.Warn("redis targeted outbound ack failed", "channel", msg.Channel, "account", msg.AccountID, "id", xm.ID, "error", err)
 		}
+	}
+	return true
+}
+
+func waitTargetedRetry(ctx context.Context) bool {
+	timer := time.NewTimer(targetedOutboundRetryDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
 }

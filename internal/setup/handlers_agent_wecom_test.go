@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/fastclaw-ai/fastclaw/internal/agent"
@@ -21,6 +23,32 @@ type weComChannelResolverProbe struct {
 	registered   []store.ChannelRecord
 	unregistered [][2]string
 	registerErr  error
+}
+
+type weComLookupBarrierStore struct {
+	store.Store
+	botID      string
+	misses     atomic.Int32
+	bothMissed chan struct{}
+}
+
+type weComDeleteFailureStore struct {
+	store.Store
+}
+
+func (s *weComDeleteFailureStore) DeleteChannel(context.Context, string) error {
+	return errors.New("fixture channel delete failure")
+}
+
+func (s *weComLookupBarrierStore) LookupChannel(ctx context.Context, channelType, accountID string) (*store.ChannelRecord, error) {
+	rec, err := s.Store.LookupChannel(ctx, channelType, accountID)
+	if channelType == "wecom" && accountID == s.botID && errors.Is(err, store.ErrNotFound) {
+		if s.misses.Add(1) == 2 {
+			close(s.bothMissed)
+		}
+		<-s.bothMissed
+	}
+	return rec, err
 }
 
 func (p *weComChannelResolverProbe) UserSpaceFor(string) (*api.UserSpaceView, error) {
@@ -150,6 +178,108 @@ func TestConnectAgentWeComRejectsDuplicateBotID(t *testing.T) {
 	}
 }
 
+func TestConnectAgentWeComConcurrentClaimsDoNotMoveBot(t *testing.T) {
+	ctx := context.Background()
+	s, _, _, firstOwner := newAuthTestServer(t, ctx)
+	secondOwner := createAuthTestUser(t, ctx, s.accounts, "wecom-racer", users.RoleUser)
+	saveWeComTestAgent(t, s.dataStore, "agt_wecom_race_first", firstOwner.ID)
+	saveWeComTestAgent(t, s.dataStore, "agt_wecom_race_second", secondOwner.ID)
+	s.weComValidateCredentials = func(context.Context, string, string) error { return nil }
+
+	barrierStore := &weComLookupBarrierStore{
+		Store:      s.dataStore,
+		botID:      "bot-race",
+		bothMissed: make(chan struct{}),
+	}
+	s.SetStore(barrierStore)
+
+	type attempt struct {
+		owner   *users.Account
+		agentID string
+		secret  string
+	}
+	attempts := []attempt{
+		{owner: firstOwner, agentID: "agt_wecom_race_first", secret: "first-secret"},
+		{owner: secondOwner, agentID: "agt_wecom_race_second", secret: "second-secret"},
+	}
+	statuses := make([]int, len(attempts))
+	var wg sync.WaitGroup
+	for i := range attempts {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			a := attempts[i]
+			req := httptest.NewRequest(http.MethodPost, "/api/agents/"+a.agentID+"/channels/wecom", strings.NewReader(
+				`{"botId":"bot-race","secret":"`+a.secret+`"}`,
+			))
+			req.SetPathValue("id", a.agentID)
+			req = req.WithContext(auth.WithIdentity(req.Context(), auth.Identity{
+				UserID: a.owner.ID, Role: a.owner.Role, AuthMethod: "session",
+			}))
+			rr := httptest.NewRecorder()
+			s.handleConnectAgentWeCom(rr, req)
+			statuses[i] = rr.Code
+		}(i)
+	}
+	wg.Wait()
+
+	okCount, conflictCount, winnerIndex := 0, 0, -1
+	for i, status := range statuses {
+		switch status {
+		case http.StatusOK:
+			okCount++
+			winnerIndex = i
+		case http.StatusConflict:
+			conflictCount++
+		}
+	}
+	if okCount != 1 || conflictCount != 1 {
+		t.Fatalf("statuses = %v, want one 200 and one 409", statuses)
+	}
+	stored, err := s.dataStore.LookupChannel(ctx, "wecom", "bot-race")
+	if err != nil {
+		t.Fatalf("LookupChannel: %v", err)
+	}
+	winner := attempts[winnerIndex]
+	if stored.UserID != winner.owner.ID || stored.AgentID != winner.agentID || stored.BotToken != winner.secret {
+		t.Fatalf("stored binding %#v does not match successful attempt %#v", stored, winner)
+	}
+}
+
+func TestUpdateAgentSharedIdentitySkipsWeCom(t *testing.T) {
+	ctx := context.Background()
+	s, _, _, owner := newAuthTestServer(t, ctx)
+	saveWeComTestAgent(t, s.dataStore, "agt_wecom_batch", owner.ID)
+	saveWeComTestChannel(t, s.dataStore, owner.ID, "agt_wecom_batch", "bot-batch", "fixture-secret")
+	if err := s.dataStore.SaveChannel(ctx, &store.ChannelRecord{
+		UserID: owner.ID, AgentID: "agt_wecom_batch", Type: "telegram", AccountID: "telegram-batch",
+		Enabled: true,
+	}); err != nil {
+		t.Fatalf("SaveChannel telegram: %v", err)
+	}
+
+	rr := callAgentChannelHandler(t, s.handleUpdateAgent, owner, http.MethodPatch, "agt_wecom_batch", nil,
+		`{"sharedIdentity":true}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+
+	weCom, err := s.dataStore.LookupChannel(ctx, "wecom", "bot-batch")
+	if err != nil {
+		t.Fatalf("LookupChannel WeCom: %v", err)
+	}
+	telegram, err := s.dataStore.LookupChannel(ctx, "telegram", "telegram-batch")
+	if err != nil {
+		t.Fatalf("LookupChannel Telegram: %v", err)
+	}
+	if weCom.SharedIdentity {
+		t.Fatal("agent batch update enabled shared identity for WeCom")
+	}
+	if !telegram.SharedIdentity {
+		t.Fatal("agent batch update did not preserve non-WeCom behavior")
+	}
+}
+
 func TestConnectAgentWeComForcesSharedIdentityFalse(t *testing.T) {
 	ctx := context.Background()
 	s, _, _, owner := newAuthTestServer(t, ctx)
@@ -225,6 +355,24 @@ func TestConnectAgentWeComRollsBackWhenHotStartFails(t *testing.T) {
 	}
 	if _, err := s.dataStore.LookupChannel(ctx, "wecom", "bot-hot-fail"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("failed hot-start left persisted row: %v", err)
+	}
+}
+
+func TestConnectAgentWeComReportsRollbackDeleteFailure(t *testing.T) {
+	ctx := context.Background()
+	s, _, _, owner := newAuthTestServer(t, ctx)
+	saveWeComTestAgent(t, s.dataStore, "agt_wecom_rollback_fail", owner.ID)
+	s.weComValidateCredentials = func(context.Context, string, string) error { return nil }
+	s.SetUserResolver(&weComChannelResolverProbe{registerErr: errors.New("socket start failed")})
+	s.SetStore(&weComDeleteFailureStore{Store: s.dataStore})
+
+	rr := callAgentChannelHandler(t, s.handleConnectAgentWeCom, owner, http.MethodPost, "agt_wecom_rollback_fail", nil,
+		`{"botId":"bot-rollback-fail","secret":"fixture-secret"}`)
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "rollback channel delete failed") {
+		t.Fatalf("rollback failure was hidden: %s", rr.Body.String())
 	}
 }
 

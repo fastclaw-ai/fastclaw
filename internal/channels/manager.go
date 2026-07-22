@@ -40,6 +40,7 @@ type Manager struct {
 	// each channel key. Replacing or unregistering a persistent adapter must
 	// cancel that child without stopping the rest of the manager.
 	runCancels     map[string]context.CancelFunc
+	runDones       map[string]chan struct{}
 	runGenerations map[string]uint64
 	nextGeneration uint64
 }
@@ -67,6 +68,7 @@ func NewManagerWithLeaser(mb *bus.MessageBus, leaser Leaser, holderID string) *M
 		leaser:         leaser,
 		holderID:       holderID,
 		runCancels:     make(map[string]context.CancelFunc),
+		runDones:       make(map[string]chan struct{}),
 		runGenerations: make(map[string]uint64),
 	}
 }
@@ -140,11 +142,17 @@ func (m *Manager) registerAndStart(ch Channel, singleton bool) {
 		delete(m.singleton, key)
 	}
 	ctx := m.rootCtx
+	var generation uint64
+	if ctx != nil {
+		m.nextGeneration++
+		generation = m.nextGeneration
+		m.runGenerations[key] = generation
+	}
 	m.mu.Unlock()
 	if ctx == nil {
 		return
 	}
-	go m.startChannel(ctx, key, ch, singleton, "hot-starting channel")
+	go m.startChannel(ctx, key, ch, singleton, generation, "hot-starting channel")
 }
 
 // Unregister removes a channel from the routing table and cancels its active
@@ -171,9 +179,13 @@ func (m *Manager) Start(ctx context.Context) {
 	m.rootCtx = ctx
 	chans := make(map[string]Channel, len(m.channels))
 	singletons := make(map[string]bool, len(m.channels))
+	generations := make(map[string]uint64, len(m.channels))
 	for k, v := range m.channels {
 		chans[k] = v
 		_, singletons[k] = m.singleton[k]
+		m.nextGeneration++
+		generations[k] = m.nextGeneration
+		m.runGenerations[k] = m.nextGeneration
 	}
 	m.mu.Unlock()
 
@@ -190,24 +202,29 @@ func (m *Manager) Start(ctx context.Context) {
 	for key, ch := range chans {
 		singleton := singletons[key]
 		wg.Add(1)
-		go func(k string, c Channel, s bool) {
+		go func(k string, c Channel, s bool, generation uint64) {
 			defer wg.Done()
-			m.startChannel(ctx, k, c, s, "starting channel")
-		}(key, ch, singleton)
+			m.startChannel(ctx, k, c, s, generation, "starting channel")
+		}(key, ch, singleton, generations[key])
 	}
 
 	wg.Wait()
 }
 
-func (m *Manager) startChannel(parent context.Context, key string, ch Channel, singleton bool, logMessage string) {
+func (m *Manager) startChannel(parent context.Context, key string, ch Channel, singleton bool, generation uint64, logMessage string) {
 	ctx, cancel := context.WithCancel(parent)
+	done := make(chan struct{})
 
 	m.mu.Lock()
+	if m.runGenerations[key] != generation {
+		m.mu.Unlock()
+		cancel()
+		return
+	}
 	previous := m.runCancels[key]
-	m.nextGeneration++
-	generation := m.nextGeneration
+	previousDone := m.runDones[key]
 	m.runCancels[key] = cancel
-	m.runGenerations[key] = generation
+	m.runDones[key] = done
 	leaser := m.leaser
 	holderID := m.holderID
 	m.mu.Unlock()
@@ -222,8 +239,18 @@ func (m *Manager) startChannel(parent context.Context, key string, ch Channel, s
 			delete(m.runCancels, key)
 			delete(m.runGenerations, key)
 		}
+		if m.runDones[key] == done {
+			delete(m.runDones, key)
+		}
 		m.mu.Unlock()
+		close(done)
 	}()
+	if previousDone != nil {
+		<-previousDone
+	}
+	if ctx.Err() != nil {
+		return
+	}
 
 	slog.Info(logMessage, "key", key, "singleton", singleton)
 	if singleton {

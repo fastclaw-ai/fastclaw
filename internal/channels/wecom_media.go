@@ -15,6 +15,7 @@ import (
 	_ "image/jpeg"
 	"image/png"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"net/url"
@@ -250,25 +251,26 @@ func (w *WeCom) sendPassiveStream(ctx context.Context, msg bus.OutboundMessage) 
 	if msg.StreamID == "" {
 		return errors.New("wecom stream message requires stream ID")
 	}
-	ref, ok := w.lookupReplyRef(msg.ReplyToMsgID)
-	if !ok {
-		return errors.New("wecom passive reply reference is missing or expired")
-	}
-	if msg.ChatID != ref.ChatID {
-		w.deleteReplyRef(msg.ReplyToMsgID)
-		return errors.New("wecom passive reply chat does not match the original conversation")
-	}
 	finish := msg.StreamState == bus.StreamFinish
 	if msg.StreamState != bus.StreamStart && msg.StreamState != bus.StreamUpdate && !finish {
-		w.deleteReplyRef(msg.ReplyToMsgID)
 		return fmt.Errorf("unsupported wecom stream state %q", msg.StreamState)
 	}
-	if !finish && len(msg.MediaItems) > 0 {
-		w.deleteReplyRef(msg.ReplyToMsgID)
-		return errors.New("wecom media can only be attached to a finished stream")
+	ref, ok := w.lookupReplyRef(msg.ReplyToMsgID)
+	if !ok {
+		if finish {
+			slog.Warn("wecom passive reply reference missing; sending final response proactively",
+				"account", w.accountID, "chat", msg.ChatID, "reply_to", msg.ReplyToMsgID)
+			return w.sendProactiveMessage(ctx, msg)
+		}
+		slog.Warn("wecom passive reply reference missing; dropping intermediate stream state",
+			"account", w.accountID, "chat", msg.ChatID, "reply_to", msg.ReplyToMsgID, "state", msg.StreamState)
+		return nil
 	}
-	if finish {
-		defer w.deleteReplyRef(msg.ReplyToMsgID)
+	if msg.ChatID != ref.ChatID {
+		return errors.New("wecom passive reply chat does not match the original conversation")
+	}
+	if !finish && len(msg.MediaItems) > 0 {
+		return errors.New("wecom media can only be attached to a finished stream")
 	}
 
 	chunks := splitWeComMarkdown(msg.Text, weComMaxMarkdownBytes)
@@ -294,7 +296,6 @@ func (w *WeCom) sendPassiveStream(ctx context.Context, msg bus.OutboundMessage) 
 	}
 	body := map[string]any{"msgtype": "stream", "stream": stream}
 	if _, err := w.request(ctx, ref.ReqID, weComCmdRespond, body); err != nil {
-		w.deleteReplyRef(msg.ReplyToMsgID)
 		return err
 	}
 	if !finish {
@@ -310,6 +311,7 @@ func (w *WeCom) sendPassiveStream(ctx context.Context, msg bus.OutboundMessage) 
 			return err
 		}
 	}
+	w.deleteReplyRef(msg.ReplyToMsgID)
 	return nil
 }
 

@@ -92,6 +92,159 @@ func TestTargetedOutboundAcksOnlyAfterHandlerSuccess(t *testing.T) {
 	})
 }
 
+func TestTargetedOutboundStopsBatchAfterFirstHandlerFailure(t *testing.T) {
+	_, client, mb, ctx, cancel := newTargetedBus(t, "consumer-1")
+	defer cancel()
+
+	stream := targetedOutboundKey("test", "wecom", "bot-a")
+	for _, state := range []StreamState{StreamStart, StreamUpdate, StreamFinish} {
+		mb.Outbound <- OutboundMessage{
+			Channel:     "wecom",
+			AccountID:   "bot-a",
+			ChatID:      "chat-a",
+			StreamID:    "stream-1",
+			StreamState: state,
+		}
+	}
+	waitRedis(t, func() bool { return client.XLen(ctx, stream).Val() == 3 })
+
+	called := make(chan StreamState, 3)
+	consumeCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	go func() {
+		_ = mb.ConsumeTargetedOutbound(consumeCtx, "wecom", "bot-a", func(msg OutboundMessage) error {
+			called <- msg.StreamState
+			if msg.StreamState == StreamStart {
+				return errors.New("start send failed")
+			}
+			return nil
+		})
+	}()
+
+	select {
+	case got := <-called:
+		if got != StreamStart {
+			t.Fatalf("first handled stream state = %q, want %q", got, StreamStart)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first targeted message")
+	}
+	select {
+	case got := <-called:
+		t.Fatalf("handled stream state %q after the first handler failure", got)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	pending, err := client.XPending(ctx, stream, "workers").Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending.Count != 3 {
+		t.Fatalf("pending count = %d, want all 3 batch entries pending", pending.Count)
+	}
+}
+
+func TestTargetedOutboundRetriesFailedPendingBeforeNewMessages(t *testing.T) {
+	_, _, mb, ctx, cancel := newTargetedBus(t, "consumer-1")
+	defer cancel()
+
+	mb.Outbound <- OutboundMessage{Channel: "wecom", AccountID: "bot-a", ChatID: "chat-a", Text: "blocked"}
+	firstAttempt := make(chan struct{}, 1)
+	allowRetry := make(chan struct{})
+	called := make(chan string, 4)
+	consumeCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	go func() {
+		_ = mb.ConsumeTargetedOutbound(consumeCtx, "wecom", "bot-a", func(msg OutboundMessage) error {
+			called <- msg.Text
+			if msg.Text == "blocked" {
+				select {
+				case <-allowRetry:
+					return nil
+				default:
+					select {
+					case firstAttempt <- struct{}{}:
+					default:
+					}
+					return errors.New("fixture blocked send")
+				}
+			}
+			return nil
+		})
+	}()
+	waitSignal(t, firstAttempt, "first failed targeted attempt")
+	if got := <-called; got != "blocked" {
+		t.Fatalf("first handled message = %q, want blocked", got)
+	}
+
+	mb.Outbound <- OutboundMessage{Channel: "wecom", AccountID: "bot-a", ChatID: "chat-a", Text: "later"}
+	select {
+	case got := <-called:
+		t.Fatalf("handled %q before retrying failed pending message", got)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(allowRetry)
+	for _, want := range []string{"blocked", "later"} {
+		select {
+		case got := <-called:
+			if got != want {
+				t.Fatalf("handled message = %q, want %q", got, want)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for %q", want)
+		}
+	}
+}
+
+func TestTargetedOutboundDoesNotClaimWhileHandlerCanStillBeActive(t *testing.T) {
+	mr, client, first, ctx, cancel := newTargetedBus(t, "consumer-1")
+	defer cancel()
+
+	first.Outbound <- OutboundMessage{Channel: "wecom", AccountID: "bot-a", ChatID: "chat-a", Text: "slow send"}
+	stream := targetedOutboundKey("test", "wecom", "bot-a")
+	waitRedis(t, func() bool { return client.XLen(ctx, stream).Val() == 1 })
+
+	handling := make(chan struct{}, 1)
+	release := make(chan struct{})
+	firstCtx, stopFirst := context.WithCancel(ctx)
+	defer stopFirst()
+	go func() {
+		_ = first.ConsumeTargetedOutbound(firstCtx, "wecom", "bot-a", func(OutboundMessage) error {
+			handling <- struct{}{}
+			<-release
+			return nil
+		})
+	}()
+	waitSignal(t, handling, "slow targeted handler")
+
+	// WeCom SendMessage may remain active for two minutes. A peer that
+	// acquires the account lease during that window must not claim the entry.
+	mr.SetTime(time.Now().UTC().Add(2 * time.Minute))
+	second := NewRedis(RedisConfig{Client: client, Prefix: "test", Group: "workers", Consumer: "consumer-2"})
+	duplicate := make(chan struct{}, 1)
+	secondCtx, stopSecond := context.WithCancel(ctx)
+	defer stopSecond()
+	go func() {
+		_ = second.ConsumeTargetedOutbound(secondCtx, "wecom", "bot-a", func(OutboundMessage) error {
+			duplicate <- struct{}{}
+			return nil
+		})
+	}()
+
+	select {
+	case <-duplicate:
+		t.Fatal("active targeted message was claimed by another consumer")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(release)
+	waitRedis(t, func() bool {
+		pending, err := client.XPending(ctx, stream, "workers").Result()
+		return err == nil && pending.Count == 0
+	})
+}
+
 func TestTargetedOutboundClaimsPendingFromPreviousConsumer(t *testing.T) {
 	mr, client, first, ctx, cancel := newTargetedBus(t, "consumer-1")
 	defer cancel()

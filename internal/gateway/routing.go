@@ -111,7 +111,11 @@ func (g *Gateway) resolveChannelOwner(ctx context.Context, msg bus.InboundMessag
 	}
 	// Try the new channels table first.
 	if ch, err := g.store.LookupChannel(ctx, msg.Channel, msg.AccountID); err == nil && ch != nil {
-		info := channelOwnerInfo{sharedIdentity: ch.SharedIdentity}
+		// WeCom always resolves the concrete member, even if a legacy or
+		// hand-edited row contains shared_identity=true. Otherwise a member
+		// would be rewritten to the channel owner and inherit owner/admin
+		// capabilities.
+		info := channelOwnerInfo{sharedIdentity: ch.Type != "wecom" && ch.SharedIdentity}
 		if ch.UserID != "" {
 			info.ownerID = ch.UserID
 			return info

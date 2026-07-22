@@ -1,10 +1,25 @@
 package gateway
 
 import (
+	"context"
 	"testing"
 
 	"github.com/fastclaw-ai/fastclaw/internal/bus"
+	"github.com/fastclaw-ai/fastclaw/internal/store"
 )
+
+type weComSharedIdentityStore struct {
+	store.Store
+}
+
+func (s *weComSharedIdentityStore) LookupChannel(context.Context, string, string) (*store.ChannelRecord, error) {
+	return &store.ChannelRecord{
+		UserID:         "u_owner",
+		Type:           "wecom",
+		AccountID:      "bot-1",
+		SharedIdentity: true,
+	}, nil
+}
 
 func TestWeComConversationIdentityTriples(t *testing.T) {
 	dmA := bus.InboundMessage{Channel: "wecom", AccountID: "bot-1", ChatID: "member-a", UserID: "member-a", PeerKind: "dm"}
@@ -25,5 +40,18 @@ func TestWeComConversationIdentityTriples(t *testing.T) {
 	}
 	if groupA.UserID == groupB.UserID || groupA.SharedIdentity || groupB.SharedIdentity {
 		t.Fatalf("group sender identity was lost: A=%#v B=%#v", groupA, groupB)
+	}
+}
+
+func TestResolveWeComOwnerIgnoresPersistedSharedIdentity(t *testing.T) {
+	g := &Gateway{store: &weComSharedIdentityStore{}}
+	info := g.resolveChannelOwner(context.Background(), bus.InboundMessage{
+		Channel: "wecom", AccountID: "bot-1", UserID: "member-7",
+	})
+	if info.ownerID != "u_owner" {
+		t.Fatalf("ownerID = %q, want u_owner", info.ownerID)
+	}
+	if info.sharedIdentity {
+		t.Fatal("WeCom routing honored a persisted shared identity flag")
 	}
 }

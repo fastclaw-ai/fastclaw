@@ -107,20 +107,96 @@ func TestWeComStreamFinalAttachesJPEGAndPNGImages(t *testing.T) {
 	}
 }
 
-func TestWeComStreamErrorDoesNotLeaveReplyOpen(t *testing.T) {
+func TestWeComStreamSendFailureRetainsReplyRefForRetry(t *testing.T) {
 	w := newOutboundTestWeCom(t)
 	w.storeReplyRef("msg-1", weComReplyRef{ReqID: "callback-req-id", ChatID: "chat-1", ExpiresAt: time.Now().Add(time.Minute)})
+	attempts := 0
 	w.sendRequestHook = func(context.Context, string, string, any) (weComFrame, error) {
-		return weComFrame{}, errors.New("fixture send failure")
+		attempts++
+		if attempts == 1 {
+			return weComFrame{}, errors.New("fixture send failure")
+		}
+		return weComFrame{}, nil
 	}
-	err := w.SendMessage(bus.OutboundMessage{
+	msg := bus.OutboundMessage{
 		ChatID: "chat-1", ReplyToMsgID: "msg-1", StreamID: "stream-1", StreamState: bus.StreamUpdate, Text: "partial",
-	})
+	}
+	err := w.SendMessage(msg)
 	if err == nil {
 		t.Fatal("stream send succeeded")
 	}
+	if _, ok := w.lookupReplyRef("msg-1"); !ok {
+		t.Fatal("failed stream discarded reply reference needed for retry")
+	}
+	if err := w.SendMessage(msg); err != nil {
+		t.Fatalf("retry stream update: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("send attempts = %d, want 2", attempts)
+	}
+}
+
+func TestWeComStreamFinishFailureRetainsReplyRefUntilSuccessfulRetry(t *testing.T) {
+	w := newOutboundTestWeCom(t)
+	w.storeReplyRef("msg-1", weComReplyRef{ReqID: "callback-req-id", ChatID: "chat-1", ExpiresAt: time.Now().Add(time.Minute)})
+	attempts := 0
+	w.sendRequestHook = func(context.Context, string, string, any) (weComFrame, error) {
+		attempts++
+		if attempts == 1 {
+			return weComFrame{}, errors.New("fixture finish failure")
+		}
+		return weComFrame{}, nil
+	}
+	msg := bus.OutboundMessage{
+		ChatID: "chat-1", ReplyToMsgID: "msg-1", StreamID: "stream-1", StreamState: bus.StreamFinish, Text: "done",
+	}
+	if err := w.SendMessage(msg); err == nil {
+		t.Fatal("stream finish succeeded")
+	}
+	if _, ok := w.lookupReplyRef("msg-1"); !ok {
+		t.Fatal("failed stream finish discarded reply reference needed for retry")
+	}
+	if err := w.SendMessage(msg); err != nil {
+		t.Fatalf("retry stream finish: %v", err)
+	}
 	if _, ok := w.lookupReplyRef("msg-1"); ok {
-		t.Fatal("failed stream retained reply reference")
+		t.Fatal("successful stream finish retained reply reference")
+	}
+}
+
+func TestWeComMissingReplyRefDropsIntermediateStatesAndFallsBackFinalProactively(t *testing.T) {
+	w := newOutboundTestWeCom(t)
+	requests := captureWeComRequests(w, nil)
+
+	base := bus.OutboundMessage{
+		ChatID: "chat-1", ReplyToMsgID: "msg-from-previous-leaseholder", StreamID: "stream-1",
+	}
+	for _, state := range []bus.StreamState{bus.StreamStart, bus.StreamUpdate} {
+		msg := base
+		msg.StreamState = state
+		msg.Text = "cumulative intermediate content"
+		if err := w.SendMessage(msg); err != nil {
+			t.Fatalf("missing-ref %s: %v", state, err)
+		}
+	}
+	select {
+	case request := <-requests:
+		t.Fatalf("missing-ref intermediate state sent request: %#v", request)
+	default:
+	}
+
+	finish := base
+	finish.StreamState = bus.StreamFinish
+	finish.Text = "complete final response"
+	if err := w.SendMessage(finish); err != nil {
+		t.Fatalf("missing-ref finish fallback: %v", err)
+	}
+	request := <-requests
+	if request.cmd != weComCmdSend || request.body["chatid"] != "chat-1" || request.body["msgtype"] != "markdown" {
+		t.Fatalf("finish fallback request = %#v", request)
+	}
+	if markdown := nestedMap(t, request.body, "markdown"); markdown["content"] != finish.Text {
+		t.Fatalf("finish fallback markdown = %#v", markdown)
 	}
 }
 
