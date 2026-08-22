@@ -1,6 +1,28 @@
 package bus
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
+
+func TestOutboundMessageStreamFieldsRoundTrip(t *testing.T) {
+	want := OutboundMessage{
+		Channel: "wecom", AccountID: "bot-1", ChatID: "group-1",
+		ReplyToMsgID: "msg-1", Text: "partial",
+		StreamID: "stream-1", StreamState: StreamUpdate,
+	}
+	b, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got OutboundMessage
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.StreamID != want.StreamID || got.StreamState != StreamUpdate {
+		t.Fatalf("round trip = %#v", got)
+	}
+}
 
 // TestSourceUserIsEmpty pins down the backwards-compat contract: every
 // pre-existing producer (IM channels, web chat, webhook, OpenAI-compat

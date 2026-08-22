@@ -34,6 +34,8 @@ import {
   ExternalLink,
   Loader2,
   QrCode,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import {
   listAgentChannels,
@@ -42,11 +44,13 @@ import {
   connectAgentSlack,
   connectAgentLINE,
   connectAgentFeishu,
+  connectAgentWeCom,
   startAgentWeChatLogin,
   pollAgentWeChatLoginStatus,
   disconnectAgentChannel,
   type AgentChannel,
 } from "@/lib/api";
+import { ChannelIcon as SharedChannelIcon } from "@/components/channel-icon";
 import { useAgentIdFromURL } from "@/hooks/use-agent-id";
 import { useAgentName } from "@/hooks/use-agent-name";
 
@@ -89,6 +93,12 @@ const CATALOG: { type: string; label: string; description: string; available: bo
     available: true,
   },
   {
+    type: "wecom",
+    label: "WeCom",
+    description: "Connect a WeCom Intelligent Bot over an authenticated WebSocket.",
+    available: true,
+  },
+  {
     type: "feishu",
     label: "Feishu",
     description: "Connect a Feishu custom-app bot via webhook (App ID + App Secret).",
@@ -109,6 +119,7 @@ export default function AgentChannelsPage() {
   const [slackOpen, setSlackOpen] = useState(false);
   const [lineOpen, setLineOpen] = useState(false);
   const [wechatOpen, setWechatOpen] = useState(false);
+  const [wecomOpen, setWecomOpen] = useState(false);
   const [feishuOpen, setFeishuOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<AgentChannel | null>(null);
 
@@ -196,6 +207,7 @@ export default function AgentChannelsPage() {
                   else if (entry.type === "slack") setSlackOpen(true);
                   else if (entry.type === "line") setLineOpen(true);
                   else if (entry.type === "wechat") setWechatOpen(true);
+                  else if (entry.type === "wecom") setWecomOpen(true);
                   else if (entry.type === "feishu") setFeishuOpen(true);
                 }}
               />
@@ -235,6 +247,13 @@ export default function AgentChannelsPage() {
       <ConnectWeChatDialog
         open={wechatOpen}
         onOpenChange={setWechatOpen}
+        agentId={agentId}
+        onConnected={refresh}
+      />
+
+      <ConnectWeComDialog
+        open={wecomOpen}
+        onOpenChange={setWecomOpen}
         agentId={agentId}
         onConnected={refresh}
       />
@@ -290,7 +309,7 @@ function CatalogCard({
   return (
     <div className="rounded-lg border border-border bg-card p-4 flex flex-col gap-3">
       <div className="flex items-center gap-2">
-        <ChannelIcon type={type} />
+        <SharedChannelIcon channel={type} className="h-4 w-4 shrink-0" />
         <span className="font-medium">{label}</span>
       </div>
       <p className="text-xs text-muted-foreground flex-1">{description}</p>
@@ -329,7 +348,7 @@ function ConnectedCard({
     <div className="rounded-lg border border-border bg-card p-4 flex flex-col gap-3">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
-          <ChannelIcon type={channel.type} />
+          <SharedChannelIcon channel={channel.type} className="h-4 w-4 shrink-0" />
           <span className="font-medium truncate">{label}</span>
         </div>
         {channel.enabled && (
@@ -354,7 +373,7 @@ function ConnectedCard({
             </a>
           ) : (
             <p className="text-xs text-muted-foreground truncate">
-              @{channel.botUsername}
+              {channel.type === "wecom" ? channel.botUsername : `@${channel.botUsername}`}
             </p>
           )
         )}
@@ -374,37 +393,6 @@ function ConnectedCard({
       </Button>
     </div>
   );
-}
-
-function ChannelIcon({ type }: { type: string }) {
-  // Brand SVG/PNG assets live in /public/channels — copied from the
-  // workany-web icon set. We size them at 16x16 to match the lucide
-  // icons they replace; the asset's intrinsic colors carry the brand
-  // tint so we don't need a `text-*` class. WeChat has no asset yet so
-  // it falls through to the lucide MessageSquare in emerald.
-  const asset: Record<string, string> = {
-    telegram: "/channels/telegram.svg",
-    discord: "/channels/discord.svg",
-    slack: "/channels/slack.svg",
-    line: "/channels/line.png",
-    feishu: "/channels/feishu.png",
-    wechat: "/channels/wechat.svg",
-  };
-  if (asset[type]) {
-    // WeChat's artwork is non-square (50×40) — object-contain letterboxes
-    // it inside the 16×16 box, leaving a visible gap on top/bottom. Scale
-    // up just this one so it reads at the same visual weight as the
-    // square brand icons next to it.
-    const extra = type === "wechat" ? "scale-150" : "";
-    return (
-      <img
-        src={asset[type]}
-        alt={type}
-        className={`h-4 w-4 object-contain ${extra}`}
-      />
-    );
-  }
-  return <Radio className="h-4 w-4 text-muted-foreground" />;
 }
 
 function ConnectTelegramDialog({
@@ -1133,6 +1121,165 @@ function ConnectWeChatDialog({
               )}
               <Button variant="outline" onClick={() => onOpenChange(false)}>
                 Cancel
+              </Button>
+            </>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ConnectWeComDialog({
+  open,
+  onOpenChange,
+  agentId,
+  onConnected,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  agentId: string;
+  onConnected: () => void;
+}) {
+  const [botId, setBotId] = useState("");
+  const [secret, setSecret] = useState("");
+  const [showSecret, setShowSecret] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const [connectedBotId, setConnectedBotId] = useState("");
+
+  useEffect(() => {
+    if (!open) {
+      setBotId("");
+      setSecret("");
+      setShowSecret(false);
+      setSubmitting(false);
+      setError("");
+      setConnectedBotId("");
+    }
+  }, [open]);
+
+  const submit = async () => {
+    if (!botId.trim() || !secret.trim() || !agentId) return;
+    setSubmitting(true);
+    setError("");
+    try {
+      const res = await connectAgentWeCom(agentId, {
+        botId: botId.trim(),
+        secret: secret.trim(),
+      });
+      if (res.error || !res.ok) {
+        setError(res.error || "Failed to connect WeCom");
+        return;
+      }
+      setConnectedBotId(res.botId || botId.trim());
+      setSecret("");
+      onConnected();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Failed to connect WeCom");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <SharedChannelIcon channel="wecom" className="h-5 w-5 shrink-0" />
+            Connect WeCom Intelligent Bot
+          </DialogTitle>
+          <DialogDescription>
+            Create an API-mode Intelligent Bot in WeCom, select Long
+            Connection, then paste its Bot ID and Secret. No public callback
+            URL is required.
+          </DialogDescription>
+        </DialogHeader>
+
+        {connectedBotId ? (
+          <div className="space-y-3 py-2">
+            <div className="rounded-lg border bg-muted/30 p-4 space-y-2">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4 text-primary" />
+                <span className="text-sm font-medium">Connected</span>
+              </div>
+              <p className="text-sm">The WeCom bot is connected to this agent.</p>
+              <code className="block text-xs text-muted-foreground">
+                {connectedBotId}
+              </code>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-3 py-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="wecom-bot-id">Bot ID</Label>
+              <Input
+                id="wecom-bot-id"
+                value={botId}
+                onChange={(event) => setBotId(event.target.value)}
+                placeholder="Paste the Bot ID"
+                className="font-mono text-sm"
+                autoComplete="off"
+                autoFocus
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="wecom-secret">Secret</Label>
+              <div className="relative">
+                <Input
+                  id="wecom-secret"
+                  value={secret}
+                  onChange={(event) => setSecret(event.target.value)}
+                  placeholder="Paste the Secret"
+                  type={showSecret ? "text" : "password"}
+                  className="pr-10 font-mono text-sm"
+                  autoComplete="new-password"
+                />
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2 text-muted-foreground"
+                  onClick={() => setShowSecret((visible) => !visible)}
+                  aria-label={showSecret ? "Hide Secret" : "Show Secret"}
+                >
+                  {showSecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                The Secret is sent only to this FastClaw instance and is shown
+                masked after connection.
+              </p>
+            </div>
+            {error && <p className="text-xs text-destructive">{error}</p>}
+          </div>
+        )}
+
+        <DialogFooter>
+          {connectedBotId ? (
+            <Button onClick={() => onOpenChange(false)}>Done</Button>
+          ) : (
+            <>
+              <Button
+                variant="outline"
+                onClick={() => onOpenChange(false)}
+                disabled={submitting}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={submit}
+                disabled={submitting || !botId.trim() || !secret.trim()}
+              >
+                {submitting ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Connecting…
+                  </>
+                ) : (
+                  "Connect"
+                )}
               </Button>
             </>
           )}

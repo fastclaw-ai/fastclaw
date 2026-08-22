@@ -22,12 +22,11 @@ type dedupEntry struct {
 //
 // Two distinct keying strategies because the failure modes differ:
 //
-//   - Group: Telegram supergroups deliver the same logical message to
-//     each bot with a *different* message_id, so message_id can't
-//     dedup across bot copies. Key on (channel, chatID, userID,
-//     text-hash) instead — same speaker saying the same thing in the
-//     same room within 60s is overwhelmingly a redelivery, not a real
-//     repeat.
+//   - Group: WeCom provides a stable msgid, so use the exact
+//     (channel, accountID, messageID) tuple. Other platforms retain the
+//     text strategy because Telegram supergroups deliver the same logical
+//     message to each bot with a *different* message_id. For those, key on
+//     (channel, chatID, userID, text-hash) instead.
 //   - DM: every supported IM channel (wechat / telegram / discord /
 //     line / feishu / slack) emits a stable per-conversation
 //     message_id. Key on (channel, accountID, messageID) so the same
@@ -45,6 +44,14 @@ type dedupEntry struct {
 // fix for that — out of scope here.
 func (g *Gateway) isDuplicate(msg bus.InboundMessage) bool {
 	if msg.PeerKind == "group" {
+		// Intelligent Bot callbacks provide a stable msgid in groups. Use it
+		// directly so retries remain duplicates even if text normalization
+		// changes, while two intentional identical messages stay distinct.
+		if msg.Channel == "wecom" && msg.MessageID != "" {
+			key := fmt.Sprintf("group:%s:%s:%s", msg.Channel, msg.AccountID, msg.MessageID)
+			_, loaded := g.dedup.LoadOrStore(key, dedupEntry{seenAt: time.Now()})
+			return loaded
+		}
 		key := fmt.Sprintf("group:%s:%s:%s:%x", msg.Channel, msg.ChatID, msg.UserID, hashString(msg.Text))
 		_, loaded := g.dedup.LoadOrStore(key, dedupEntry{seenAt: time.Now()})
 		return loaded

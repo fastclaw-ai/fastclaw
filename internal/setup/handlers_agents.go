@@ -200,8 +200,8 @@ func (s *Server) agentScopeAutoPersist(r *http.Request, agentID string) *bool {
 	return &v
 }
 
-// agentScopeSharedIdentity returns true when ANY channel bound to this
-// agent has shared_identity enabled. The toggle is conceptually agent-
+// agentScopeSharedIdentity returns true when any eligible channel bound to
+// this agent has shared_identity enabled. The toggle is conceptually agent-
 // level (Context page) but physically stored per-channel so the gateway
 // routing hot-path can read it without an extra DB lookup.
 func (s *Server) agentScopeSharedIdentity(r *http.Request, ownerUserID, agentID string) bool {
@@ -210,7 +210,7 @@ func (s *Server) agentScopeSharedIdentity(r *http.Request, ownerUserID, agentID 
 		return false
 	}
 	for _, ch := range chs {
-		if ch.SharedIdentity {
+		if ch.Type != "wecom" && ch.SharedIdentity {
 			return true
 		}
 	}
@@ -635,6 +635,9 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 	if req.SharedIdentity != nil {
 		chs, _ := s.dataStore.ListChannels(r.Context(), rec.UserID, rec.ID)
 		for i := range chs {
+			if chs[i].Type == "wecom" {
+				continue
+			}
 			if chs[i].SharedIdentity != *req.SharedIdentity {
 				chs[i].SharedIdentity = *req.SharedIdentity
 				_ = s.dataStore.SaveChannel(r.Context(), &chs[i])

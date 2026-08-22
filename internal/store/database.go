@@ -3726,9 +3726,15 @@ func (d *DBStore) GetChannel(ctx context.Context, id string) (*ChannelRecord, er
 	return scanChannelRow(row)
 }
 
-func (d *DBStore) SaveChannel(ctx context.Context, ch *ChannelRecord) error {
+func prepareChannelWrite(ch *ChannelRecord) (data []byte, enabledInt, sharedIdent int, err error) {
 	if ch.Type == "" || ch.AccountID == "" {
-		return errors.New("store: SaveChannel requires type and accountId")
+		return nil, 0, 0, errors.New("store: channel requires type and accountId")
+	}
+	// WeCom messages must always resolve a distinct member identity. Keep the
+	// invariant at the persistence boundary so every current and future writer
+	// gets the same behavior, including direct CLI writes.
+	if ch.Type == "wecom" {
+		ch.SharedIdentity = false
 	}
 	now := time.Now().UTC()
 	if ch.CreatedAt.IsZero() {
@@ -3738,18 +3744,49 @@ func (d *DBStore) SaveChannel(ctx context.Context, ch *ChannelRecord) error {
 	if ch.ID == "" {
 		ch.ID = randomChannelID()
 	}
-	dataBytes, _ := json.Marshal(ch.Data)
+	data, _ = json.Marshal(ch.Data)
 	// Convert bools to int for PostgreSQL INTEGER columns.
-	enabledInt := 0
 	if ch.Enabled {
 		enabledInt = 1
 	}
-	sharedIdent := 0
 	if ch.SharedIdentity {
 		sharedIdent = 1
 	}
+	return data, enabledInt, sharedIdent, nil
+}
+
+// CreateChannel atomically claims a channel's global routing identity. Unlike
+// SaveChannel it never updates a conflicting (type, account_id) row, so callers
+// can safely distinguish a successful first binding from an occupied bot.
+func (d *DBStore) CreateChannel(ctx context.Context, ch *ChannelRecord) error {
+	dataBytes, enabledInt, sharedIdent, err := prepareChannelWrite(ch)
+	if err != nil {
+		return fmt.Errorf("store: CreateChannel: %w", err)
+	}
 	if d.dialect == "postgres" {
-		_, err := d.db.ExecContext(ctx,
+		_, err = d.db.ExecContext(ctx,
+			`INSERT INTO channels (id, user_id, agent_id, type, account_id, enabled, bot_token, base_url, platform_user_id, shared_identity, data, created_at, updated_at)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+			ch.ID, ch.UserID, ch.AgentID, ch.Type, ch.AccountID, enabledInt, ch.BotToken, ch.BaseURL, ch.PlatformUserID, sharedIdent, string(dataBytes), ch.CreatedAt, ch.UpdatedAt)
+	} else {
+		_, err = d.db.ExecContext(ctx,
+			`INSERT INTO channels (id, user_id, agent_id, type, account_id, enabled, bot_token, base_url, platform_user_id, shared_identity, data, created_at, updated_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			ch.ID, ch.UserID, ch.AgentID, ch.Type, ch.AccountID, enabledInt, ch.BotToken, ch.BaseURL, ch.PlatformUserID, sharedIdent, string(dataBytes), ch.CreatedAt, ch.UpdatedAt)
+	}
+	if isUniqueViolation(err) {
+		return fmt.Errorf("%w: %s:%s", ErrChannelAlreadyExists, ch.Type, ch.AccountID)
+	}
+	return err
+}
+
+func (d *DBStore) SaveChannel(ctx context.Context, ch *ChannelRecord) error {
+	dataBytes, enabledInt, sharedIdent, err := prepareChannelWrite(ch)
+	if err != nil {
+		return fmt.Errorf("store: SaveChannel: %w", err)
+	}
+	if d.dialect == "postgres" {
+		_, err = d.db.ExecContext(ctx,
 			`INSERT INTO channels (id, user_id, agent_id, type, account_id, enabled, bot_token, base_url, platform_user_id, shared_identity, data, created_at, updated_at)
 				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 				ON CONFLICT (type, account_id) DO UPDATE SET
@@ -3758,7 +3795,7 @@ func (d *DBStore) SaveChannel(ctx context.Context, ch *ChannelRecord) error {
 			ch.ID, ch.UserID, ch.AgentID, ch.Type, ch.AccountID, enabledInt, ch.BotToken, ch.BaseURL, ch.PlatformUserID, sharedIdent, string(dataBytes), ch.CreatedAt, ch.UpdatedAt)
 		return err
 	}
-	_, err := d.db.ExecContext(ctx,
+	_, err = d.db.ExecContext(ctx,
 		`INSERT INTO channels (id, user_id, agent_id, type, account_id, enabled, bot_token, base_url, platform_user_id, shared_identity, data, created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT (type, account_id) DO UPDATE SET

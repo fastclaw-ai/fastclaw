@@ -34,7 +34,7 @@ import (
 type channelOut struct {
 	Type           string `json:"type"`
 	AccountID      string `json:"accountId"`
-	BotUsername     string `json:"botUsername,omitempty"`
+	BotUsername    string `json:"botUsername,omitempty"`
 	BotToken       string `json:"botToken"` // masked
 	Enabled        bool   `json:"enabled"`
 	SharedIdentity bool   `json:"sharedIdentity"`
@@ -225,7 +225,7 @@ func flattenChannelRecords(rows []store.ChannelRecord, source string) []channelO
 			out = append(out, channelOut{
 				Type:           rec.Type,
 				AccountID:      accountID,
-				BotUsername:     accountID,
+				BotUsername:    accountID,
 				BotToken:       maskAPIKey(tok),
 				Enabled:        rec.Enabled,
 				SharedIdentity: rec.SharedIdentity,
@@ -239,6 +239,126 @@ func flattenChannelRecords(rows []store.ChannelRecord, source string) []channelO
 
 type connectTelegramRequest struct {
 	BotToken string `json:"botToken"`
+}
+
+type connectWeComRequest struct {
+	BotID  string `json:"botId"`
+	Secret string `json:"secret"`
+}
+
+// handleConnectAgentWeCom validates an Intelligent Bot credential pair,
+// persists it under the stable Bot ID, and starts its authenticated
+// WebSocket immediately. Secrets are never returned to the caller.
+func (s *Server) handleConnectAgentWeCom(w http.ResponseWriter, r *http.Request) {
+	if !s.requireWritable(w, r) {
+		return
+	}
+	agentID := r.PathValue("id")
+	userID, resolvedAgentID, ok := s.resolveChannelBindingScope(w, r, agentID)
+	if !ok {
+		return
+	}
+
+	var req connectWeComRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	botID := strings.TrimSpace(req.BotID)
+	secret := strings.TrimSpace(req.Secret)
+	if botID == "" {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "botId required"})
+		return
+	}
+	if secret == "" {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "secret required"})
+		return
+	}
+
+	validator := s.weComValidateCredentials
+	if validator == nil {
+		validator = channels.WeComValidateCredentials
+	}
+	validationCtx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	if err := validator(validationCtx, botID, secret); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+
+	// Bot ID is the global routing identity for this persistent socket.
+	// Keep the fast conflict response, then atomically claim below so two
+	// concurrent misses still cannot move the bot between users/agents.
+	if existing, err := s.dataStore.LookupChannel(r.Context(), "wecom", botID); err == nil && existing != nil {
+		jsonResponse(w, http.StatusConflict, map[string]any{
+			"error": "this WeCom Bot ID is already connected — disconnect it first",
+		})
+		return
+	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+
+	cc := config.ChannelConfig{
+		Enabled: true,
+		Accounts: map[string]config.AccountConfig{
+			botID: {BotToken: secret},
+		},
+	}
+	stored := &store.ChannelRecord{
+		UserID:         userID,
+		AgentID:        resolvedAgentID,
+		Type:           "wecom",
+		AccountID:      botID,
+		Enabled:        true,
+		BotToken:       secret,
+		SharedIdentity: false,
+		Data:           channelConfigToData(cc),
+	}
+	if err := s.dataStore.CreateChannel(r.Context(), stored); err != nil {
+		if errors.Is(err, store.ErrChannelAlreadyExists) {
+			jsonResponse(w, http.StatusConflict, map[string]any{
+				"error": "this WeCom Bot ID is already connected — disconnect it first",
+			})
+			return
+		}
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	if err := s.appendBinding(r, "", "", config.Binding{
+		AgentID: agentID,
+		Match:   config.Match{Channel: "wecom", AccountID: botID},
+	}); err != nil {
+		if rollbackErr := s.rollbackCreatedWeComChannel(stored.ID); rollbackErr != nil {
+			slog.Error("failed to roll back WeCom channel after binding error", "channel_id", stored.ID, "error", rollbackErr)
+			err = fmt.Errorf("%w; rollback channel delete failed", err)
+		}
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+
+	s.invalidateOwner(userID, resolvedAgentID)
+	if err := s.tryHotRegisterChannelRecord(*stored); err != nil {
+		if rollbackErr := s.rollbackCreatedWeComChannel(stored.ID); rollbackErr != nil {
+			slog.Error("failed to roll back WeCom channel after hot-start error", "channel_id", stored.ID, "error", rollbackErr)
+			err = fmt.Errorf("%w; rollback channel delete failed", err)
+		}
+		if rollbackErr := s.removeBinding(r, "", "", agentID, "wecom", botID); rollbackErr != nil {
+			slog.Error("failed to roll back WeCom binding after hot-start error", "channel_id", stored.ID, "error", rollbackErr)
+			err = fmt.Errorf("%w; rollback binding removal failed", err)
+		}
+		s.invalidateOwner(userID, resolvedAgentID)
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]any{"ok": true, "botId": botID})
+}
+
+func (s *Server) rollbackCreatedWeComChannel(channelID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return s.dataStore.DeleteChannel(ctx, channelID)
 }
 
 // handleConnectAgentTelegram validates the bot token by hitting
@@ -365,7 +485,14 @@ func (s *Server) handleUpdateAgentChannel(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if req.SharedIdentity != nil {
+	if channelType == "wecom" {
+		if req.SharedIdentity != nil && *req.SharedIdentity {
+			jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "shared identity is not supported for WeCom"})
+			return
+		}
+		// Heal any legacy or hand-edited row while accepting an explicit false.
+		target.SharedIdentity = false
+	} else if req.SharedIdentity != nil {
 		target.SharedIdentity = *req.SharedIdentity
 	}
 	if err := s.dataStore.SaveChannel(r.Context(), target); err != nil {
@@ -1235,11 +1362,11 @@ func (s *Server) handleConnectAgentLINE(w http.ResponseWriter, r *http.Request) 
 		s.hotRegisterChannelRecord(*ch)
 	}
 	jsonResponse(w, http.StatusOK, map[string]any{
-		"ok":          true,
-		"botUserId":   userID,
-		"botName":     displayName,
-		"basicId":     basicID,
-		"webhookUrl":  lineWebhookPathFor(r, userID),
+		"ok":         true,
+		"botUserId":  userID,
+		"botName":    displayName,
+		"basicId":    basicID,
+		"webhookUrl": lineWebhookPathFor(r, userID),
 	})
 }
 

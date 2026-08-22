@@ -50,3 +50,34 @@ func TestAdminChatterRegularIMChannel(t *testing.T) {
 		t.Fatal("allowlisted chatter should be admin")
 	}
 }
+
+func TestWeComGroupChatterIsNeverAdmin(t *testing.T) {
+	a := &Agent{
+		ownerUserID: "u_owner",
+		admins:      map[string][]string{"wecom": {"member-listed", "u_owner"}},
+	}
+	for _, uid := range []string{"member-listed", "u_owner"} {
+		for _, source := range []string{bus.SourceUser, bus.SourceHeartbeat} {
+			msg := bus.InboundMessage{Channel: "wecom", UserID: uid, PeerKind: "group", Source: source}
+			if a.isAdminChatter(msg) {
+				t.Fatalf("wecom group %q became admin", uid)
+			}
+			if a.isTrustedTurn(msg) {
+				t.Fatalf("wecom group %q became trusted for source %q", uid, source)
+			}
+		}
+	}
+}
+
+func TestWeComDMUsesExistingOwnerAndAllowlistPolicy(t *testing.T) {
+	a := &Agent{
+		ownerUserID: "u_owner",
+		admins:      map[string][]string{"wecom": {"member-listed"}},
+	}
+	if a.isAdminChatter(bus.InboundMessage{Channel: "wecom", UserID: "member-stranger", PeerKind: "dm"}) {
+		t.Fatal("ordinary WeCom DM chatter became admin")
+	}
+	if !a.isAdminChatter(bus.InboundMessage{Channel: "wecom", UserID: "member-listed", PeerKind: "dm"}) {
+		t.Fatal("allowlisted WeCom DM chatter was denied")
+	}
+}

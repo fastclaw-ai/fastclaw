@@ -109,7 +109,7 @@ func channelsConnectCmd() *cobra.Command {
 				BotToken:       token,
 				BaseURL:        baseURL,
 				PlatformUserID: userID,
-				SharedIdentity: shared,
+				SharedIdentity: channelSharedIdentityForConnect(typ, shared),
 				Data:           data,
 			}
 			if typ == "feishu" {
@@ -125,7 +125,7 @@ func channelsConnectCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&agentName, "agent", "", "agent name or id (required)")
-	cmd.Flags().StringVar(&typ, "type", "", "channel type: telegram, discord, slack, line, feishu")
+	cmd.Flags().StringVar(&typ, "type", "", "channel type: telegram, discord, slack, line, feishu, wecom")
 	cmd.Flags().StringVar(&accountID, "account", "", "channel account id / bot username / app id (required)")
 	cmd.Flags().StringVar(&token, "token", "", "bot token / access token")
 	cmd.Flags().StringVar(&baseURL, "base-url", "", "optional base URL")
@@ -136,6 +136,10 @@ func channelsConnectCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&shared, "shared-identity", false, "share owner identity across channels")
 	_ = cmd.MarkFlagRequired("agent")
 	return cmd
+}
+
+func channelSharedIdentityForConnect(channelType string, requested bool) bool {
+	return channelType != "wecom" && requested
 }
 
 func channelsDeleteCmd() *cobra.Command {

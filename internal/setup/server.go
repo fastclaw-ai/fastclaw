@@ -80,8 +80,11 @@ type Server struct {
 	apikeys        *users.APIKeys
 	dataStore      store.Store
 	workspaceStore workspace.Store
-	webChan        *channels.WebChannel
-	pushClient     *push.APNSClient
+	// weComValidateCredentials is replaceable in focused handler tests.
+	// Production requests fall back to channels.WeComValidateCredentials.
+	weComValidateCredentials func(context.Context, string, string) error
+	webChan                  *channels.WebChannel
+	pushClient               *push.APNSClient
 	// chatEvents fans live agent chat events out to subscribed SSE
 	// clients across browser tabs. Lazy-init on first use so older
 	// callers that didn't wire it explicitly still work.
@@ -343,6 +346,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("GET /api/agents/{id}/channels/wechat/login/status", auth(s.handleAgentWeChatLoginStatus))
 	mux.HandleFunc("POST /api/agents/{id}/channels/line", auth(s.handleConnectAgentLINE))
 	mux.HandleFunc("POST /api/agents/{id}/channels/feishu", auth(s.handleConnectAgentFeishu))
+	mux.HandleFunc("POST /api/agents/{id}/channels/wecom", auth(s.handleConnectAgentWeCom))
 	mux.HandleFunc("DELETE /api/agents/{id}/channels/{type}/{accountId}", auth(s.handleDisconnectAgentChannel))
 	mux.HandleFunc("PATCH /api/agents/{id}/channels/{type}/{accountId}", auth(s.handleUpdateAgentChannel))
 

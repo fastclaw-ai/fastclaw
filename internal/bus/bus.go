@@ -120,6 +120,18 @@ type MediaItem struct {
 	Bytes       []byte
 }
 
+// StreamState describes the lifecycle of a transport-neutral streaming
+// response. The zero value keeps existing final-only channel adapters
+// backwards compatible.
+type StreamState string
+
+const (
+	StreamNone   StreamState = ""
+	StreamStart  StreamState = "start"
+	StreamUpdate StreamState = "update"
+	StreamFinish StreamState = "finish"
+)
+
 // OutboundMessage represents a message to be sent to a channel.
 type OutboundMessage struct {
 	Channel      string             // target channel type
@@ -133,6 +145,8 @@ type OutboundMessage struct {
 	EditMsgID    string             // edit existing message instead of sending new
 	MediaPaths   []string           // file paths to attach (from MEDIA: protocol; host-mounted backends only)
 	MediaItems   []MediaItem        // pre-resolved attachments — channel uploads bytes directly
+	StreamID     string             // stable identifier for one incremental response
+	StreamState  StreamState        // start/update/finish; empty means a final-only response
 	// AllowSplit, when true on a WeChat-bound message, lets the adapter
 	// honor SplitMessageMarker and emit multiple bubbles. False (default)
 	// collapses the marker to a newline so a stray marker doesn't leak
@@ -293,7 +307,15 @@ func (r *redisBridge) publishOutbound(ctx context.Context) {
 				deliver(ctx, r.outboundLocal, msg)
 				continue
 			}
-			if err := r.xadd(ctx, r.outboundKey, msg); err != nil {
+			stream := r.outboundKey
+			if targetedOutboundChannel(msg.Channel) {
+				if msg.AccountID == "" {
+					slog.Error("redis targeted outbound missing account", "channel", msg.Channel)
+					continue
+				}
+				stream = targetedOutboundKey(r.prefix, msg.Channel, msg.AccountID)
+			}
+			if err := r.xadd(ctx, stream, msg); err != nil {
 				slog.Error("redis outbound enqueue failed", "channel", msg.Channel, "account", msg.AccountID, "error", err)
 			}
 		}
