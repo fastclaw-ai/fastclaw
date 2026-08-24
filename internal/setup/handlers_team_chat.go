@@ -179,8 +179,9 @@ func (s *Server) runTeamAgentTurn(w http.ResponseWriter, flusher http.Flusher, r
 	msgText := chatReq.Message
 	if !chatReq.preMaterialized() {
 		projectID := s.resolveSessionProject(r.Context(), r, member.AgentID, member.SessionID)
-		paths := member.Handle.WriteSessionAttachments(r.Context(), member.SessionID, projectID, atts)
-		msgText = annotateMessageWithAttachments(chatReq.Message, paths)
+		results := member.Handle.WriteSessionAttachments(r.Context(), member.SessionID, projectID, atts)
+		msgText = annotateMessageWithAttachments(chatReq.Message, attachmentPaths(results))
+		imageURLs = agent.VisionGate(imageURLs, results)
 	}
 
 	hub := s.chatEventHub()

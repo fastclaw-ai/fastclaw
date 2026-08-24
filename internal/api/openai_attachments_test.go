@@ -3,6 +3,8 @@ package api
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/fastclaw-ai/fastclaw/internal/agent"
 )
 
 // Wire round-trip for the OpenAI-compat endpoint: a client posts a body
@@ -46,6 +48,40 @@ func TestChatCompletionRequestAttachmentsRoundTrip(t *testing.T) {
 	all := req.allAttachments()
 	if len(all) != 4 {
 		t.Errorf("allAttachments len = %d, want 4 (Images+ImageURLs+Attachments)", len(all))
+	}
+}
+
+// VisionGate zips inline candidates against materialization results by
+// INDEX; that contract only holds because inlineImageURLs() is an
+// index-aligned prefix of allAttachments(). Pin it, and prove the
+// downgrade flow: a sniff-rejected image stays out of the inline slice
+// while its breadcrumb still names the workspace file.
+func TestChatCompletionVisionGateFlow(t *testing.T) {
+	req := chatCompletionRequest{
+		Images:    []string{"data:image/svg+xml;base64,PHN2Zy8+"},
+		ImageURLs: []string{"https://x/photo.jpg"},
+		Attachments: []attachmentRequest{
+			{URL: "data:application/pdf;base64,BBB", Name: "r.pdf"},
+		},
+	}
+	inline := req.inlineImageURLs()
+	all := req.allAttachments()
+	for i, u := range inline {
+		if all[i].URL != u {
+			t.Fatalf("index %d misaligned: inline=%q all=%q", i, u, all[i].URL)
+		}
+	}
+
+	// Server materialization decided: svg downgraded (sniff mismatch),
+	// remote jpg accepted, pdf irrelevant to vision.
+	results := []agent.AttachmentResult{
+		{Index: 0, Path: "image_ab12_0.svg", VisionSafe: false},
+		{Index: 1, Path: "image_ab12_1.jpg", VisionSafe: true, URL: "https://x/photo.jpg"},
+		{Index: 2, Path: "r.pdf", VisionSafe: false},
+	}
+	got := agent.VisionGate(inline, results)
+	if len(got) != 1 || got[0] != "https://x/photo.jpg" {
+		t.Errorf("gated inline = %v, want only the accepted jpg", got)
 	}
 }
 

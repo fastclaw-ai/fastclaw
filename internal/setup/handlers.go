@@ -1008,6 +1008,19 @@ func (r chatRequest) preMaterialized() bool {
 	return strings.HasPrefix(r.Message, "[Attached:")
 }
 
+// attachmentPaths flattens materialization results to the bare filename
+// list used by the `[Attached: /workspace/<file>]` breadcrumb.
+func attachmentPaths(results []agent.AttachmentResult) []string {
+	if len(results) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(results))
+	for _, r := range results {
+		out = append(out, r.Path)
+	}
+	return out
+}
+
 // annotateMessageWithAttachments prepends one `[Attached: /workspace/<file>]`
 // line per attachment to the user message — same breadcrumb format the web
 // UI uses (see web/src/app/agents/[id]/chat/page.tsx:639-645), so the wire
@@ -1048,6 +1061,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	atts := req.allAttachments()
+	imageURLs := req.inlineImageURLs()
 	msgText := req.Message
 	if !req.preMaterialized() {
 		// Resolve the chat's project so attachments land in
@@ -1055,10 +1069,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// failure → empty pid → loose-chat scope (the historical
 		// behavior).
 		projectID := s.resolveSessionProject(r.Context(), r, ag.Name(), req.SessionID)
-		paths := ag.WriteSessionAttachments(r.Context(), req.SessionID, projectID, atts)
-		msgText = annotateMessageWithAttachments(req.Message, paths)
+		results := ag.WriteSessionAttachments(r.Context(), req.SessionID, projectID, atts)
+		msgText = annotateMessageWithAttachments(req.Message, attachmentPaths(results))
+		// Drop downgraded images from vision inlining and swap in their
+		// compressed data URLs; the breadcrumb above still references
+		// every stored file.
+		imageURLs = agent.VisionGate(imageURLs, results)
 	}
-	reply := ag.HandleWebChat(r.Context(), req.SessionID, req.ProjectID, s.effectiveUserID(r), msgText, req.inlineImageURLs(), req.Params)
+	reply := ag.HandleWebChat(r.Context(), req.SessionID, req.ProjectID, s.effectiveUserID(r), msgText, imageURLs, req.Params)
 	jsonResponse(w, http.StatusOK, map[string]any{"reply": reply})
 }
 
@@ -1139,8 +1157,11 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	msgText := req.Message
 	if !req.preMaterialized() {
 		projectID := s.resolveSessionProject(r.Context(), r, ag.Name(), req.SessionID)
-		paths := ag.WriteSessionAttachments(r.Context(), req.SessionID, projectID, atts)
-		msgText = annotateMessageWithAttachments(req.Message, paths)
+		results := ag.WriteSessionAttachments(r.Context(), req.SessionID, projectID, atts)
+		msgText = annotateMessageWithAttachments(req.Message, attachmentPaths(results))
+		// Same vision gate as handleChat: downgraded images stay out of
+		// image_url parts but keep their workspace breadcrumb.
+		imageURLs = agent.VisionGate(imageURLs, results)
 	}
 
 	// Subscribe to the hub BEFORE starting the agent so we don't race
