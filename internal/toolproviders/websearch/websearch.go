@@ -20,6 +20,7 @@ const Category = "web_search"
 // runtime depends on whether the Chain's GetConfig returns a usable key/endpoint.
 func RegisterAll(r *toolproviders.Registry) {
 	r.Register(&Brave{})
+	r.Register(&BrightData{})
 	r.Register(&Exa{})
 	r.Register(&SearxNG{})
 	r.Register(&None{})

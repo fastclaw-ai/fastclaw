@@ -38,6 +38,7 @@ var builtinCatalog = []categoryCatalog{
 		Providers: []providerCatalog{
 			{Name: "exa", Label: "Exa", NeedsKey: true, Models: []string{"auto", "neural", "keyword"}},
 			{Name: "brave", Label: "Brave Search", NeedsKey: true, Models: []string{"web"}},
+			{Name: "brightdata", Label: "Bright Data", NeedsKey: true, Models: []string{"serp"}},
 			{Name: "searxng", Label: "SearxNG (self-hosted)", NeedsURL: true, Models: []string{"default"}},
 			// "none" is a sentinel: when picked, web_search is not exposed
 			// to the model at all. There's no external backend — the model
