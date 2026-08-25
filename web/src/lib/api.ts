@@ -1087,6 +1087,22 @@ export async function steerChat(
   return data?.buffered === true;
 }
 
+// stopChat cancels the in-flight turn for (agent, session) server-side
+// — the real Stop. Returns true when a turn was cancelled; false (409)
+// when no stoppable turn was registered, so the caller can fall back
+// to aborting its local fetch (pre-stop-endpoint behavior).
+export async function stopChat(agentId: string, sessionId: string): Promise<boolean> {
+  const res = await apiFetch("/api/chat/stop", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ agentId, sessionId }),
+  });
+  if (res.status === 409) return false;
+  if (!res.ok) throw new Error(`stop failed: ${res.status}`);
+  const data = await res.json().catch(() => ({}));
+  return data?.stopped === true;
+}
+
 export interface ToolResultMetadata {
   sandbox?: boolean;
   knowledgeSources?: KnowledgeSource[];
@@ -1114,9 +1130,15 @@ export interface ChatStreamEvent {
   type:
     | "content"
     | "content_delta"
+    // content_snapshot is synthetic, emitted once by /api/chat/subscribe
+    // on attach when a turn is in flight: data.content carries the
+    // half-generated text of the current round (deltas are never
+    // persisted, so replay can't provide it) and data.running is true.
+    | "content_snapshot"
     | "tool_call"
     | "tool_result"
     | "steer"
+    | "status"
     | "error"
     | "done"
     | "subagent_progress";
@@ -1140,6 +1162,8 @@ export interface ChatStreamEvent {
     arguments?: string;
     result?: string;
     message?: string;
+    // running accompanies content_snapshot: a turn is in flight.
+    running?: boolean;
     metadata?: ToolResultMetadata;
     // subagent_progress payload — only populated when type === "subagent_progress".
     iteration?: number;
