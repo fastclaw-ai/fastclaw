@@ -512,10 +512,10 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 
 		for scanner.Scan() {
 			line := scanner.Text()
-			if !strings.HasPrefix(line, "data: ") {
+			if !strings.HasPrefix(line, "data:") {
 				continue
 			}
-			data := strings.TrimPrefix(line, "data: ")
+			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 
 			var event anthropicSSEEvent
 			if err := json.Unmarshal([]byte(data), &event); err != nil {
@@ -647,10 +647,10 @@ func (p *AnthropicProvider) parseSSE(body io.Reader) (*Response, error) {
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
+		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
-		data := strings.TrimPrefix(line, "data: ")
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 
 		var event anthropicSSEEvent
 		if err := json.Unmarshal([]byte(data), &event); err != nil {

@@ -337,10 +337,10 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 
 		for scanner.Scan() {
 			line := scanner.Text()
-			if !strings.HasPrefix(line, "data: ") {
+			if !strings.HasPrefix(line, "data:") {
 				continue
 			}
-			data := strings.TrimPrefix(line, "data: ")
+			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 			if data == "[DONE]" {
 				// Send final chunk with accumulated tool calls and a
 				// fully-formed RawAssistant. DeepSeek thinking mode
@@ -517,10 +517,10 @@ func (p *OpenAIProvider) parseSSE(reader io.Reader) (*Response, error) {
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
+		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
-		data := strings.TrimPrefix(line, "data: ")
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if data == "[DONE]" {
 			break
 		}
