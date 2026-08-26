@@ -13,11 +13,12 @@ import (
 
 // HTTPClient implements the MCP client for HTTP (Streamable HTTP) servers.
 type HTTPClient struct {
-	url     string
-	headers map[string]string
-	client  *http.Client
-	mu      sync.Mutex
-	nextID  int
+	url       string
+	headers   map[string]string
+	client    *http.Client
+	mu        sync.Mutex
+	nextID    int
+	sessionID string // MCP session id from the initialize response, replayed on subsequent requests
 }
 
 // NewHTTPClient creates a new HTTP MCP client.
@@ -46,6 +47,7 @@ func (c *HTTPClient) sendRequest(method string, params interface{}) (*jsonRPCRes
 	c.mu.Lock()
 	id := c.nextID
 	c.nextID++
+	sid := c.sessionID
 	c.mu.Unlock()
 
 	req := jsonRPCRequest{
@@ -66,6 +68,9 @@ func (c *HTTPClient) sendRequest(method string, params interface{}) (*jsonRPCRes
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
+	if sid != "" {
+		httpReq.Header.Set("Mcp-Session-Id", sid)
+	}
 	for k, v := range c.headers {
 		httpReq.Header.Set(k, v)
 	}
@@ -75,6 +80,16 @@ func (c *HTTPClient) sendRequest(method string, params interface{}) (*jsonRPCRes
 		return nil, fmt.Errorf("send request: %w", err)
 	}
 	defer resp.Body.Close()
+
+	// Servers that require sessions return the id with the initialize
+	// response; keep the first one and replay it on later requests.
+	if newSid := resp.Header.Get("Mcp-Session-Id"); newSid != "" {
+		c.mu.Lock()
+		if c.sessionID == "" {
+			c.sessionID = newSid
+		}
+		c.mu.Unlock()
+	}
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
