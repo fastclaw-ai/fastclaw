@@ -5,6 +5,7 @@ import { Check, Copy, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { getStatus, type StatusResponse } from "@/lib/api";
+import { copyText } from "@/lib/clipboard";
 
 const UPGRADE_CMD = "fastclaw upgrade";
 
@@ -24,9 +25,10 @@ export default function AboutSettingsPage() {
 
   const copyCmd = async () => {
     try {
-      await navigator.clipboard.writeText(UPGRADE_CMD);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      if (await copyText(UPGRADE_CMD)) {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      }
     } catch {
       /* clipboard may be unavailable on insecure origins — ignore */
     }

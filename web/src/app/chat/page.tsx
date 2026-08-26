@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { copyText } from "@/lib/clipboard";
 import { getStatus, getChatHistory, getChatSessions, sendChatStream, type AgentInfo, type ChatHistoryMessage, type ChatStreamEvent } from "@/lib/api";
 import { useAgentName } from "@/hooks/use-agent-name";
 import { Bot, Send, Copy, Check, SquarePen, MessageSquare, Wrench, ChevronDown, ChevronRight } from "lucide-react";
@@ -292,7 +293,7 @@ export default function ChatPage() {
   };
 
   const handleCopy = (msg: ChatMessage) => {
-    navigator.clipboard.writeText(msg.content);
+    void copyText(msg.content);
     setCopiedId(msg.id);
     setTimeout(() => setCopiedId(null), 1500);
   };

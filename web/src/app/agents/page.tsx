@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { copyText } from "@/lib/clipboard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -678,9 +679,10 @@ export default function AgentsPage() {
                       if (!editTarget) return;
                       const url = `${window.location.origin}/agents/${editTarget.id}/chat/`;
                       try {
-                        await navigator.clipboard.writeText(url);
-                        setEditLinkCopied(true);
-                        setTimeout(() => setEditLinkCopied(false), 2000);
+                        if (await copyText(url)) {
+                          setEditLinkCopied(true);
+                          setTimeout(() => setEditLinkCopied(false), 2000);
+                        }
                       } catch {
                         // clipboard blocked — user can still select the input
                       }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { copyText } from "@/lib/clipboard";
 import {
   listApikeys,
   createApikey,
@@ -161,9 +162,10 @@ export default function ApikeysPage() {
 
   async function copyToken() {
     if (!showToken) return;
-    await navigator.clipboard.writeText(showToken.token);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    if (await copyText(showToken.token)) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }
   }
 
   function openCreateDialog() {

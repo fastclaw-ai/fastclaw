@@ -9,6 +9,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch, getAgent, updateAgent, type AgentDetail } from "@/lib/api";
+import { copyText } from "@/lib/clipboard";
 import { useAgentIdFromURL } from "@/hooks/use-agent-id";
 
 // AgentProfilePanel is the "Profile" tab inside the Settings dialog —
@@ -286,9 +287,10 @@ export default function AgentProfilePanel() {
                 if (!agent) return;
                 const url = `${window.location.origin}/agents/${agent.id}/chat/`;
                 try {
-                  await navigator.clipboard.writeText(url);
-                  setLinkCopied(true);
-                  setTimeout(() => setLinkCopied(false), 2000);
+                  if (await copyText(url)) {
+                    setLinkCopied(true);
+                    setTimeout(() => setLinkCopied(false), 2000);
+                  }
                 } catch {
                   // clipboard blocked — user can still select the input
                 }
