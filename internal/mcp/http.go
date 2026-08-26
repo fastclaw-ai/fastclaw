@@ -66,6 +66,7 @@ func (c *HTTPClient) sendRequest(method string, params interface{}) (*jsonRPCRes
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/json, text/event-stream")
 	for k, v := range c.headers {
 		httpReq.Header.Set(k, v)
 	}
@@ -86,8 +87,21 @@ func (c *HTTPClient) sendRequest(method string, params interface{}) (*jsonRPCRes
 	}
 
 	var rpcResp jsonRPCResponse
-	if err := json.Unmarshal(respBody, &rpcResp); err != nil {
-		return nil, fmt.Errorf("parse response: %w", err)
+	if strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
+		// Streamable HTTP servers may answer with SSE frames
+		// (event: message\ndata: {json}\n\n); take the last non-empty
+		// data line as the JSON-RPC payload.
+		dataJSON := extractSSEData(respBody)
+		if dataJSON == nil {
+			return nil, fmt.Errorf("SSE response had no data line: %s", string(truncateBytes(respBody, 200)))
+		}
+		if err := json.Unmarshal(dataJSON, &rpcResp); err != nil {
+			return nil, fmt.Errorf("parse SSE data: %w", err)
+		}
+	} else {
+		if err := json.Unmarshal(respBody, &rpcResp); err != nil {
+			return nil, fmt.Errorf("parse response: %w", err)
+		}
 	}
 
 	if rpcResp.Error != nil {
@@ -95,6 +109,29 @@ func (c *HTTPClient) sendRequest(method string, params interface{}) (*jsonRPCRes
 	}
 
 	return &rpcResp, nil
+}
+
+// extractSSEData returns the JSON payload of the last non-empty `data:` line.
+func extractSSEData(body []byte) []byte {
+	var last []byte
+	for _, line := range bytes.Split(body, []byte("\n")) {
+		line = bytes.TrimRight(line, "\r")
+		if !bytes.HasPrefix(line, []byte("data:")) {
+			continue
+		}
+		payload := bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
+		if len(payload) > 0 {
+			last = payload
+		}
+	}
+	return last
+}
+
+func truncateBytes(b []byte, n int) []byte {
+	if len(b) <= n {
+		return b
+	}
+	return b[:n]
 }
 
 // Connect initializes the connection with the MCP server.
