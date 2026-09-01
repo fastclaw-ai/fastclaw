@@ -422,6 +422,8 @@ export interface OnboardRequest {
   sandboxBackend?: string;
   sandboxImage?: string;
   sandboxE2BKey?: string;
+  sandboxE2BApiUrl?: string;
+  sandboxE2BDomain?: string;
   sandboxBoxliteUrl?: string;
   sandboxBoxliteKey?: string;
   sandboxBoxlitePrefix?: string;
