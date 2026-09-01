@@ -116,9 +116,17 @@ func buildSystemSandboxPool(cfg config.SandboxCfg, ws workspace.Store) sandbox.E
 		if template == "" {
 			template = "base"
 		}
-		inner = sandbox.NewE2BExecutorPool(apiKey, template, home, 30*time.Minute)
+		var e2bOpts []sandbox.E2BOption
+		if cfg.E2BAPIURL != "" {
+			e2bOpts = append(e2bOpts, sandbox.WithAPIURL(cfg.E2BAPIURL))
+		}
+		if cfg.E2BDomain != "" {
+			e2bOpts = append(e2bOpts, sandbox.WithDomain(cfg.E2BDomain))
+		}
+		inner = sandbox.NewE2BExecutorPool(apiKey, template, home, 30*time.Minute, e2bOpts...)
 		slog.Info("system sandbox executor pool created",
-			"backend", "e2b", "template", template)
+			"backend", "e2b", "template", template,
+			"apiURL", cfg.E2BAPIURL, "domain", cfg.E2BDomain)
 	case "boxlite":
 		secret := cfg.BoxliteKey
 		if secret == "" {

@@ -161,6 +161,8 @@ export default function OnboardPage() {
   const [sandboxDockerImage, setSandboxDockerImage] = useState("thinkany/fastclaw-sandbox:latest");
   const [sandboxE2BTemplate, setSandboxE2BTemplate] = useState("base");
   const [sandboxE2BKey, setSandboxE2BKey] = useState("");
+  const [sandboxE2BApiUrl, setSandboxE2BApiUrl] = useState("");
+  const [sandboxE2BDomain, setSandboxE2BDomain] = useState("");
   const [sandboxBoxliteImage, setSandboxBoxliteImage] = useState("");
   const [sandboxBoxliteKey, setSandboxBoxliteKey] = useState("");
   const [sandboxBoxliteURL, setSandboxBoxliteURL] = useState("");
@@ -237,6 +239,14 @@ export default function OnboardPage() {
               : undefined
         : undefined,
       sandboxE2BKey: sandboxEnabled && sandboxBackend === "e2b" ? sandboxE2BKey : undefined,
+      sandboxE2BApiUrl:
+        sandboxEnabled && sandboxBackend === "e2b" && sandboxE2BApiUrl
+          ? sandboxE2BApiUrl
+          : undefined,
+      sandboxE2BDomain:
+        sandboxEnabled && sandboxBackend === "e2b" && sandboxE2BDomain
+          ? sandboxE2BDomain
+          : undefined,
       sandboxBoxliteKey: sandboxEnabled && sandboxBackend === "boxlite" ? sandboxBoxliteKey : undefined,
       sandboxBoxliteUrl:
         sandboxEnabled && sandboxBackend === "boxlite" && sandboxBoxliteURL
@@ -337,6 +347,10 @@ export default function OnboardPage() {
             setE2BTemplate={setSandboxE2BTemplate}
             e2bKey={sandboxE2BKey}
             setE2BKey={setSandboxE2BKey}
+            e2bApiUrl={sandboxE2BApiUrl}
+            setE2BApiUrl={setSandboxE2BApiUrl}
+            e2bDomain={sandboxE2BDomain}
+            setE2BDomain={setSandboxE2BDomain}
             boxliteImage={sandboxBoxliteImage}
             setBoxliteImage={setSandboxBoxliteImage}
             boxliteKey={sandboxBoxliteKey}
@@ -785,6 +799,10 @@ function SandboxStep(props: {
   setE2BTemplate: (v: string) => void;
   e2bKey: string;
   setE2BKey: (v: string) => void;
+  e2bApiUrl: string;
+  setE2BApiUrl: (v: string) => void;
+  e2bDomain: string;
+  setE2BDomain: (v: string) => void;
   boxliteImage: string;
   setBoxliteImage: (v: string) => void;
   boxliteKey: string;
@@ -861,6 +879,24 @@ function SandboxStep(props: {
                       value={props.e2bTemplate}
                       onChange={(e) => props.setE2BTemplate(e.target.value)}
                       placeholder="base"
+                      className="font-mono text-sm"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>E2B API URL (optional)</Label>
+                    <Input
+                      value={props.e2bApiUrl}
+                      onChange={(e) => props.setE2BApiUrl(e.target.value)}
+                      placeholder="https://api.e2b.dev"
+                      className="font-mono text-sm"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>E2B Domain (optional)</Label>
+                    <Input
+                      value={props.e2bDomain}
+                      onChange={(e) => props.setE2BDomain(e.target.value)}
+                      placeholder="e2b.app"
                       className="font-mono text-sm"
                     />
                   </div>

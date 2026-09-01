@@ -252,6 +252,8 @@ type onboardRequest struct {
 	SandboxBackend         string `json:"sandboxBackend,omitempty"`
 	SandboxImage           string `json:"sandboxImage,omitempty"`
 	SandboxE2BKey          string `json:"sandboxE2BKey,omitempty"`
+	SandboxE2BApiUrl       string `json:"sandboxE2BApiUrl,omitempty"`
+	SandboxE2BDomain       string `json:"sandboxE2BDomain,omitempty"`
 	SandboxBoxliteURL      string `json:"sandboxBoxliteUrl,omitempty"`
 	SandboxBoxliteClientID string `json:"sandboxBoxliteClientId,omitempty"`
 	SandboxBoxliteKey      string `json:"sandboxBoxliteKey,omitempty"`
@@ -352,6 +354,12 @@ func (s *Server) handleOnboard(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.SandboxE2BKey != "" {
 			sandbox["e2bKey"] = req.SandboxE2BKey
+		}
+		if req.SandboxE2BApiUrl != "" {
+			sandbox["e2bApiUrl"] = req.SandboxE2BApiUrl
+		}
+		if req.SandboxE2BDomain != "" {
+			sandbox["e2bDomain"] = req.SandboxE2BDomain
 		}
 		if req.SandboxBoxliteURL != "" {
 			sandbox["boxliteUrl"] = req.SandboxBoxliteURL

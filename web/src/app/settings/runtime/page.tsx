@@ -31,6 +31,8 @@ export default function RuntimeSettingsPage() {
   const [sandboxDockerImage, setSandboxDockerImage] = useState("");
   const [sandboxE2BTemplate, setSandboxE2BTemplate] = useState("base");
   const [sandboxE2BKey, setSandboxE2BKey] = useState("");
+  const [sandboxE2BApiUrl, setSandboxE2BApiUrl] = useState("");
+  const [sandboxE2BDomain, setSandboxE2BDomain] = useState("");
   const [sandboxBoxliteImage, setSandboxBoxliteImage] = useState("");
   const [sandboxBoxliteKey, setSandboxBoxliteKey] = useState("");
   const [sandboxBoxliteURL, setSandboxBoxliteURL] = useState("");
@@ -66,6 +68,8 @@ export default function RuntimeSettingsPage() {
             cfg.sandbox?.boxliteSnapshot ?? (backend === "boxlite" ? savedImage : ""),
           );
           setSandboxE2BKey(cfg.sandbox?.e2bKey || "");
+          setSandboxE2BApiUrl(cfg.sandbox?.e2bApiUrl || "");
+          setSandboxE2BDomain(cfg.sandbox?.e2bDomain || "");
           setSandboxBoxliteKey(cfg.sandbox?.boxliteKey || "");
           setSandboxBoxliteURL(cfg.sandbox?.boxliteUrl || "");
           setDefaultTimezone(cfg.prefs?.timezone || "");
@@ -104,6 +108,8 @@ export default function RuntimeSettingsPage() {
           e2bKey: sandboxE2BKey || undefined,
           boxliteKey: sandboxBoxliteKey || undefined,
           boxliteUrl: sandboxBoxliteURL || undefined,
+          e2bApiUrl: sandboxE2BApiUrl || undefined,
+          e2bDomain: sandboxE2BDomain || undefined,
         },
       });
       if (result?.ok === false) {
@@ -245,6 +251,24 @@ export default function RuntimeSettingsPage() {
                       value={sandboxE2BTemplate}
                       onChange={(e) => setSandboxE2BTemplate(e.target.value)}
                       placeholder="base"
+                      className="font-mono text-sm"
+                    />
+                  </div>
+                  <div className="space-y-2 sm:col-span-2">
+                    <Label>E2B API URL (optional)</Label>
+                    <Input
+                      value={sandboxE2BApiUrl}
+                      onChange={(e) => setSandboxE2BApiUrl(e.target.value)}
+                      placeholder="https://api.e2b.dev"
+                      className="font-mono text-sm"
+                    />
+                  </div>
+                  <div className="space-y-2 sm:col-span-2">
+                    <Label>E2B Domain (optional)</Label>
+                    <Input
+                      value={sandboxE2BDomain}
+                      onChange={(e) => setSandboxE2BDomain(e.target.value)}
+                      placeholder="e2b.app"
                       className="font-mono text-sm"
                     />
                   </div>
