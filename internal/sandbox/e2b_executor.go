@@ -752,9 +752,10 @@ func (e *E2BExecutor) ListDir(ctx context.Context, path string) (string, error) 
 func (e *E2BExecutor) IsRemoteWorkspace() {}
 
 // ExposePort implements PortExposer. E2B serves every sandbox port at
-// https://<port>-<sandboxID>.e2b.app with no publish step (same scheme
-// envdURL uses for the control port), so the dev server bound to 0.0.0.0
-// is reachable the moment it listens.
+// https://<port>-<sandboxID>.<domain> (domain defaults to e2b.app, see
+// WithDomain) with no publish step (same scheme envdURL uses for the
+// control port), so the dev server bound to 0.0.0.0 is reachable the
+// moment it listens.
 func (e *E2BExecutor) ExposePort(_ context.Context, port int) (string, error) {
 	if e.sandboxID == "" {
 		return "", fmt.Errorf("e2b: sandbox not created")
