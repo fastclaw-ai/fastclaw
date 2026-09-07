@@ -106,7 +106,7 @@ function renderContentWithDataImages(
 
 import { usePageHeader } from "@/components/sidebar";
 import { useSidebarOptional } from "@/components/ui/sidebar";
-import { channelLabel } from "@/components/channel-icon";
+import { ChannelIcon, channelLabel } from "@/components/channel-icon";
 import { BotAvatar } from "@/components/bot-avatar";
 import { useLocale, type Locale, type MessageKey } from "@/components/locale-provider";
 
@@ -288,6 +288,7 @@ interface ChatSession {
   preview: string;
   createdAt?: number;
   updatedAt?: number;
+  thumbnailUrl?: string;
   // channel/accountId/chatId travel with the listing so the chat
   // page can decide whether composing into this session is allowed
   // (only `web` is — IM channels have no reverse-send path).
@@ -587,6 +588,7 @@ export function ChatScreen() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const { locale, t, tr } = useLocale();
+  const isChatsPage = /^\/agents\/[^/]+\/chats\/?$/.test(pathname || "");
   // When `?actAs=<uid>` is in the URL, this chat is being opened by a
   // super_admin viewing another user's session (read-only by middleware).
   // Forces the composer into a disabled state and surfaces a banner so
@@ -597,6 +599,12 @@ export function ChatScreen() {
     () => parseAgentRoute(pathname || ""),
     [pathname],
   );
+  // A Chats route can be reconstructed by the static-export router even
+  // though it visually behaves like a right-panel view. Carry the active
+  // session in the query so the central conversation can be restored after
+  // that reconstruction instead of falling back to a fresh welcome screen.
+  const chatsSessionId = isChatsPage ? searchParams?.get("session") || "" : "";
+  const routeSessionId = urlSessionId || chatsSessionId;
   // Reactive: re-derives from pathname so switching agents (sidebar
   // dropdown, browser back/forward) immediately updates downstream
   // fetches. The previous useState(() => ...) flavor froze the id at
@@ -607,7 +615,7 @@ export function ChatScreen() {
   const [agentDetail, setAgentDetail] = useState<AgentDetail | null>(null);
   const [projects, setProjects] = useState<ProjectEntry[]>([]);
   const [sessionId, setSessionId] = useState<string>(
-    () => urlSessionId || generateSessionId(),
+    () => routeSessionId || generateSessionId(),
   );
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -787,6 +795,11 @@ export function ChatScreen() {
   // keeps the gate honest if sessionId changes again before history
   // catches up.
   const [loadedSessionId, setLoadedSessionId] = useState<string | null>(null);
+  const isConversationLoading = Boolean(
+    selectedAgent
+      && routeSessionId
+      && (routeSessionId !== sessionId || loadedSessionId !== routeSessionId),
+  );
 
   // Slash-command menu state. The menu opens when the textarea holds a
   // token beginning with `/` at the caret; selecting a skill swaps that
@@ -1178,15 +1191,18 @@ export function ChatScreen() {
   // fetch is in flight.
   const prevHadSessionRef = useRef(false);
   useEffect(() => {
-    if (urlSessionId) {
+    if (routeSessionId) {
       prevHadSessionRef.current = true;
-      if (urlSessionId !== sessionId) {
-        resetTodoScope(selectedAgent, urlSessionId);
-        setSessionId(urlSessionId);
+      if (routeSessionId !== sessionId) {
+        resetTodoScope(selectedAgent, routeSessionId);
+        setSessionId(routeSessionId);
         setMessages([]);
       }
       return;
     }
+    // `/chats` with no selected session only replaces the right-side panel.
+    // Do not mint a new central conversation while that route is active.
+    if (isChatsPage) return;
     if (prevHadSessionRef.current) {
       prevHadSessionRef.current = false;
       const nextSessionId = generateSessionId();
@@ -1194,7 +1210,7 @@ export function ChatScreen() {
       setSessionId(nextSessionId);
       setMessages([]);
     }
-  }, [urlSessionId, sessionId, selectedAgent, resetTodoScope]);
+  }, [isChatsPage, routeSessionId, sessionId, selectedAgent, resetTodoScope]);
 
   // Switching conversations (sidebar chat click, New chat, opening a project)
   // changes the URL ids — close the workspace panel so the previous chat's
@@ -1202,7 +1218,7 @@ export function ChatScreen() {
   // not every render, so the user can still re-open it within the SAME chat.
   useEffect(() => {
     setFilesSheetOpen(false);
-  }, [urlSessionId, urlProjectId]);
+  }, [routeSessionId, urlProjectId]);
 
   // Channel of the currently-open session, derived from the sessions
   // list. Brand-new web chats don't have a row yet — the fallback to
@@ -1219,7 +1235,7 @@ export function ChatScreen() {
   const isReadOnlyChannel = currentChannel !== "web";
   const isReadOnlyView = isReadOnlyChannel || isActAsView;
   const inputIsReadOnlySafeSlashCommand = isReadOnlySafeSlashCommand(input);
-  const canUseComposer = !!selectedAgent;
+  const canUseComposer = !!selectedAgent && !isConversationLoading;
   const canSendComposer =
     canUseComposer && (!isReadOnlyView || inputIsReadOnlySafeSlashCommand);
   const canAttach = !!selectedAgent && !sending && !isReadOnlyView;
@@ -1245,6 +1261,22 @@ export function ChatScreen() {
   const handleAgentPublicChange = useCallback((isPublic: boolean) => {
     setAgentDetail((current) => current ? { ...current, isPublic } : current);
   }, []);
+
+  // Keep legacy/direct /chats URLs closable even though the in-panel recent
+  // list now expands in place and no longer navigates there.
+  const fallbackChatHref = useMemo(() => {
+    if (!selectedAgent) return "/agents";
+    const activeSessionExists = sessions.some((topic) => topic.id === sessionId);
+    return activeSessionExists
+      ? `/agents/${encodeURIComponent(selectedAgent)}/chat/${encodeURIComponent(sessionId)}/`
+      : `/agents/${encodeURIComponent(selectedAgent)}/chat/`;
+  }, [selectedAgent, sessionId, sessions]);
+  const leaveChatsPage = useCallback((keepAgentPanelOpen: boolean) => {
+    if (typeof window === "undefined") return;
+    setBotPanelOpen(keepAgentPanelOpen);
+    window.history.replaceState(null, "", fallbackChatHref);
+  }, [fallbackChatHref]);
+  const navigationPanelOpen = botPanelOpen || isChatsPage;
 
   // Conversation header follows the compact Bot pattern: identity opens
   // settings, while the monitor action opens the live workspace.
@@ -1280,16 +1312,20 @@ export function ChatScreen() {
             setFilesSheetOpen(false);
             setKnowledgePreview(null);
             setWorkspaceReturnsToBotPanel(false);
+            if (isChatsPage) {
+              leaveChatsPage(false);
+              return;
+            }
             setBotPanelOpen((value) => !value);
           }}
           className={`inline-flex size-9 shrink-0 items-center justify-center rounded-xl transition-colors ${
-            botPanelOpen
+            navigationPanelOpen
               ? "bg-muted text-foreground"
               : "text-muted-foreground hover:bg-muted/70 hover:text-foreground"
           }`}
-          title={botPanelOpen ? tr("Close navigation panel", "关闭导航侧栏") : tr("Open projects and recent chats", "打开项目和最近话题")}
-          aria-label={botPanelOpen ? tr("Close navigation panel", "关闭导航侧栏") : tr("Open projects and recent chats", "打开项目和最近话题")}
-          aria-pressed={botPanelOpen}
+          title={navigationPanelOpen ? tr("Close navigation panel", "关闭导航侧栏") : tr("Open projects and recent chats", "打开项目和最近话题")}
+          aria-label={navigationPanelOpen ? tr("Close navigation panel", "关闭导航侧栏") : tr("Open projects and recent chats", "打开项目和最近话题")}
+          aria-pressed={navigationPanelOpen}
         >
           <PanelRight className="size-[18px]" />
         </button>
@@ -1301,8 +1337,12 @@ export function ChatScreen() {
       agentDetail?.avatarUrl,
       agentDetail?.isPublic,
       agentDetail?.role,
+      isActAsView,
       openBotSettings,
       handleAgentPublicChange,
+      isChatsPage,
+      leaveChatsPage,
+      navigationPanelOpen,
       botPanelOpen,
       tr,
     ],
@@ -2156,8 +2196,8 @@ export function ChatScreen() {
   // welcome bubble. Existing session URLs keep their normal history-loading
   // behavior, while project landing pages retain the centered hero composer.
   const isEmpty = messages.length === 0;
-  const showBotWelcome = isEmpty && !urlSessionId && !urlProjectId;
-  const showEmptyHero = isEmpty && !showBotWelcome;
+  const showBotWelcome = !isConversationLoading && isEmpty && !routeSessionId && !urlProjectId;
+  const showEmptyHero = !isConversationLoading && isEmpty && !showBotWelcome;
   const todoAnchorMessageId = todoItems.length > 0
     ? findTodoAnchorMessageId(messages)
     : null;
@@ -2226,7 +2266,24 @@ export function ChatScreen() {
             (showEmptyHero ? "shrink-0" : "flex-1 overflow-y-auto py-4")
           }
         >
-          <div className="mx-auto w-full max-w-5xl space-y-3">
+          <div
+            className={`mx-auto w-full max-w-5xl ${
+              isConversationLoading ? "flex min-h-full items-center justify-center" : "space-y-3"
+            }`}
+          >
+            {isConversationLoading && (
+              <div
+                role="status"
+                aria-live="polite"
+                className="inline-flex items-center gap-2.5 rounded-full border border-black/[0.07] bg-card px-4 py-2.5 text-sm text-muted-foreground shadow-[0_5px_20px_rgba(0,0,0,0.04)] dark:border-white/[0.09]"
+              >
+                <RefreshCw
+                  className="size-4 animate-spin motion-reduce:animate-none"
+                  aria-hidden="true"
+                />
+                <span>{tr("Loading conversation…", "正在加载对话…")}</span>
+              </div>
+            )}
             {showEmptyHero && (
               <div className="py-8 text-center">
                 <h1 className="text-3xl md:text-4xl font-semibold tracking-tight">
@@ -2235,7 +2292,7 @@ export function ChatScreen() {
               </div>
             )}
 
-            {!showEmptyHero && (
+            {!isConversationLoading && !showEmptyHero && (
               <div className="pb-5 pt-1 text-center text-xs font-medium text-muted-foreground/75">
                 {conversationDayLabel(messages[0]?.timestamp || Date.now(), locale)}
               </div>
@@ -2249,7 +2306,7 @@ export function ChatScreen() {
               </div>
             )}
 
-            {(() => {
+            {!isConversationLoading && (() => {
               // Tool-group artefacts (e.g. an image rendered to base64 by
               // a Python script inside the sandbox) are attached to the
               // *next* agent reply bubble — so they appear as part of the
@@ -2606,7 +2663,7 @@ export function ChatScreen() {
               }
             })()}
 
-            {sending && (
+            {!isConversationLoading && sending && (
               <div className="flex justify-start">
                 <div className="bg-muted rounded-2xl rounded-bl-md px-4 py-3">
                   <div className="flex items-center gap-1">
@@ -2623,7 +2680,10 @@ export function ChatScreen() {
         </div>
 
         {/* Full-width conversation composer, matching the compact Bot layout. */}
-        <div className="shrink-0 px-3 pb-5 pt-2 sm:px-5">
+        <div
+          aria-hidden={isConversationLoading}
+          className={isConversationLoading ? "hidden" : "shrink-0 px-3 pb-5 pt-2 sm:px-5"}
+        >
           <div className="relative mx-auto w-full">
             {isReadOnlyChannel && (
               // The web compose path can't deliver into upstream IM
@@ -2839,7 +2899,7 @@ export function ChatScreen() {
           </div>
         )}
       </div>
-      {botPanelOpen && selectedAgent && (
+      {navigationPanelOpen && selectedAgent && (
         <BotControlPanel
           agentId={selectedAgent}
           projects={projects}
@@ -2855,7 +2915,7 @@ export function ChatScreen() {
           onOpenSettings={openBotSettings}
           onOpenSettingsTab={openBotSettingsTab}
           onOpenWorkspace={openWorkspaceFromBotPanel}
-          workspaceAvailable={Boolean(urlSessionId || urlProjectId)}
+          workspaceAvailable={Boolean(routeSessionId || urlProjectId)}
           onSelectProject={(projectId) => {
             router.push(`/agents/${selectedAgent}/project/${encodeURIComponent(projectId)}/`);
           }}
@@ -2877,19 +2937,22 @@ export function ChatScreen() {
               }),
             );
           }}
-          onClose={() => setBotPanelOpen(false)}
+          onClose={() => {
+            if (isChatsPage) leaveChatsPage(false);
+            else setBotPanelOpen(false);
+          }}
         />
       )}
       {filesSheetOpen && selectedAgent && (sessionId || urlProjectId) && (
         <WorkspacePanel
           agentId={selectedAgent}
-          // On a project landing (no urlSessionId), sessionId here is the
+          // On a project landing (no routeSessionId), sessionId here is the
           // synthetic id chat-screen mints for the upcoming "New chat" —
           // it doesn't correspond to anything on disk, so we suppress it
           // and let projectId drive the scope. Inside an actual chat,
-          // urlSessionId is set and we pass the real sessionId.
-          sessionId={urlSessionId ? sessionId : ""}
-          projectId={!urlSessionId && urlProjectId ? urlProjectId : undefined}
+          // routeSessionId is set and we pass the real sessionId.
+          sessionId={routeSessionId ? sessionId : ""}
+          projectId={!routeSessionId && urlProjectId ? urlProjectId : undefined}
           knowledgePreview={knowledgePreview}
           onClearKnowledgePreview={() => setKnowledgePreview(null)}
           onPreviewStateChange={handleWorkspacePreviewChange}
@@ -3160,6 +3223,7 @@ function BotControlPanel({
 }) {
   const { t, tr } = useLocale();
   const [showAllProjects, setShowAllProjects] = useState(false);
+  const [visibleTopicCount, setVisibleTopicCount] = useState(10);
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(
     () => new Set(expandedProjectId ? [expandedProjectId] : []),
   );
@@ -3266,17 +3330,23 @@ function BotControlPanel({
   }, [expandedProjectId]);
 
   const visibleProjects = showAllProjects ? projects : projects.slice(0, 5);
-  const recentTopics = topics.filter((topic) => !topic.projectId).slice(0, 12);
+  const sortedTopics = useMemo(
+    () => [...topics].sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0)),
+    [topics],
+  );
+  const looseTopics = sortedTopics.filter((topic) => !topic.projectId);
+  const visibleRecentTopics = looseTopics.slice(0, visibleTopicCount);
+  const hiddenTopicCount = Math.max(0, looseTopics.length - visibleRecentTopics.length);
   const topicsByProject = useMemo(() => {
     const grouped = new Map<string, ChatSession[]>();
-    for (const topic of topics) {
+    for (const topic of sortedTopics) {
       if (!topic.projectId) continue;
       const projectTopics = grouped.get(topic.projectId) || [];
       projectTopics.push(topic);
       grouped.set(topic.projectId, projectTopics);
     }
     return grouped;
-  }, [topics]);
+  }, [sortedTopics]);
 
   const handleProjectClick = (projectId: string, active: boolean) => {
     setExpandedProjects((current) => {
@@ -3535,11 +3605,11 @@ function BotControlPanel({
                 </TooltipContent>
               </Tooltip>
             </div>
-            {recentTopics.length === 0 ? (
+            {visibleRecentTopics.length === 0 ? (
               <p className="px-2 py-1.5 text-sm leading-5 text-muted-foreground/75">{tr("Recent chats appear here after you send a message.", "发送消息后，最近话题会显示在这里。")}</p>
             ) : (
               <div>
-                {recentTopics.map((topic) => {
+                {visibleRecentTopics.map((topic) => {
                   const active = topic.id === activeTopicId;
                   const topicTitle = topic.title?.trim() || topic.preview?.trim() || tr("Untitled chat", "未命名话题");
                   return (
@@ -3554,10 +3624,11 @@ function BotControlPanel({
                       <button
                         type="button"
                         onClick={() => onSelectTopic(topic.id)}
-                        className="block w-full truncate rounded-md py-1.5 pl-4 pr-9 text-left text-[15px] leading-5 focus-visible:ring-2 focus-visible:ring-ring"
+                        className="flex w-full min-w-0 items-center gap-2.5 rounded-md py-1.5 pl-3 pr-9 text-left text-[15px] leading-5 focus-visible:ring-2 focus-visible:ring-ring"
                         aria-current={active ? "page" : undefined}
                       >
-                        {topicTitle}
+                        <ChatSessionLeadingVisual topic={topic} />
+                        <span className="min-w-0 flex-1 truncate">{topicTitle}</span>
                       </button>
                       <DropdownMenu>
                         <DropdownMenuTrigger
@@ -3591,6 +3662,23 @@ function BotControlPanel({
                     </div>
                   );
                 })}
+                {hiddenTopicCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setVisibleTopicCount((current) =>
+                        Math.min(current + 10, looseTopics.length),
+                      );
+                    }}
+                    className="mt-1 flex h-9 w-full items-center gap-2.5 rounded-lg px-3 text-left text-sm font-medium text-muted-foreground transition hover:bg-black/[0.04] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring dark:hover:bg-white/[0.07]"
+                  >
+                    <ChevronDown className="size-4 shrink-0" />
+                    <span>{tr("Load more", "加载更多")}</span>
+                    <span className="ml-auto text-xs tabular-nums text-muted-foreground/70">
+                      {hiddenTopicCount}
+                    </span>
+                  </button>
+                )}
               </div>
             )}
           </section>
@@ -3643,6 +3731,26 @@ function BotControlPanel({
   );
 }
 
+function ChatSessionLeadingVisual({ topic }: { topic: ChatSession }) {
+  const isWeb = !topic.channel || topic.channel === "web";
+  if (isWeb && topic.thumbnailUrl) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={topic.thumbnailUrl}
+        alt=""
+        className="size-5 shrink-0 rounded-md object-cover"
+      />
+    );
+  }
+  if (isWeb) return null;
+  return (
+    <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground">
+      <ChannelIcon channel={topic.channel} className="size-4 shrink-0" />
+    </span>
+  );
+}
+
 function BotTopicNavigationRow({
   topic,
   active,
@@ -3671,12 +3779,13 @@ function BotTopicNavigationRow({
       <button
         type="button"
         onClick={onSelect}
-        className={`block w-full truncate rounded-md py-1.5 pr-8 text-left leading-5 focus-visible:ring-2 focus-visible:ring-ring ${
-          nested ? "pl-[2.75rem] text-[15px]" : "px-2 text-[15px]"
+        className={`flex w-full min-w-0 items-center gap-2.5 rounded-md py-1.5 pr-8 text-left leading-5 focus-visible:ring-2 focus-visible:ring-ring ${
+          nested ? "pl-[2.75rem] text-[15px]" : "pl-2 text-[15px]"
         }`}
         aria-current={active ? "page" : undefined}
       >
-        {topicTitle}
+        <ChatSessionLeadingVisual topic={topic} />
+        <span className="min-w-0 flex-1 truncate">{topicTitle}</span>
       </button>
       <DropdownMenu>
         <DropdownMenuTrigger

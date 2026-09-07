@@ -1,6 +1,11 @@
 package session
 
-import "testing"
+import (
+	"testing"
+	"time"
+
+	"github.com/fastclaw-ai/fastclaw/internal/store"
+)
 
 func TestDisplaySessionTitle(t *testing.T) {
 	tests := []struct {
@@ -66,5 +71,45 @@ func TestDisplaySessionTitle(t *testing.T) {
 				t.Fatalf("displaySessionTitle() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestLatestMessagePreviewUsesNewestVisibleExchangeAndMatchingTime(t *testing.T) {
+	first := time.Date(2026, 9, 7, 10, 0, 0, 0, time.UTC)
+	last := first.Add(2 * time.Minute)
+	messages := []store.SessionMessage{
+		{Role: "user", Content: "hello", Timestamp: first},
+		{Role: "tool", Content: "internal tool output", Timestamp: first.Add(time.Minute)},
+		{Role: "assistant", Content: "  first line\n\nsecond line  ", Timestamp: last},
+		{Role: "user", Content: "hidden goal prompt", Origin: "goal_context", Timestamp: last.Add(time.Minute)},
+	}
+
+	gotText, gotAt := latestMessagePreview(messages)
+	if gotText != "first line second line" {
+		t.Fatalf("latest message = %q, want %q", gotText, "first line second line")
+	}
+	if gotAt != last.UnixMilli() {
+		t.Fatalf("latest message timestamp = %d, want %d", gotAt, last.UnixMilli())
+	}
+}
+
+func TestLatestMessagePreviewFallsBackToImageUserTurn(t *testing.T) {
+	when := time.Date(2026, 9, 7, 10, 0, 0, 0, time.UTC)
+	messages := []store.SessionMessage{
+		{
+			Role: "user",
+			ContentParts: []map[string]any{
+				{"type": "image_url", "image_url": map[string]any{"url": "https://example.com/image.png"}},
+			},
+			Timestamp: when,
+		},
+	}
+
+	gotText, gotAt := latestMessagePreview(messages)
+	if gotText != "[image]" {
+		t.Fatalf("latest message = %q, want [image]", gotText)
+	}
+	if gotAt != when.UnixMilli() {
+		t.Fatalf("latest message timestamp = %d, want %d", gotAt, when.UnixMilli())
 	}
 }

@@ -5,7 +5,7 @@ import AgentAccessGate from "@/components/agent-access-gate";
 import { ChatScreen } from "@/components/chat-screen";
 
 // AgentLayoutClient owns the single ChatScreen instance for everything
-// under /agents/<id>/{chat,project}. Previously each chat route
+// under /agents/<id>/{chat,project,chats}. Previously each chat route
 // segment (chat/, chat/[session], project/[pid]) rendered its own
 // <ChatScreen/>, so navigating between sidebar links unmounted and
 // remounted the whole chat surface — losing scroll, blanking messages,
@@ -26,13 +26,14 @@ function isChatRoute(pathname: string, agentId: string): boolean {
   if (!agentId) return false;
   const base = `/agents/${agentId}`;
   if (pathname === base || pathname === `${base}/`) return true;
-  // Match `/chat` (with or without trailing segments) but NOT `/chats` —
-  // the chats list is a sibling route that must render on its own,
-  // without ChatScreen sitting underneath it.
+  // Keep legacy `/chats` URLs inside the persistent chat shell. The current
+  // UI expands recent conversations in place instead of navigating there.
   const tail = pathname.slice(base.length);
   return (
     tail === "/chat" ||
     tail.startsWith("/chat/") ||
+    tail === "/chats" ||
+    tail === "/chats/" ||
     tail === "/project" ||
     tail.startsWith("/project/")
   );

@@ -11,10 +11,9 @@ const ASSETS: Record<string, string> = {
 };
 
 // ChannelIcon renders the per-channel brand mark next to a chat title.
-// Returns null for web / unknown channels — web is the default place a
-// chat lives in this UI, so a generic globe glyph next to every web
-// session adds noise without information. IM rows still get their
-// brand mark to disambiguate.
+// Web / legacy / unknown channels intentionally return null: a plain web
+// conversation needs no decorative prefix. Callers can still replace it
+// with an image thumbnail when the web chat actually contains media.
 //
 // Images carry their own colors; we don't apply a text-* class. WeChat's
 // source artwork is non-square (50×40) — object-contain letterboxes it

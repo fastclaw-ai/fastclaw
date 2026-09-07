@@ -86,6 +86,7 @@ export function NavSessions({
   if (!agentId) return null;
 
   const chatBase = `/agents/${agentId}/chat/`;
+  const looseSessions = sessions.filter((session) => !session.projectId);
 
   // Any mutation (rename / delete) broadcasts so AppSidebar re-fetches and
   // the chat page (if open) also re-syncs its local sessions list.
@@ -158,7 +159,7 @@ export function NavSessions({
           {/* Skip chats that belong to a project — they render nested
               under their project in NavProjectsList instead, so the flat
               "Chats" section keeps showing only loose chats. */}
-          {sessions.filter((s) => !s.projectId).slice(0, MAX_SIDEBAR_SESSIONS).map((s) => {
+          {looseSessions.slice(0, MAX_SIDEBAR_SESSIONS).map((s) => {
             const href = `${chatBase}${encodeURIComponent(s.id)}/`;
             // Path form: /agents/<aid>/chat/<sid>/. Match exactly so a
             // sibling chat doesn't light up just because pathname
@@ -175,7 +176,7 @@ export function NavSessions({
               />
             );
           })}
-          {sessions.length > MAX_SIDEBAR_SESSIONS && (
+          {looseSessions.length > MAX_SIDEBAR_SESSIONS && (
             <SidebarMenuItem>
               <SidebarMenuButton
                 onClick={() => navigateOnce(`/agents/${agentId}/chats`)}
@@ -187,7 +188,7 @@ export function NavSessions({
               </SidebarMenuButton>
             </SidebarMenuItem>
           )}
-          {sessions.length === 0 && (
+          {looseSessions.length === 0 && (
             <SidebarMenuItem>
               <div className="px-2 py-1.5 text-xs text-muted-foreground">
                 {tr("No chats yet", "还没有对话")}
@@ -233,7 +234,7 @@ function SessionRow({
         tooltip={`${channelLabel(session.channel)} · ${session.title}`}
         onClick={onOpen}
       >
-        {session.thumbnailUrl ? (
+        {(!session.channel || session.channel === "web") && session.thumbnailUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
             src={session.thumbnailUrl}

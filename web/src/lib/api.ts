@@ -924,6 +924,10 @@ export interface ChatSessionEntry {
   projectId?: string;
   title?: string;
   preview: string;
+  // The opening preview remains the conversation's default title; these
+  // fields power contact rows with the actual latest exchange instead.
+  lastMessage?: string;
+  lastMessageAt?: number;
   thumbnailUrl?: string;
   createdAt?: number;
   updatedAt?: number;

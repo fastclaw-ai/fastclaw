@@ -683,8 +683,13 @@ type WebSession struct {
 	ProjectID string `json:"projectId,omitempty"`
 	Title     string `json:"title"`
 	Preview   string `json:"preview"`
-	CreatedAt int64  `json:"createdAt"` // unix ms
-	UpdatedAt int64  `json:"updatedAt"` // unix ms
+	// LastMessage is the most recent user-visible user/assistant message,
+	// independent of Preview (which intentionally remains the opening user
+	// turn and is used as the default conversation title).
+	LastMessage   string `json:"lastMessage,omitempty"`
+	LastMessageAt int64  `json:"lastMessageAt,omitempty"` // unix ms
+	CreatedAt     int64  `json:"createdAt"`               // unix ms
+	UpdatedAt     int64  `json:"updatedAt"`               // unix ms
 	// ThumbnailURL is the first image_url attached to the FIRST user
 	// turn of the session, surfaced so the sidebar can show "image +
 	// text" instead of just the text label for multimodal chats.
@@ -723,9 +728,12 @@ func (m *Manager) ListWebSessions() []WebSession {
 			continue
 		}
 
-		// Read first user message as preview
+		// Read the first user message as the conversation preview, while also
+		// tracking the latest user-visible message for contact-list summaries.
 		preview := ""
 		thumb := ""
+		lastMessage := ""
+		var lastMessageAt int64
 		fh, err := os.Open(f)
 		if err != nil {
 			continue
@@ -742,13 +750,19 @@ func (m *Manager) ListWebSessions() []WebSession {
 				Role         string                 `json:"role"`
 				Content      string                 `json:"content"`
 				ContentParts []provider.ContentPart `json:"content_parts"`
+				Timestamp    int64                  `json:"timestamp"`
+				Origin       string                 `json:"origin"`
 			}
-			if json.Unmarshal(scanner.Bytes(), &msg) != nil || msg.Role != "user" {
+			if json.Unmarshal(scanner.Bytes(), &msg) != nil || msg.Origin != provider.OriginUser {
 				continue
 			}
-			text := msg.Content
+			if msg.Role != "user" && msg.Role != "assistant" {
+				continue
+			}
+
+			text := strings.TrimSpace(msg.Content)
 			img := ""
-			if text == "" {
+			if msg.Role == "user" && text == "" {
 				var parts []string
 				for _, p := range msg.ContentParts {
 					if p.Type == "text" && p.Text != "" {
@@ -757,30 +771,41 @@ func (m *Manager) ListWebSessions() []WebSession {
 				}
 				text = strings.Join(parts, "\n")
 			}
-			text = provider.StripAttachedPrefix(text)
-			for _, p := range msg.ContentParts {
-				if p.Type == "image_url" && p.ImageURL != nil && p.ImageURL.URL != "" {
-					img = p.ImageURL.URL
-					break
+			if msg.Role == "user" {
+				text = provider.StripAttachedPrefix(text)
+				for _, p := range msg.ContentParts {
+					if p.Type == "image_url" && p.ImageURL != nil && p.ImageURL.URL != "" {
+						img = p.ImageURL.URL
+						break
+					}
 				}
 			}
 			if text == "" && img == "" {
 				continue
 			}
-			preview = text
-			if preview == "" {
-				preview = "[image]"
+
+			messagePreview := compactMessagePreview(text)
+			if messagePreview == "" {
+				messagePreview = "[image]"
 			}
-			if len(preview) > 100 {
-				preview = preview[:100] + "..."
+			lastMessage = messagePreview
+			lastMessageAt = msg.Timestamp
+
+			if msg.Role == "user" && preview == "" {
+				preview = messagePreview
+				thumb = img
 			}
-			thumb = img
-			break
 		}
 		fh.Close()
 
 		if preview == "" {
 			continue // skip empty sessions
+		}
+		if lastMessage == "" {
+			lastMessage = preview
+		}
+		if lastMessageAt == 0 {
+			lastMessageAt = info.ModTime().UnixMilli()
 		}
 
 		// Read title from metadata file, fallback to preview
@@ -793,12 +818,14 @@ func (m *Manager) ListWebSessions() []WebSession {
 		}
 
 		sessions = append(sessions, WebSession{
-			ID:           sessionId,
-			Title:        title,
-			Preview:      preview,
-			ThumbnailURL: thumb,
-			CreatedAt:    info.ModTime().UnixMilli(),
-			UpdatedAt:    info.ModTime().UnixMilli(),
+			ID:            sessionId,
+			Title:         title,
+			Preview:       preview,
+			LastMessage:   lastMessage,
+			LastMessageAt: lastMessageAt,
+			ThumbnailURL:  thumb,
+			CreatedAt:     info.ModTime().UnixMilli(),
+			UpdatedAt:     info.ModTime().UnixMilli(),
 		})
 	}
 

@@ -145,6 +145,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
   const [me, setMe] = React.useState<MeResponse | null>(null);
   const [agents, setAgents] = React.useState<AgentSwitcherItem[]>([]);
   const [consumerAgents, setConsumerAgents] = React.useState<ConsumerAgentItem[]>([]);
+  const [consumerAgentsLoading, setConsumerAgentsLoading] = React.useState(true);
   // role flag per agent the caller can see — owner vs viewer (read-only
   // shared from another user). Drives whether the AGENT_NAV exposes
   // configuration tabs.
@@ -242,25 +243,35 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
     }
 
     let aborted = false;
+    setConsumerAgentsLoading(true);
     const refresh = () => {
       Promise.all(
         agents.map(async (agent) => {
           const list = await getChatSessions(agent.id).catch(() => []);
           const latest = [...list].sort(
-            (a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0),
+            (a, b) =>
+              (b.lastMessageAt || b.updatedAt || b.createdAt || 0) -
+              (a.lastMessageAt || a.updatedAt || a.createdAt || 0),
           )[0];
           return {
             id: agent.id,
             name: agent.name || agent.id,
             avatarUrl: agent.avatarUrl,
-            preview: latest?.preview,
-            updatedAt: latest?.updatedAt || latest?.createdAt,
+            preview: latest?.lastMessage || latest?.preview,
+            updatedAt: latest?.lastMessageAt || latest?.updatedAt || latest?.createdAt,
             sessionId: latest?.id,
           } satisfies ConsumerAgentItem;
         }),
       )
         .then((items) => {
-          if (!aborted) setConsumerAgents(items);
+          if (!aborted) {
+            setConsumerAgents(
+              [...items].sort(
+                (a, b) => (b.updatedAt || 0) - (a.updatedAt || 0),
+              ),
+            );
+            setConsumerAgentsLoading(false);
+          }
         })
         .catch(() => {
           if (!aborted) {
@@ -271,6 +282,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
                 avatarUrl: agent.avatarUrl,
               })),
             );
+            setConsumerAgentsLoading(false);
           }
         });
     };
@@ -405,7 +417,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
 
   const isConsumerChat =
     !!activeAgentId &&
-    /^\/agents\/[^/]+\/(chat|project)(?:\/|$)/.test(pathname);
+    /^\/agents\/[^/]+\/(chat|project|chats)(?:\/|$)/.test(pathname);
 
   if (isConsumerChat && activeAgentId) {
     return (
@@ -413,6 +425,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
         <ConsumerChatSidebar
           activeAgentId={activeAgentId}
           agents={consumerAgents}
+          loading={consumerAgentsLoading}
           me={me}
         />
         <AgentSettingsDialog

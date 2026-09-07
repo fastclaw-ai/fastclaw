@@ -325,6 +325,13 @@ func (a *StoreAdapter) BuildWebSession(ctx context.Context, m store.SessionMeta)
 	if preview == "" {
 		return nil
 	}
+	lastMessage, lastMessageAt := latestMessagePreview(source)
+	if lastMessage == "" {
+		lastMessage = preview
+	}
+	if lastMessageAt == 0 {
+		lastMessageAt = m.UpdatedAt.UnixMilli()
+	}
 	title := displaySessionTitle(m.Title, m.Key, m.ChatID, preview)
 	return &WebSession{
 		ID:            m.Key,
@@ -334,11 +341,60 @@ func (a *StoreAdapter) BuildWebSession(ctx context.Context, m store.SessionMeta)
 		ProjectID:     m.ProjectID,
 		Title:         title,
 		Preview:       preview,
+		LastMessage:   lastMessage,
+		LastMessageAt: lastMessageAt,
 		ThumbnailURL:  thumb,
 		CreatedAt:     m.UpdatedAt.UnixMilli(),
 		UpdatedAt:     m.UpdatedAt.UnixMilli(),
 		ChatterUserID: m.ChatterUserID,
 	}
+}
+
+// latestMessagePreview returns the newest user-visible message in a session
+// and the timestamp of that same message. Tool rows and runtime-injected
+// prompts are deliberately excluded so contact previews match chat history.
+func latestMessagePreview(source []store.SessionMessage) (string, int64) {
+	for i := len(source) - 1; i >= 0; i-- {
+		msg := source[i]
+		if msg.Origin != provider.OriginUser {
+			continue
+		}
+
+		var text string
+		switch msg.Role {
+		case "assistant":
+			text = msg.Content
+		case "user":
+			text = userText(msg)
+			if text == "" && userImage(msg) != "" {
+				text = "[image]"
+			}
+		default:
+			continue
+		}
+
+		text = compactMessagePreview(text)
+		if text == "" {
+			continue
+		}
+		var timestamp int64
+		if !msg.Timestamp.IsZero() {
+			timestamp = msg.Timestamp.UnixMilli()
+		}
+		return text, timestamp
+	}
+	return "", 0
+}
+
+// compactMessagePreview makes multi-line Markdown suitable for the single-line
+// contact row and caps the API payload without splitting UTF-8 characters.
+func compactMessagePreview(text string) string {
+	text = strings.Join(strings.Fields(text), " ")
+	runes := []rune(text)
+	if len(runes) > 100 {
+		return string(runes[:100]) + "..."
+	}
+	return text
 }
 
 // displaySessionTitle normalizes legacy rows that persisted the opaque

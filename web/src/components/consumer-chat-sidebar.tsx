@@ -66,10 +66,12 @@ function relativeSessionTime(updatedAt: number | undefined, locale: Locale) {
 export function ConsumerChatSidebar({
   activeAgentId,
   agents,
+  loading = false,
   me,
 }: {
   activeAgentId: string;
   agents: ConsumerAgentItem[];
+  loading?: boolean;
   me: MeResponse | null;
 }) {
   const router = useRouter();
@@ -159,8 +161,29 @@ export function ConsumerChatSidebar({
         </div>
       </SidebarHeader>
 
-      <SidebarContent className="px-1.5 pb-3 group-data-[collapsible=icon]:overflow-x-hidden! group-data-[collapsible=icon]:overflow-y-auto! group-data-[collapsible=icon]:px-2">
+      <SidebarContent
+        aria-busy={loading}
+        className="px-1.5 pb-3 group-data-[collapsible=icon]:overflow-x-hidden! group-data-[collapsible=icon]:overflow-y-auto! group-data-[collapsible=icon]:px-2"
+      >
         <SidebarMenu className="gap-1 group-data-[collapsible=icon]:gap-2">
+          {loading && filtered.length === 0 && (
+            <>
+              {[0, 1, 2].map((item) => (
+                <SidebarMenuItem key={`agent-loading-${item}`}>
+                  <div className="flex h-[58px] items-center gap-3 rounded-lg px-2.5 py-2 group-data-[collapsible=icon]:size-12! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:rounded-xl group-data-[collapsible=icon]:p-[7px]!">
+                    <div className="size-[34px] shrink-0 animate-pulse rounded-full bg-black/[0.075] motion-reduce:animate-none dark:bg-white/[0.1]" />
+                    <div className="min-w-0 flex-1 space-y-2 group-data-[collapsible=icon]:hidden">
+                      <div className="h-3 w-2/5 animate-pulse rounded-full bg-black/[0.08] motion-reduce:animate-none dark:bg-white/[0.11]" />
+                      <div className="h-2.5 w-4/5 animate-pulse rounded-full bg-black/[0.055] motion-reduce:animate-none dark:bg-white/[0.075]" />
+                    </div>
+                  </div>
+                </SidebarMenuItem>
+              ))}
+              <span className="sr-only" role="status">
+                {tr("Loading Agents…", "正在加载 Agent…")}
+              </span>
+            </>
+          )}
           {filtered.map((agent) => {
             const active = activeAgentId === agent.id;
             return (
@@ -206,7 +229,7 @@ export function ConsumerChatSidebar({
           <Plus className="size-4" />
         </button>
 
-        {filtered.length === 0 && (
+        {!loading && filtered.length === 0 && (
           <div className="mx-2 mt-4 rounded-lg border border-dashed border-black/10 px-4 py-8 text-center group-data-[collapsible=icon]:hidden dark:border-white/10">
             <p className="text-sm font-medium">
               {query ? t("sidebar.noMatches") : t("sidebar.noBots")}
