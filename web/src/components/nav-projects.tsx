@@ -13,6 +13,7 @@ import { ChevronRightIcon, MoreHorizontal } from "lucide-react";
 import { moveChatSessionToProject } from "@/lib/api";
 import { ChannelIcon, channelLabel } from "@/components/channel-icon";
 import { ChatRowActions } from "@/components/chat-row-actions";
+import { useLocale } from "@/components/locale-provider";
 
 // MIME type carried in dataTransfer for chat-session drags. Custom
 // type so we don't react to unrelated drops (text dragged in from
@@ -27,6 +28,8 @@ const MAX_SIDEBAR_SESSIONS = 10;
 export interface SessionItem {
   id: string;
   title: string;
+  preview?: string;
+  updatedAt?: number;
   // Set when the session's first user turn carried an image attachment.
   // Renders as a small thumbnail before the title so multimodal chats
   // show "image + text" instead of just the text label.
@@ -47,6 +50,7 @@ export function NavSessions({
   agentId: string | null;
   sessions: SessionItem[];
 }) {
+  const { tr } = useLocale();
   const pathname = usePathname();
   const router = useRouter();
   // Drop-zone state for "drag a project chat back out into Chats".
@@ -117,7 +121,7 @@ export function NavSessions({
       // so a console error + alert keeps the user from silently losing
       // the action.
       console.error("move chat to loose failed:", res.error);
-      window.alert(`Failed to move chat: ${res.error}`);
+      window.alert(tr("Failed to move chat: {{error}}", "移动对话失败：{{error}}", { error: res.error }));
       return;
     }
     broadcastChange();
@@ -141,7 +145,7 @@ export function NavSessions({
               (sectionCollapsed ? "rotate-0" : "rotate-90")
             }
           />
-          Chats
+          {tr("Chats", "对话")}
         </SidebarGroupLabel>
         {!sectionCollapsed && (
         <SidebarMenu
@@ -175,18 +179,18 @@ export function NavSessions({
             <SidebarMenuItem>
               <SidebarMenuButton
                 onClick={() => navigateOnce(`/agents/${agentId}/chats`)}
-                tooltip="See all chats"
+                tooltip={tr("See all chats", "查看全部对话")}
                 className="text-muted-foreground"
               >
                 <MoreHorizontal className="size-4" />
-                <span>More</span>
+                <span>{tr("More", "更多")}</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
           )}
           {sessions.length === 0 && (
             <SidebarMenuItem>
               <div className="px-2 py-1.5 text-xs text-muted-foreground">
-                No chats yet
+                {tr("No chats yet", "还没有对话")}
               </div>
             </SidebarMenuItem>
           )}

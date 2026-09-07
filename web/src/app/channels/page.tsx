@@ -16,6 +16,7 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Radio, MessageCircle, Hash, Send } from "lucide-react";
 import { getChannels, type ChannelInfo } from "@/lib/api";
+import { useLocale } from "@/components/locale-provider";
 
 const channelIcons: Record<string, React.ElementType> = {
   telegram: Send,
@@ -30,6 +31,7 @@ const channelColors: Record<string, string> = {
 };
 
 export default function ChannelsPage() {
+  const { tr } = useLocale();
   const [channels, setChannels] = useState<ChannelInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [editChannel, setEditChannel] = useState<ChannelInfo | null>(null);
@@ -49,9 +51,9 @@ export default function ChannelsPage() {
   return (
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
       <div>
-        <h2 className="text-2xl font-semibold tracking-tight">Channels</h2>
+        <h2 className="text-2xl font-semibold tracking-tight">{tr("Channels", "渠道")}</h2>
         <p className="text-sm text-muted-foreground mt-1">
-          Manage messaging platform connections
+          {tr("Manage messaging platform connections", "管理即时通讯平台连接")}
         </p>
       </div>
 
@@ -67,9 +69,9 @@ export default function ChannelsPage() {
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-500/10 mb-4">
               <Radio className="h-7 w-7 text-blue-500" />
             </div>
-            <p className="text-sm text-muted-foreground mb-1">No channels configured</p>
+            <p className="text-sm text-muted-foreground mb-1">{tr("No channels configured", "还没有配置渠道")}</p>
             <p className="text-xs text-muted-foreground/60">
-              Configure channels in Settings or fastclaw.json
+              {tr("Configure channels in Settings or fastclaw.json", "请在设置或 fastclaw.json 中配置渠道")}
             </p>
           </div>
         </div>
@@ -103,7 +105,7 @@ export default function ChannelsPage() {
                         isConnected ? "bg-emerald-500" : "bg-muted-foreground"
                       }`}
                     />
-                    {isConnected ? "Connected" : "Disconnected"}
+                    {isConnected ? tr("Connected", "已连接") : tr("Disconnected", "已断开")}
                   </Badge>
                 </div>
                 <p className="text-base font-medium capitalize mb-1">
@@ -112,7 +114,7 @@ export default function ChannelsPage() {
                 <p className="text-sm text-muted-foreground">
                   {channel.botUsername
                     ? `@${channel.botUsername}`
-                    : "Click to configure"}
+                    : tr("Click to configure", "点击配置")}
                 </p>
               </div>
             );
@@ -125,15 +127,15 @@ export default function ChannelsPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="capitalize">
-              {editChannel?.type} Configuration
+              {editChannel?.type} {tr("Configuration", "配置")}
             </DialogTitle>
             <DialogDescription>
-              Update channel connection settings
+              {tr("Update channel connection settings", "更新渠道连接设置")}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-2">
-              <Label>Bot Token</Label>
+              <Label>{tr("Bot Token", "机器人 Token")}</Label>
               <Input
                 type="password"
                 defaultValue="••••••••••••"
@@ -142,7 +144,7 @@ export default function ChannelsPage() {
             </div>
             {editChannel?.botUsername && (
               <div className="space-y-2">
-                <Label>Bot Username</Label>
+                <Label>{tr("Bot Username", "机器人用户名")}</Label>
                 <Input
                   value={editChannel.botUsername}
                   disabled
@@ -153,9 +155,9 @@ export default function ChannelsPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditChannel(null)}>
-              Cancel
+              {tr("Cancel", "取消")}
             </Button>
-            <Button>Save</Button>
+            <Button>{tr("Save", "保存")}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

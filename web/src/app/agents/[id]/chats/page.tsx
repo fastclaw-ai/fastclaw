@@ -46,6 +46,7 @@ import {
   deleteChatSession,
 } from "@/lib/api";
 import { ChannelIcon, channelLabel } from "@/components/channel-icon";
+import { useLocale } from "@/components/locale-provider";
 
 type Session = {
   id: string;
@@ -62,6 +63,7 @@ type Session = {
 const PAGE_SIZE = 20;
 
 export default function AgentChatsPage() {
+  const { locale, tr } = useLocale();
   const router = useRouter();
   const agentId = useAgentIdFromURL();
   const agentName = useAgentName(agentId);
@@ -79,7 +81,7 @@ export default function AgentChatsPage() {
       const list = await getChatSessions(agentId);
       setSessions(list);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load chats");
+      setError(e instanceof Error ? e.message : tr("Failed to load chats", "加载对话失败"));
     }
   }
   useEffect(() => {
@@ -120,10 +122,12 @@ export default function AgentChatsPage() {
         <div>
           <div className="flex items-center gap-2">
             <MessagesSquare className="size-5 text-muted-foreground" />
-            <h2 className="text-2xl font-semibold tracking-tight">Chats</h2>
+            <h2 className="text-2xl font-semibold tracking-tight">{tr("Chats", "对话")}</h2>
           </div>
           <p className="text-sm text-muted-foreground mt-1">
-            All conversations with {agentName || "this agent"}.
+            {tr("All conversations with {{agent}}.", "与 {{agent}} 的全部对话。", {
+              agent: agentName || tr("this agent", "此 Agent"),
+            })}
           </p>
         </div>
       </div>
@@ -143,17 +147,17 @@ export default function AgentChatsPage() {
               <MessagesSquare className="h-7 w-7 text-primary" />
             </div>
             <p className="text-sm text-muted-foreground mb-1">
-              No chats yet
+              {tr("No chats yet", "还没有对话")}
             </p>
             <p className="text-xs text-muted-foreground/60 mb-4">
-              Start a conversation to see it listed here.
+              {tr("Start a conversation to see it listed here.", "开始对话后，记录会显示在这里。")}
             </p>
             <Button
               variant="outline"
               size="sm"
               onClick={() => router.push(`/agents/${agentId}/chat/`)}
             >
-              Start a chat
+              {tr("Start a chat", "开始对话")}
             </Button>
           </div>
         </div>
@@ -163,10 +167,10 @@ export default function AgentChatsPage() {
             <Table className="table-fixed w-full">
               <TableHeader>
                 <TableRow>
-                  <TableHead>Title</TableHead>
-                  <TableHead className="hidden md:table-cell w-[120px]">Channel</TableHead>
-                  <TableHead className="hidden sm:table-cell w-[160px]">Created</TableHead>
-                  <TableHead className="w-[100px] text-right">Actions</TableHead>
+                  <TableHead>{tr("Title", "标题")}</TableHead>
+                  <TableHead className="hidden md:table-cell w-[120px]">{tr("Channel", "渠道")}</TableHead>
+                  <TableHead className="hidden sm:table-cell w-[160px]">{tr("Created", "创建时间")}</TableHead>
+                  <TableHead className="w-[100px] text-right">{tr("Actions", "操作")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -209,7 +213,7 @@ export default function AgentChatsPage() {
                       </div>
                     </TableCell>
                     <TableCell className="hidden sm:table-cell text-xs text-muted-foreground whitespace-nowrap">
-                      {formatTime(s.createdAt)}
+                      {formatTime(s.createdAt, locale)}
                     </TableCell>
                     <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                       <div className="flex justify-end gap-1">
@@ -217,7 +221,7 @@ export default function AgentChatsPage() {
                           size="icon"
                           variant="ghost"
                           onClick={() => setEditTarget(s)}
-                          title="Edit title"
+                          title={tr("Edit title", "编辑标题")}
                         >
                           <PencilIcon className="size-4" />
                         </Button>
@@ -226,7 +230,7 @@ export default function AgentChatsPage() {
                           variant="ghost"
                           className="text-destructive hover:text-destructive"
                           onClick={() => setDeleteTarget(s)}
-                          title="Delete"
+                          title={tr("Delete", "删除")}
                         >
                           <Trash2 className="size-4" />
                         </Button>
@@ -242,7 +246,7 @@ export default function AgentChatsPage() {
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">
                 {pageStart + 1}–{Math.min(pageStart + PAGE_SIZE, sorted.length)}{" "}
-                of {sorted.length}
+                {tr("of", "共")} {sorted.length}
               </span>
               <div className="flex items-center gap-1">
                 <Button
@@ -254,7 +258,7 @@ export default function AgentChatsPage() {
                   <ChevronLeft className="size-4" />
                 </Button>
                 <span className="px-3 text-muted-foreground">
-                  Page {safePage} / {totalPages}
+                  {tr("Page {{page}} / {{total}}", "第 {{page}} / {{total}} 页", { page: safePage, total: totalPages })}
                 </span>
                 <Button
                   variant="outline"
@@ -286,18 +290,17 @@ export default function AgentChatsPage() {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete chat</AlertDialogTitle>
+            <AlertDialogTitle>{tr("Delete chat", "删除对话")}</AlertDialogTitle>
             <AlertDialogDescription>
-              Delete{" "}
-              <strong>
-                {deleteTarget?.title || deleteTarget?.preview || deleteTarget?.id}
-              </strong>
-              ? The full message history for this chat will be removed and cannot
-              be recovered.
+              {tr(
+                "Delete {{chat}}? The full message history for this chat will be removed and cannot be recovered.",
+                "确定删除 {{chat}} 吗？此对话的全部消息记录会被移除且无法恢复。",
+                { chat: deleteTarget?.title || deleteTarget?.preview || deleteTarget?.id || "" },
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{tr("Cancel", "取消")}</AlertDialogCancel>
             <AlertDialogAction
               onClick={async () => {
                 if (!deleteTarget || !agentId) return;
@@ -308,7 +311,7 @@ export default function AgentChatsPage() {
               }}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              Delete
+              {tr("Delete", "删除")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -317,11 +320,11 @@ export default function AgentChatsPage() {
   );
 }
 
-function formatTime(ms?: number): string {
+function formatTime(ms: number | undefined, locale: string): string {
   if (!ms) return "—";
   const d = new Date(ms);
   if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleString();
+  return d.toLocaleString(locale === "zh-CN" ? "zh-CN" : "en-US");
 }
 
 function EditTitleDialog({
@@ -335,6 +338,7 @@ function EditTitleDialog({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const { tr } = useLocale();
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -364,9 +368,9 @@ function EditTitleDialog({
     <Dialog open={!!target} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Edit chat title</DialogTitle>
+          <DialogTitle>{tr("Edit chat title", "编辑对话标题")}</DialogTitle>
           <DialogDescription>
-            Rename this chat so it&apos;s easier to find in the sidebar.
+            {tr("Rename this chat so it is easier to find in the sidebar.", "为对话设置更易查找的标题。")}
           </DialogDescription>
         </DialogHeader>
         <Input
@@ -382,14 +386,14 @@ function EditTitleDialog({
               save();
             }
           }}
-          placeholder="Chat title"
+          placeholder={tr("Chat title", "对话标题")}
         />
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={saving}>
-            Cancel
+            {tr("Cancel", "取消")}
           </Button>
           <Button onClick={save} disabled={saving || !draft.trim()}>
-            {saving ? "Saving…" : "Save"}
+            {saving ? tr("Saving…", "正在保存…") : tr("Save", "保存")}
           </Button>
         </DialogFooter>
       </DialogContent>

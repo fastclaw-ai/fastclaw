@@ -12,10 +12,10 @@ const ThemeContext = createContext<{
   toggleTheme: () => void;
   resolvedTheme: "dark" | "light";
 }>({
-  theme: "dark",
+  theme: "light",
   setTheme: () => {},
   toggleTheme: () => {},
-  resolvedTheme: "dark",
+  resolvedTheme: "light",
 });
 
 export function useTheme() {
@@ -23,7 +23,7 @@ export function useTheme() {
 }
 
 function readSystem(): "dark" | "light" {
-  if (typeof window === "undefined") return "dark";
+  if (typeof window === "undefined") return "light";
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
@@ -31,22 +31,27 @@ function apply(resolved: "dark" | "light") {
   document.documentElement.classList.toggle("dark", resolved === "dark");
 }
 
+function readStoredTheme(): Theme {
+  if (typeof window === "undefined") return "light";
+  const stored = localStorage.getItem(STORAGE_KEY) as Theme | null;
+  return stored === "light" || stored === "dark" || stored === "system"
+    ? stored
+    : "light";
+}
+
+function resolveTheme(theme: Theme): "dark" | "light" {
+  return theme === "system" ? readSystem() : theme;
+}
+
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>("dark");
-  const [resolvedTheme, setResolvedTheme] = useState<"dark" | "light">("dark");
+  const [theme, setThemeState] = useState<Theme>(readStoredTheme);
+  const [resolvedTheme, setResolvedTheme] = useState<"dark" | "light">(() =>
+    resolveTheme(readStoredTheme()),
+  );
 
   useEffect(() => {
-    // Hydrate from localStorage once on mount. setState here is
-    // appropriate — localStorage isn't accessible on the server (so a
-    // useState lazy initializer would crash SSR) and we want a single
-    // shift to the persisted theme on first paint.
-    const stored = localStorage.getItem(STORAGE_KEY) as Theme | null;
-    const initial: Theme = stored === "light" || stored === "dark" || stored === "system" ? stored : "dark";
-    setThemeState(initial);
-    const resolved = initial === "system" ? readSystem() : initial;
-    setResolvedTheme(resolved);
-    apply(resolved);
-  }, []);
+    apply(resolvedTheme);
+  }, [resolvedTheme]);
 
   // When theme=system, follow OS changes live so the user doesn't need
   // to reload to pick up sunset/sunrise on macOS auto theme.

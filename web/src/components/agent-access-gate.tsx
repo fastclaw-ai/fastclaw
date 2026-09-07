@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { Bot } from "lucide-react";
 import { getAgentStatus } from "@/lib/api";
+import { useLocale } from "@/components/locale-provider";
 
 // Pull the agent id straight from the URL. Under output:'export' the
 // HTML served for /agents/agt_xxx/chat/ is actually the prebuilt
@@ -20,8 +21,8 @@ function agentIdFromPath(pathname: string | null | undefined): string {
 }
 
 // AgentAccessGate probes /api/agents/{id} once on mount and:
-//   - 200: renders children (caller is owner / super_admin / public-link
-//     visitor / apikey ACL grantee)
+//   - 200: renders children (caller is owner / public-link visitor /
+//     apikey ACL grantee / super_admin using the actAs audit flow)
 //   - 401: redirects to /login (handled at apiFetch level normally)
 //   - 403/404 or any other failure: shows a "no access" screen that
 //     overlays the entire viewport (sidebar included), so a non-owner
@@ -38,6 +39,7 @@ export default function AgentAccessGate({
 }: {
   children: React.ReactNode;
 }) {
+  const { tr } = useLocale();
   const pathname = usePathname();
   const agentId = agentIdFromPath(pathname);
   const [state, setState] = useState<"checking" | "ok" | "denied">("checking");
@@ -88,11 +90,9 @@ export default function AgentAccessGate({
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-muted/60">
             <Bot className="h-7 w-7 text-muted-foreground" />
           </div>
-          <h2 className="text-lg font-semibold">No access to this agent</h2>
+          <h2 className="text-lg font-semibold">{tr("No access to this agent", "无权访问此 Agent")}</h2>
           <p className="text-sm text-muted-foreground">
-            This agent is private to its owner, or the link is no longer
-            valid. If the owner shares it publicly, the chat URL will
-            start working for you automatically.
+            {tr("This agent is private to its owner, or the link is no longer valid. If the owner shares it publicly, the chat URL will start working for you automatically.", "此 Agent 仅对所有者开放，或当前链接已失效。所有者公开分享后，此对话链接会自动恢复可用。")}
           </p>
         </div>
       </div>

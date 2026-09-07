@@ -8,18 +8,23 @@ import {
   CoinsIcon,
   IdCardIcon,
   InfoIcon,
+  KeyRoundIcon,
   LayersIcon,
+  MessagesSquareIcon,
   Palette,
   Plug,
   RadioIcon,
   ServerIcon,
   SparklesIcon,
   UserCog,
+  UsersIcon,
   Wand2Icon,
+  WrenchIcon,
 } from "lucide-react";
 
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { useLocale, type MessageKey } from "@/components/locale-provider";
 
 import AgentProfilePanel from "@/components/agent-profile-panel";
 import AgentCustomizePage from "@/app/agents/[id]/customize/page";
@@ -35,7 +40,13 @@ import AgentUsagePage from "@/app/agents/[id]/usage/page";
 import AccountSettingsPage from "@/app/settings/account/page";
 import GeneralSettingsPage from "@/app/settings/general/page";
 import UserModelsPage from "@/app/models/page";
+import ApikeysPage from "@/app/apikeys/page";
+import SystemSkillsPage from "@/app/skills/page";
+import SystemToolsPage from "@/app/tools/page";
 import AboutSettingsPage from "@/app/settings/about/page";
+import AdminUsersPage from "@/app/admin/users/page";
+import AdminChatsPage from "@/app/admin/chats/page";
+import AdminUsagePage from "@/app/admin/usage/page";
 
 export type AgentSettingsTab =
   | "profile"
@@ -51,6 +62,15 @@ export type AgentSettingsTab =
   | "usage"
   | "account"
   | "general"
+  | "apiKeys"
+  | "userModels"
+  | "userSkills"
+  | "systemModels"
+  | "systemSkills"
+  | "systemTools"
+  | "systemUsers"
+  | "systemChats"
+  | "systemUsage"
   | "about";
 
 type TabIcon = React.ComponentType<{ className?: string }>;
@@ -69,24 +89,61 @@ const AGENT_TABS: Array<{ id: AgentSettingsTab; label: string; icon: TabIcon }> 
   { id: "usage", label: "Token Usage", icon: CoinsIcon },
 ];
 
-// Runtime intentionally lives only on the standalone /settings/runtime
-// page (super_admin-gated) — it's a deployment-wide knob, not the kind
-// of thing the average chatter wants in their per-agent dialog.
 const USER_TABS: Array<{ id: AgentSettingsTab; label: string; icon: TabIcon }> = [
   { id: "account", label: "Account", icon: UserCog },
   { id: "general", label: "General", icon: Palette },
-  // About surfaces the gateway version + upgrade hint — only useful
-  // to operators (super_admin), filtered out below for regular users.
+  { id: "apiKeys", label: "API Keys", icon: KeyRoundIcon },
+];
+
+// Models + skill credentials are personal overrides for every account,
+// including super_admin accounts. Admins additionally get a separate System
+// group below; explicit API scope keeps the two layers independent.
+const USER_CONFIGURATION_TABS: Array<{ id: AgentSettingsTab; label: string; icon: TabIcon }> = [
+  { id: "userModels", label: "Models", icon: BrainIcon },
+  { id: "userSkills", label: "Skills", icon: SparklesIcon },
+];
+
+const SYSTEM_TABS: Array<{ id: AgentSettingsTab; label: string; icon: TabIcon }> = [
+  { id: "systemUsers", label: "Users", icon: UsersIcon },
+  { id: "systemChats", label: "Chats", icon: MessagesSquareIcon },
+  { id: "systemUsage", label: "Token Usage", icon: CoinsIcon },
+  { id: "systemModels", label: "Models", icon: BrainIcon },
+  { id: "systemSkills", label: "Skills", icon: SparklesIcon },
+  { id: "systemTools", label: "Tools", icon: WrenchIcon },
   { id: "about", label: "About", icon: InfoIcon },
 ];
 
-// Tabbed configuration panel. Hosts both the per-agent pages
-// (Customize / Models / Skills / Channels / Scheduler) and the
-// per-user pages (Account / General / Runtime[admin-only]) so a
-// click on the sidebar Settings button covers everything the user
-// could want to change. Each tab mounts the existing page component
-// lazily — switching tabs unmounts the previous panel, which is fine
-// because the pages are self-contained and re-fetch on mount.
+const TAB_LABEL_KEYS: Record<AgentSettingsTab, MessageKey> = {
+  profile: "settings.tab.profile",
+  customize: "settings.tab.customize",
+  models: "settings.tab.models",
+  context: "settings.tab.context",
+  knowledge: "settings.tab.knowledge",
+  skills: "settings.tab.skills",
+  mcp: "settings.tab.mcp",
+  plugins: "settings.tab.plugins",
+  channels: "settings.tab.channels",
+  scheduler: "settings.tab.scheduler",
+  usage: "settings.tab.usage",
+  account: "settings.tab.account",
+  general: "settings.tab.general",
+  apiKeys: "settings.tab.apiKeys",
+  userModels: "settings.tab.models",
+  userSkills: "settings.tab.skills",
+  systemModels: "settings.tab.models",
+  systemSkills: "settings.tab.skills",
+  systemTools: "settings.tab.tools",
+  systemUsers: "settings.tab.users",
+  systemChats: "settings.tab.chats",
+  systemUsage: "settings.tab.usage",
+  about: "settings.tab.about",
+};
+
+// Tabbed configuration panel with two mutually-exclusive modes:
+// Agent settings (the default) and User settings (`userOnly`). Keeping
+// them separate prevents account preferences from appearing inside a
+// Bot-specific settings surface. Each tab mounts its existing page
+// component lazily.
 //
 // role="viewer" hides the owner-only Agent tabs (Profile, Customize,
 // Skills, Scheduler, Usage) and only exposes Models + Channels under
@@ -107,26 +164,38 @@ export function AgentSettingsDialog({
   onOpenChange: (open: boolean) => void;
   defaultTab?: AgentSettingsTab;
   role?: "owner" | "viewer";
-  // userOnly hides the Agent section entirely. Used by the platform
-  // sidebar's Settings button, which has no agent context — it should
-  // only expose Account + General.
+  // userOnly hides the Agent section entirely. Used by the account-menu
+  // Settings entry to expose personal configuration and, for admins, a
+  // separately labeled System section.
   userOnly?: boolean;
-  // isAdmin gates super_admin-only tabs (currently just About — the
-  // gateway version + upgrade hint is operator info, not end-user info).
+  // isAdmin adds deployment-wide configuration under a distinct System
+  // section; API authorization remains the source of truth.
   isAdmin?: boolean;
 }) {
+  const { t } = useLocale();
   const agentTabs = userOnly
     ? []
     : role === "viewer"
       ? AGENT_TABS.filter((t) => t.id === "models" || t.id === "channels")
       : AGENT_TABS;
-  const userTabs = isAdmin ? USER_TABS : USER_TABS.filter((t) => t.id !== "about");
+  const userTabs = userOnly
+    ? [...USER_TABS, ...USER_CONFIGURATION_TABS]
+    : [];
+  const systemTabs = userOnly && isAdmin ? SYSTEM_TABS : [];
+  const visibleTabs = [...agentTabs, ...userTabs, ...systemTabs];
   // Pick the landing tab: userOnly opens on General (User section);
   // viewers land on Models (the first Agent tab they have); owners on
-  // Profile.
+  // Profile. Ignore a requested default that isn't visible in the
+  // current mode so switching between Agent and User settings can never
+  // leave the content pane blank.
   const initialTab: AgentSettingsTab =
-    defaultTab ??
-    (userOnly ? "general" : role === "viewer" ? "models" : "profile");
+    defaultTab && visibleTabs.some((candidate) => candidate.id === defaultTab)
+      ? defaultTab
+      : userOnly
+        ? "general"
+        : role === "viewer"
+          ? "models"
+          : "profile";
   const [tab, setTab] = React.useState<AgentSettingsTab>(initialTab);
 
   // Reset to the requested tab whenever the dialog re-opens, so a fresh
@@ -147,30 +216,45 @@ export function AgentSettingsDialog({
         <aside className="flex flex-col gap-1 border-r bg-muted/40 p-3 overflow-y-auto">
           {agentTabs.length > 0 && (
             <>
-              <SectionLabel>Agent</SectionLabel>
-              {agentTabs.map((t) => (
+              <SectionLabel>{t("common.agent")}</SectionLabel>
+              {agentTabs.map((agentTab) => (
                 <TabButton
-                  key={t.id}
-                  tab={t}
-                  active={tab === t.id}
+                  key={agentTab.id}
+                  tab={{ ...agentTab, label: t(TAB_LABEL_KEYS[agentTab.id]) }}
+                  active={tab === agentTab.id}
                   onSelect={setTab}
                 />
               ))}
             </>
           )}
-          <SectionLabel className={agentTabs.length > 0 ? "mt-3" : undefined}>
-            User
-          </SectionLabel>
-          {userTabs.map((t) => (
-            <TabButton
-              key={t.id}
-              tab={t}
-              active={tab === t.id}
-              onSelect={setTab}
-            />
-          ))}
+          {userTabs.length > 0 && (
+            <>
+              <SectionLabel>{t("common.user")}</SectionLabel>
+              {userTabs.map((userTab) => (
+                <TabButton
+                  key={userTab.id}
+                  tab={{ ...userTab, label: t(TAB_LABEL_KEYS[userTab.id]) }}
+                  active={tab === userTab.id}
+                  onSelect={setTab}
+                />
+              ))}
+            </>
+          )}
+          {systemTabs.length > 0 && (
+            <>
+              <SectionLabel className="mt-3">{t("common.system")}</SectionLabel>
+              {systemTabs.map((systemTab) => (
+                <TabButton
+                  key={systemTab.id}
+                  tab={{ ...systemTab, label: t(TAB_LABEL_KEYS[systemTab.id]) }}
+                  active={tab === systemTab.id}
+                  onSelect={setTab}
+                />
+              ))}
+            </>
+          )}
         </aside>
-        <div className="overflow-y-auto">
+        <div className="min-w-0 overflow-auto">
           {tab === "profile" && <AgentProfilePanel />}
           {tab === "customize" && <AgentCustomizePage />}
           {tab === "models" &&
@@ -193,6 +277,15 @@ export function AgentSettingsDialog({
               <GeneralSettingsPage />
             </div>
           )}
+          {tab === "apiKeys" && <ApikeysPage />}
+          {tab === "userModels" && <UserModelsPage scope="user" />}
+          {tab === "userSkills" && <SystemSkillsPage scope="user" />}
+          {tab === "systemModels" && <UserModelsPage scope="system" />}
+          {tab === "systemSkills" && <SystemSkillsPage scope="system" />}
+          {tab === "systemTools" && <SystemToolsPage />}
+          {tab === "systemUsers" && <AdminUsersPage />}
+          {tab === "systemChats" && <AdminChatsPage />}
+          {tab === "systemUsage" && <AdminUsagePage />}
           {tab === "about" && (
             <div className="p-6 max-w-3xl">
               <AboutSettingsPage />

@@ -24,6 +24,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api";
 import { useAgentIdFromURL } from "@/hooks/use-agent-id";
 import { useAgentName } from "@/hooks/use-agent-name";
+import { useLocale } from "@/components/locale-provider";
 
 const MAX_BYTES = 256 * 1024;
 
@@ -36,6 +37,7 @@ type KnowledgeFile = {
 };
 
 export default function AgentKnowledgePage() {
+  const { tr } = useLocale();
   const agentId = useAgentIdFromURL();
   const agentName = useAgentName(agentId);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -53,12 +55,12 @@ export default function AgentKnowledgePage() {
     try {
       const res = await apiFetch(`/api/agents/${agentId}/knowledge-files`);
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || `Failed to load files (${res.status})`);
+      if (!res.ok) throw new Error(data?.error || tr("Failed to load files ({{status}})", "加载文件失败（{{status}}）", { status: res.status }));
       setFiles((data.files || []) as KnowledgeFile[]);
     } finally {
       setLoading(false);
     }
-  }, [agentId]);
+  }, [agentId, tr]);
 
   useEffect(() => {
     fetchFiles().catch(() => setLoading(false));
@@ -77,12 +79,12 @@ export default function AgentKnowledgePage() {
   const acceptFile = (list: FileList | null) => {
     if (!list?.length) return;
     if (list.length > 1) {
-      setUploadError("Please upload one knowledge file at a time.");
+      setUploadError(tr("Please upload one knowledge file at a time.", "一次只能上传一个知识库文件。"));
       return;
     }
     const file = list[0];
     if (file.size > MAX_BYTES) {
-      setUploadError("Knowledge file is too large; maximum size is 256KB.");
+      setUploadError(tr("Knowledge file is too large; the maximum size is 256KB.", "知识库文件过大，最大支持 256KB。"));
       return;
     }
     setUploadFile(file);
@@ -102,10 +104,10 @@ export default function AgentKnowledgePage() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data?.ok === false) {
-        throw new Error(data?.error || `Upload failed (${res.status})`);
+        throw new Error(data?.error || tr("Upload failed ({{status}})", "上传失败（{{status}}）", { status: res.status }));
       }
       if (data?.duplicate) {
-        setUploadError("This file is already in the knowledge base.");
+        setUploadError(tr("This file is already in the knowledge base.", "该文件已存在于知识库中。"));
         await fetchFiles();
         return;
       }
@@ -133,14 +135,14 @@ export default function AgentKnowledgePage() {
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight">Knowledge</h2>
+          <h2 className="text-2xl font-semibold tracking-tight">{tr("Knowledge", "知识库")}</h2>
           <p className="text-sm text-muted-foreground mt-1">
-            Reference files scoped to <strong>{agentName}</strong>
+            {tr("Reference files for", "供")} <strong>{agentName}</strong> {tr("to use", "使用的参考文件")}
           </p>
         </div>
         <Button variant="outline" onClick={() => setUploadOpen(true)}>
           <Upload className="h-4 w-4 mr-2" />
-          Upload File
+          {tr("Upload file", "上传文件")}
         </Button>
       </div>
 
@@ -156,13 +158,13 @@ export default function AgentKnowledgePage() {
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 mb-4">
               <BookOpen className="h-7 w-7 text-primary" />
             </div>
-            <p className="text-sm text-muted-foreground mb-1">No knowledge files yet</p>
+            <p className="text-sm text-muted-foreground mb-1">{tr("No knowledge files yet", "还没有知识库文件")}</p>
             <p className="text-xs text-muted-foreground/60 mb-4 max-w-sm text-center">
-              Upload reference files this agent should use when answering.
+              {tr("Upload reference files for this agent to use when answering.", "上传参考文件，供此 Agent 回答问题时使用。")}
             </p>
             <Button variant="outline" size="sm" onClick={() => setUploadOpen(true)}>
               <Upload className="h-4 w-4 mr-2" />
-              Upload File
+              {tr("Upload file", "上传文件")}
             </Button>
           </div>
         </div>
@@ -191,7 +193,7 @@ export default function AgentKnowledgePage() {
                   size="icon"
                   className="h-7 w-7 shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
                   onClick={() => setDeleteTarget(file)}
-                  title="Delete knowledge file"
+                  title={tr("Delete knowledge file", "删除知识库文件")}
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                 </Button>
@@ -204,7 +206,7 @@ export default function AgentKnowledgePage() {
       <Dialog open={uploadOpen} onOpenChange={handleUploadOpenChange}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Upload knowledge file</DialogTitle>
+            <DialogTitle>{tr("Upload knowledge file", "上传知识库文件")}</DialogTitle>
           </DialogHeader>
           <input
             ref={fileInputRef}
@@ -240,17 +242,17 @@ export default function AgentKnowledgePage() {
               <div className="space-y-1">
                 <p className="break-all text-sm font-medium">{uploadFile.name}</p>
                 <p className="text-xs text-muted-foreground">
-                  {formatBytes(uploadFile.size)} · click to choose a different file
+                  {formatBytes(uploadFile.size)} · {tr("click to choose a different file", "点击选择其他文件")}
                 </p>
               </div>
             ) : (
               <p className="text-sm text-muted-foreground">
-                Drag and drop or click to upload
+                {tr("Drag and drop or click to upload", "拖放文件或点击上传")}
               </p>
             )}
           </button>
           <p className="text-xs text-muted-foreground">
-            Supported text files up to 256KB. Existing files with the same name are replaced.
+            {tr("Supported text files up to 256KB. Existing files with the same name are replaced.", "支持最大 256KB 的文本文件。同名文件将被替换。")}
           </p>
           {uploadError && (
             <p className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive break-words">
@@ -259,18 +261,18 @@ export default function AgentKnowledgePage() {
           )}
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="outline" onClick={() => handleUploadOpenChange(false)} disabled={uploading}>
-              Cancel
+              {tr("Cancel", "取消")}
             </Button>
             <Button onClick={upload} disabled={!uploadFile || uploading}>
               {uploading ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Uploading...
+                  {tr("Uploading…", "正在上传…")}
                 </>
               ) : (
                 <>
                   <Upload className="h-4 w-4 mr-2" />
-                  Upload
+                  {tr("Upload", "上传")}
                 </>
               )}
             </Button>
@@ -281,15 +283,15 @@ export default function AgentKnowledgePage() {
       <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete knowledge file?</AlertDialogTitle>
+            <AlertDialogTitle>{tr("Delete knowledge file?", "删除知识库文件？")}</AlertDialogTitle>
             <AlertDialogDescription>
-              This removes {deleteTarget?.name} from this agent knowledge base.
+              {tr("This removes {{name}} from the agent knowledge base.", "这会从 Agent 知识库中移除 {{name}}。", { name: deleteTarget?.name || "" })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{tr("Cancel", "取消")}</AlertDialogCancel>
             <AlertDialogAction onClick={deleteFile} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-              Delete
+              {tr("Delete", "删除")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

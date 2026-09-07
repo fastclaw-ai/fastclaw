@@ -25,8 +25,10 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Puzzle, Download, Settings } from "lucide-react";
 import { getPlugins, updatePlugin, type PluginInfo } from "@/lib/api";
+import { useLocale } from "@/components/locale-provider";
 
 export default function PluginsPage() {
+  const { tr } = useLocale();
   const [plugins, setPlugins] = useState<PluginInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [editPlugin, setEditPlugin] = useState<PluginInfo | null>(null);
@@ -89,14 +91,14 @@ export default function PluginsPage() {
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight">Plugins</h2>
+          <h2 className="text-2xl font-semibold tracking-tight">{tr("Plugins", "插件")}</h2>
           <p className="text-sm text-muted-foreground mt-1">
-            Extend FastClaw with custom plugins
+            {tr("Extend FastClaw with custom plugins", "使用自定义插件扩展 FastClaw")}
           </p>
         </div>
         <Button variant="outline">
           <Download className="h-4 w-4 mr-2" />
-          Install Plugin
+          {tr("Install Plugin", "安装插件")}
         </Button>
       </div>
 
@@ -112,9 +114,9 @@ export default function PluginsPage() {
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 mb-4">
               <Puzzle className="h-7 w-7 text-primary" />
             </div>
-            <p className="text-sm text-muted-foreground">No plugins installed</p>
+            <p className="text-sm text-muted-foreground">{tr("No plugins installed", "还没有安装插件")}</p>
             <p className="text-xs text-muted-foreground/60 mt-1">
-              Plugins add channels, tools, and providers
+              {tr("Plugins add channels, tools, and providers", "插件可以添加渠道、工具和模型提供商")}
             </p>
           </div>
         ) : (
@@ -122,12 +124,12 @@ export default function PluginsPage() {
           <Table>
             <TableHeader>
               <TableRow className="hover:bg-transparent">
-                <TableHead>Plugin</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Version</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Enabled</TableHead>
-                <TableHead className="text-right">Config</TableHead>
+                <TableHead>{tr("Plugin", "插件")}</TableHead>
+                <TableHead>{tr("Type", "类型")}</TableHead>
+                <TableHead>{tr("Version", "版本")}</TableHead>
+                <TableHead>{tr("Status", "状态")}</TableHead>
+                <TableHead>{tr("Enabled", "已启用")}</TableHead>
+                <TableHead className="text-right">{tr("Config", "配置")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -146,7 +148,7 @@ export default function PluginsPage() {
                   </TableCell>
                   <TableCell>
                     <Badge variant="outline" className={typeColor(plugin.type)}>
-                      {plugin.type}
+                      {({ channel: tr("Channel", "渠道"), tool: tr("Tool", "工具"), provider: tr("Provider", "提供商"), hook: "Hook" } as Record<string, string>)[plugin.type] || plugin.type}
                     </Badge>
                   </TableCell>
                   <TableCell>
@@ -156,7 +158,7 @@ export default function PluginsPage() {
                   </TableCell>
                   <TableCell>
                     <Badge variant="outline" className={statusColor(plugin.status)}>
-                      {plugin.status}
+                      {({ running: tr("Running", "运行中"), stopped: tr("Stopped", "已停止") } as Record<string, string>)[plugin.status] || plugin.status}
                     </Badge>
                   </TableCell>
                   <TableCell>
@@ -189,14 +191,14 @@ export default function PluginsPage() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Puzzle className="h-5 w-5 text-primary" />
-              {editPlugin?.id} Configuration
+              {editPlugin?.id} {tr("Configuration", "配置")}
             </DialogTitle>
             <DialogDescription>
-              Edit plugin configuration as JSON
+              {tr("Edit plugin configuration as JSON", "以 JSON 格式编辑插件配置")}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
-            <Label>Config JSON</Label>
+            <Label>{tr("Config JSON", "配置 JSON")}</Label>
             <Textarea
               value={configJson}
               onChange={(e) => setConfigJson(e.target.value)}
@@ -206,10 +208,10 @@ export default function PluginsPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditPlugin(null)}>
-              Cancel
+              {tr("Cancel", "取消")}
             </Button>
             <Button onClick={handleSaveConfig} disabled={saving}>
-              {saving ? "Saving..." : "Save Config"}
+              {saving ? tr("Saving…", "正在保存…") : tr("Save Config", "保存配置")}
             </Button>
           </DialogFooter>
         </DialogContent>

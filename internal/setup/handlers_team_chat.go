@@ -29,6 +29,9 @@ type teamChatMember struct {
 }
 
 func (s *Server) handleTeamChatStream(w http.ResponseWriter, r *http.Request) {
+	if !s.requireWritable(w, r) {
+		return
+	}
 	var req teamChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": err.Error()})

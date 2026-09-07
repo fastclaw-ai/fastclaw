@@ -42,6 +42,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { KeyRound, RotateCw, Trash2, Copy, Check, Plus } from "lucide-react";
+import { useLocale } from "@/components/locale-provider";
 
 interface ApiKey {
   id: string;
@@ -63,6 +64,7 @@ interface AgentMeta {
 }
 
 export default function ApikeysPage() {
+  const { locale, tr } = useLocale();
   const [keys, setKeys] = useState<ApiKey[]>([]);
   const [agents, setAgents] = useState<AgentMeta[]>([]);
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
@@ -99,7 +101,7 @@ export default function ApikeysPage() {
     setError("");
     if (!createName.trim()) return;
     if (createType === "agent" && createAgents.length === 0) {
-      setError("Select at least one agent");
+      setError(tr("Select at least one agent", "请至少选择一个 Agent"));
       return;
     }
     const res = await createApikey({
@@ -152,7 +154,7 @@ export default function ApikeysPage() {
   async function saveScope() {
     if (!scopeTarget) return;
     if (scopeAgents.length === 0) {
-      setError("type=agent keys need at least one agent");
+      setError(tr("Agent keys need at least one agent", "Agent 类型的密钥至少需要关联一个 Agent"));
       return;
     }
     await handleSetAgents(scopeTarget.id, scopeAgents);
@@ -184,21 +186,28 @@ export default function ApikeysPage() {
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight">API Keys</h2>
+          <h2 className="text-2xl font-semibold tracking-tight">
+            {tr("API Keys", "API 密钥")}
+          </h2>
           <p className="text-sm text-muted-foreground mt-1">
-            Issue programmatic credentials. Each key is scoped to a subset of your agents.
+            {tr(
+              "Issue programmatic credentials. Each key can be scoped to selected agents.",
+              "签发程序访问凭据，每个密钥都可以限定到指定的 Agent。",
+            )}
           </p>
         </div>
         <Button onClick={openCreateDialog}>
           <Plus className="h-4 w-4 mr-2" />
-          Add API Key
+          {tr("Add API key", "添加 API 密钥")}
         </Button>
       </div>
 
       {showToken && (
         <Card className="border-amber-500/40 bg-amber-500/5">
           <CardContent className="space-y-3 pt-6">
-            <p className="text-sm font-medium">Token issued — copy it now, you won&apos;t see it again.</p>
+            <p className="text-sm font-medium">
+              {tr("Token issued — copy it now. It will not be shown again.", "Token 已签发，请立即复制，之后将不再显示。")}
+            </p>
             <div className="flex items-center gap-2">
               <code className="flex-1 break-all rounded border bg-background px-3 py-2 font-mono text-xs">
                 {showToken.token}
@@ -208,7 +217,7 @@ export default function ApikeysPage() {
               </Button>
             </div>
             <Button size="sm" variant="ghost" onClick={() => setShowToken(null)}>
-              Got it
+              {tr("Got it", "知道了")}
             </Button>
           </CardContent>
         </Card>
@@ -228,13 +237,15 @@ export default function ApikeysPage() {
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 mb-4">
               <KeyRound className="h-7 w-7 text-primary" />
             </div>
-            <p className="text-sm text-muted-foreground mb-1">No API keys yet</p>
+            <p className="text-sm text-muted-foreground mb-1">
+              {tr("No API keys yet", "还没有 API 密钥")}
+            </p>
             <p className="text-xs text-muted-foreground/60 mb-4">
-              Issue one to let an external client call your agents
+              {tr("Issue one so external clients can call your agents", "签发密钥，让外部客户端可以调用你的 Agent")}
             </p>
             <Button variant="outline" size="sm" onClick={openCreateDialog}>
               <Plus className="h-4 w-4 mr-2" />
-              Add API Key
+              {tr("Add API key", "添加 API 密钥")}
             </Button>
           </div>
         </div>
@@ -243,12 +254,12 @@ export default function ApikeysPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Key</TableHead>
-                <TableHead>Scope</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
+                <TableHead>{tr("Name", "名称")}</TableHead>
+                <TableHead>{tr("Type", "类型")}</TableHead>
+                <TableHead>{tr("Key", "密钥")}</TableHead>
+                <TableHead>{tr("Scope", "范围")}</TableHead>
+                <TableHead>{tr("Created", "创建时间")}</TableHead>
+                <TableHead className="text-right">{tr("Actions", "操作")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -257,7 +268,7 @@ export default function ApikeysPage() {
                   <TableCell className="font-medium">{k.name || k.id}</TableCell>
                   <TableCell>
                     <Badge variant={typeBadgeVariant(k.type)} className="text-xs">
-                      {k.type}
+                      {k.type === "admin" ? tr("Admin", "管理员") : k.type === "user" ? tr("User", "用户") : "Agent"}
                     </Badge>
                   </TableCell>
                   <TableCell>
@@ -265,9 +276,9 @@ export default function ApikeysPage() {
                   </TableCell>
                   <TableCell>
                     {k.type === "admin" ? (
-                      <span className="text-xs text-muted-foreground">All agents (platform-wide)</span>
+                      <span className="text-xs text-muted-foreground">{tr("All agents (platform-wide)", "平台中的所有 Agent")}</span>
                     ) : k.type === "user" ? (
-                      <span className="text-xs text-muted-foreground">All your agents (auto-includes new ones)</span>
+                      <span className="text-xs text-muted-foreground">{tr("All your agents (new ones included automatically)", "你的所有 Agent（自动包含新建的 Agent）")}</span>
                     ) : (
                       <ScopeChips
                         selectedIds={k.agents || []}
@@ -277,11 +288,11 @@ export default function ApikeysPage() {
                     )}
                   </TableCell>
                   <TableCell className="text-xs text-muted-foreground">
-                    {new Date(k.createdAt).toLocaleString()}
+                    {new Date(k.createdAt).toLocaleString(locale === "zh-CN" ? "zh-CN" : "en-US")}
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
-                      <Button size="icon" variant="ghost" onClick={() => setRotateTarget(k)} title="Rotate">
+                      <Button size="icon" variant="ghost" onClick={() => setRotateTarget(k)} title={tr("Rotate", "轮换") }>
                         <RotateCw className="size-4" />
                       </Button>
                       <Button
@@ -289,7 +300,7 @@ export default function ApikeysPage() {
                         variant="ghost"
                         className="text-destructive hover:text-destructive"
                         onClick={() => setDeleteTarget(k)}
-                        title="Delete"
+                        title={tr("Delete", "删除")}
                       >
                         <Trash2 className="size-4" />
                       </Button>
@@ -305,56 +316,56 @@ export default function ApikeysPage() {
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>Add API Key</DialogTitle>
+            <DialogTitle>{tr("Add API key", "添加 API 密钥")}</DialogTitle>
             <DialogDescription>
-              Issue a new bearer token scoped to a subset of your agents.
+              {tr("Issue a new bearer token scoped to selected agents.", "签发一个限定到指定 Agent 的新 Bearer Token。")}
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleCreate} className="space-y-4 py-2">
             <div className="space-y-1.5">
-              <Label htmlFor="key-name">Name</Label>
+              <Label htmlFor="key-name">{tr("Name", "名称")}</Label>
               <Input
                 id="key-name"
                 value={createName}
                 onChange={(e) => setCreateName(e.target.value)}
-                placeholder="e.g. thinkany-web"
+                placeholder={tr("e.g. thinkany-web", "例如 thinkany-web")}
                 autoFocus
               />
             </div>
             <div className="space-y-1.5">
-              <Label>Type</Label>
+              <Label>{tr("Type", "类型")}</Label>
               <div className="space-y-2">
                 {isSuperAdmin && (
                   <TypeOption
                     value="admin"
                     selected={createType}
                     onSelect={setCreateType}
-                    title="Admin"
-                    description="Full platform — manage users, providers, models, skills."
+                    title={tr("Admin", "管理员")}
+                    description={tr("Full platform access — manage users, providers, models, and skills.", "拥有完整平台权限，可管理用户、服务商、模型和技能。")}
                   />
                 )}
                 <TypeOption
                   value="user"
                   selected={createType}
                   onSelect={setCreateType}
-                  title="User"
-                  description="Access all your agents (auto-includes future ones). Can create new agents."
+                  title={tr("User", "用户")}
+                  description={tr("Access all your agents, including future ones, and create new agents.", "可访问自己的所有 Agent（包括之后新建的）并创建 Agent。")}
                 />
                 <TypeOption
                   value="agent"
                   selected={createType}
                   onSelect={setCreateType}
                   title="Agent"
-                  description="Locked to specific agents. Cannot create new ones."
+                  description={tr("Limited to selected agents. Cannot create new ones.", "仅限指定的 Agent，不能创建新 Agent。")}
                 />
               </div>
             </div>
             {createType === "agent" && (
               <div className="space-y-1.5">
-                <Label>Allowed agents</Label>
+                <Label>{tr("Allowed agents", "允许访问的 Agent")}</Label>
                 {agents.length === 0 ? (
                   <p className="text-xs text-muted-foreground">
-                    No agents yet — create one from the Agents page first.
+                    {tr("No agents yet — create one from the Agents page first.", "还没有 Agent，请先在 Agent 页面中创建。")}
                   </p>
                 ) : (
                   <div className="flex flex-wrap gap-2">
@@ -386,7 +397,7 @@ export default function ApikeysPage() {
             )}
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setCreateOpen(false)}>
-                Cancel
+                {tr("Cancel", "取消")}
               </Button>
               <Button
                 type="submit"
@@ -394,7 +405,7 @@ export default function ApikeysPage() {
                   !createName.trim() || (createType === "agent" && createAgents.length === 0)
                 }
               >
-                Create key
+                {tr("Create key", "创建密钥")}
               </Button>
             </DialogFooter>
           </form>
@@ -404,15 +415,15 @@ export default function ApikeysPage() {
       <AlertDialog open={deleteTarget !== null} onOpenChange={(o) => !o && setDeleteTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete API key?</AlertDialogTitle>
+            <AlertDialogTitle>{tr("Delete API key?", "删除 API 密钥？")}</AlertDialogTitle>
             <AlertDialogDescription>
               <code className="rounded bg-muted px-1.5 py-0.5 text-xs">{deleteTarget?.name || deleteTarget?.id}</code>{" "}
-              will stop working immediately for any client using it.
+              {tr("will stop working immediately for every client using it.", "将立即失效，所有使用它的客户端都会受到影响。")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => deleteTarget && handleDelete(deleteTarget)}>Delete</AlertDialogAction>
+            <AlertDialogCancel>{tr("Cancel", "取消")}</AlertDialogCancel>
+            <AlertDialogAction onClick={() => deleteTarget && handleDelete(deleteTarget)}>{tr("Delete", "删除")}</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -420,17 +431,17 @@ export default function ApikeysPage() {
       <AlertDialog open={rotateTarget !== null} onOpenChange={(o) => !o && setRotateTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Rotate API key?</AlertDialogTitle>
+            <AlertDialogTitle>{tr("Rotate API key?", "轮换 API 密钥？")}</AlertDialogTitle>
             <AlertDialogDescription>
-              The current token for{" "}
+              {tr("The current token for", "用于")} {" "}
               <code className="rounded bg-muted px-1.5 py-0.5 text-xs">{rotateTarget?.name || rotateTarget?.id}</code>{" "}
-              will stop working immediately. A new token will be issued and shown once.
+              {tr("will stop working immediately. A new token will be issued and shown only once.", "的当前 Token 将立即失效。新 Token 会被签发且仅显示一次。")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{tr("Cancel", "取消")}</AlertDialogCancel>
             <AlertDialogAction onClick={() => rotateTarget && handleRotate(rotateTarget.id)}>
-              Rotate
+              {tr("Rotate", "轮换")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -439,14 +450,14 @@ export default function ApikeysPage() {
       <Dialog open={scopeTarget !== null} onOpenChange={(o) => !o && setScopeTarget(null)}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>Edit allowed agents</DialogTitle>
+            <DialogTitle>{tr("Edit allowed agents", "编辑允许访问的 Agent")}</DialogTitle>
             <DialogDescription>
-              {scopeTarget?.name || scopeTarget?.id} — toggle which agents this key may operate on.
+              {tr("Choose which agents {{name}} may operate on.", "选择 {{name}} 可以操作哪些 Agent。", { name: scopeTarget?.name || scopeTarget?.id || "" })}
             </DialogDescription>
           </DialogHeader>
           <div className="py-2">
             {agents.length === 0 ? (
-              <p className="text-xs text-muted-foreground">No agents available.</p>
+              <p className="text-xs text-muted-foreground">{tr("No agents available.", "没有可用的 Agent。")}</p>
             ) : (
               <div className="flex flex-wrap gap-2">
                 {agents.map((a) => {
@@ -476,10 +487,10 @@ export default function ApikeysPage() {
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setScopeTarget(null)}>
-              Cancel
+              {tr("Cancel", "取消")}
             </Button>
             <Button type="button" onClick={saveScope} disabled={scopeAgents.length === 0}>
-              Save
+              {tr("Save", "保存")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -497,6 +508,7 @@ function ScopeChips({
   agents: AgentMeta[];
   onClick: () => void;
 }) {
+  const { tr } = useLocale();
   const selected = selectedIds
     .map((id) => agents.find((a) => a.id === id))
     .filter((a): a is AgentMeta => !!a);
@@ -508,10 +520,10 @@ function ScopeChips({
       type="button"
       onClick={onClick}
       className="flex flex-wrap items-center gap-1.5 rounded-md p-1 -m-1 hover:bg-muted/60 transition"
-      title="Edit allowed agents"
+      title={tr("Edit allowed agents", "编辑允许访问的 Agent")}
     >
       {selected.length === 0 && (
-        <span className="text-xs text-muted-foreground italic">no agents — click to add</span>
+        <span className="text-xs text-muted-foreground italic">{tr("no agents — click to add", "没有 Agent — 点击添加")}</span>
       )}
       {shown.map((a) => (
         <Badge key={a.id} variant="default" className="text-xs">

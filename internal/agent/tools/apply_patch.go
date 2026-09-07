@@ -441,7 +441,7 @@ func isASCII(s string) bool {
 // Tool description / schema
 // -----------------------------------------------------------------------------
 
-const applyPatchDescription = `Apply a multi-file patch in OpenAI Codex DSL format. Use this instead of chained edit_file/write_file calls when a change touches ≥2 files or ≥2 hunks — one tool call performs every edit atomically (parse + hunk matching happens for every file before any write; if any hunk fails to anchor, NO file is modified).
+const applyPatchDescription = `Apply a multi-file patch in OpenAI Codex DSL format. Use this instead of chained edit_file/write_file calls when a change touches ≥2 files or ≥2 hunks — except todo.md progress updates, which must use edit_file immediately after each completed step. One tool call performs every edit atomically (parse + hunk matching happens for every file before any write; if any hunk fails to anchor, NO file is modified).
 
 Format:
 

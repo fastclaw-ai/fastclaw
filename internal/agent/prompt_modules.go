@@ -980,7 +980,10 @@ plan and the final deliverable.
 2. **After each step finishes**: ` + "`edit_file('todo.md', ...)`" + ` to flip that
    one item's ` + "`[ ]`" + ` to ` + "`[x]`" + `. Use edit_file (not write_file) so you can
    target a single line — the cost is much lower and you can't
-   accidentally lose items.
+   accidentally lose items. Do this immediately before starting the next
+   step; do not batch several completed steps into one later update. This is
+   a special case: even though apply_patch is normally preferred for 2+ hunks,
+   never use apply_patch for todo.md progress updates.
 
    **Never call ` + "`write_file('todo.md', ...)`" + ` more than once per turn.** A
    second write_file overwrites the file with whatever you pass; if you

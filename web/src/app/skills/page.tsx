@@ -34,8 +34,11 @@ import {
   type SkillSearchResult,
 } from "@/lib/api";
 import { ConfigureSkillDialog, type SkillEntryView } from "@/components/configure-skill-dialog";
+import { useLocale } from "@/components/locale-provider";
 
-export default function SkillsPage() {
+export default function SkillsPage({ scope = "system" }: { scope?: "user" | "system" }) {
+  const { tr } = useLocale();
+  const canManage = scope === "system";
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
@@ -61,7 +64,7 @@ export default function SkillsPage() {
     setLoading(true);
     Promise.all([
       getSkills().catch(() => [] as SkillInfo[]),
-      getConfig().catch(() => null),
+      getConfig(scope).catch(() => null),
     ])
       .then(([list, cfg]) => {
         setSkills(list);
@@ -74,7 +77,7 @@ export default function SkillsPage() {
 
   useEffect(() => {
     fetchSkills();
-  }, []);
+  }, [scope]);
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
@@ -96,12 +99,12 @@ export default function SkillsPage() {
   const acceptDroppedFiles = (files: FileList | null) => {
     if (!files || files.length === 0) return;
     if (files.length > 1) {
-      setUploadError("Please drop only one .zip file at a time.");
+      setUploadError(tr("Please drop only one .zip file at a time.", "一次只能拖放一个 .zip 文件。"));
       return;
     }
     const f = files[0];
     if (!/\.zip$/i.test(f.name)) {
-      setUploadError("File must be a .zip archive.");
+      setUploadError(tr("File must be a .zip archive.", "文件必须是 .zip 压缩包。"));
       return;
     }
     setUploadFile(f);
@@ -117,14 +120,14 @@ export default function SkillsPage() {
       // The connect handler enforces admin auth for global installs.
       const resp = await uploadSkill(uploadFile);
       if (!resp.ok) {
-        setUploadError(resp.error || "upload failed");
+        setUploadError(resp.error || tr("Upload failed", "上传失败"));
         return;
       }
       setUploadOpen(false);
       setUploadFile(null);
       fetchSkills();
     } catch (e) {
-      setUploadError(e instanceof Error ? e.message : "upload failed");
+      setUploadError(e instanceof Error ? e.message : tr("Upload failed", "上传失败"));
     } finally {
       setUploading(false);
       if (uploadInputRef.current) uploadInputRef.current.value = "";
@@ -135,21 +138,23 @@ export default function SkillsPage() {
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight">Skills</h2>
+          <h2 className="text-2xl font-semibold tracking-tight">{tr("Skills", "技能")}</h2>
           <p className="text-sm text-muted-foreground mt-1">
-            Installed skills that agents can use
+            {canManage
+              ? tr("Install and configure skills available across the system", "安装和配置全系统可用的技能")
+              : tr("Configure skill credentials and environment variables for your account", "配置当前账户的技能凭据和环境变量")}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        {canManage && <div className="flex items-center gap-2">
           <Button variant="outline" onClick={() => setUploadOpen(true)}>
             <Upload className="h-4 w-4 mr-2" />
-            Upload Skills
+            {tr("Upload skills", "上传技能")}
           </Button>
           <Button onClick={() => setInstallOpen(true)}>
             <Download className="h-4 w-4 mr-2" />
-            Install Skill
+            {tr("Install skill", "安装技能")}
           </Button>
-        </div>
+        </div>}
       </div>
 
       {loading ? (
@@ -164,9 +169,9 @@ export default function SkillsPage() {
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 mb-4">
               <Sparkles className="h-7 w-7 text-primary" />
             </div>
-            <p className="text-sm text-muted-foreground mb-1">No skills installed</p>
+            <p className="text-sm text-muted-foreground mb-1">{tr("No skills installed", "尚未安装技能")}</p>
             <p className="text-xs text-muted-foreground/60">
-              Skills extend agent capabilities with specialized behaviors
+              {tr("Skills extend agent capabilities with specialized behaviors", "技能通过专门的行为扩展 Agent 能力")}
             </p>
           </div>
         </div>
@@ -198,28 +203,30 @@ export default function SkillsPage() {
                     size="icon"
                     className="h-7 w-7 text-muted-foreground hover:text-foreground"
                     onClick={() => setConfigureTarget(skill)}
-                    title="Configure env / API keys"
+                    title={tr("Configure environment variables and API keys", "配置环境变量和 API 密钥")}
                   >
                     <Settings className="h-3.5 w-3.5" />
                   </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                    onClick={() => setDeleteTarget(skill.name)}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
+                  {canManage && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                      onClick={() => setDeleteTarget(skill.name)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
                 </div>
               </div>
               <p className="text-sm text-muted-foreground line-clamp-2">
-                {skill.description || "No description"}
+                {skill.description || tr("No description", "暂无描述")}
               </p>
               {(skillEntries[skill.name]?.apiKey ||
                 Object.keys(skillEntries[skill.name]?.env || {}).length > 0) && (
                 <div className="mt-2 inline-flex items-center gap-1 text-[10px] text-emerald-500">
                   <Check className="h-3 w-3" />
-                  configured
+                  {tr("configured", "已配置")}
                 </div>
               )}
             </div>
@@ -227,10 +234,10 @@ export default function SkillsPage() {
         </div>
       )}
 
-      <Dialog open={uploadOpen} onOpenChange={handleUploadOpenChange}>
+      {canManage && <Dialog open={uploadOpen} onOpenChange={handleUploadOpenChange}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Upload skill</DialogTitle>
+            <DialogTitle>{tr("Upload skill", "上传技能")}</DialogTitle>
           </DialogHeader>
 
           <input
@@ -268,31 +275,32 @@ export default function SkillsPage() {
               <div className="space-y-1">
                 <p className="text-sm font-medium break-all">{uploadFile.name}</p>
                 <p className="text-xs text-muted-foreground">
-                  {(uploadFile.size / 1024).toFixed(1)} KB · click to choose a different file
+                  {(uploadFile.size / 1024).toFixed(1)} KB · {tr("click to choose a different file", "点击选择其他文件")}
                 </p>
               </div>
             ) : (
               <p className="text-sm text-muted-foreground">
-                Drag and drop or click to upload
+                {tr("Drag and drop or click to upload", "拖放文件或点击上传")}
               </p>
             )}
           </button>
 
           <div className="space-y-2">
-            <p className="text-sm font-medium">File requirements</p>
+            <p className="text-sm font-medium">{tr("File requirements", "文件要求")}</p>
             <ul className="space-y-1.5 text-sm text-muted-foreground">
               <li className="flex gap-2">
                 <span className="text-muted-foreground/60">•</span>
                 <span>
-                  <code className="text-foreground">.zip</code> file that includes a{" "}
-                  <code className="text-foreground">SKILL.md</code> at the root level
+                  {tr("A ", "一个 ")}<code className="text-foreground">.zip</code>
+                  {tr(" file containing ", " 文件，根目录包含 ")}<code className="text-foreground">SKILL.md</code>
+                  {tr(" at the root level", "")}
                 </span>
               </li>
               <li className="flex gap-2">
                 <span className="text-muted-foreground/60">•</span>
                 <span>
-                  <code className="text-foreground">SKILL.md</code> contains a skill name
-                  and description formatted in YAML
+                  <code className="text-foreground">SKILL.md</code>
+                  {tr(" contains a skill name and description formatted in YAML", " 使用 YAML 格式定义技能名称和描述")}
                 </span>
               </li>
             </ul>
@@ -306,7 +314,7 @@ export default function SkillsPage() {
               rel="noreferrer"
               className="underline hover:text-foreground"
             >
-              Read more about creating skills
+              {tr("Read more about creating skills", "了解如何创建技能")}
             </a>
           </div>
 
@@ -322,7 +330,7 @@ export default function SkillsPage() {
               onClick={() => handleUploadOpenChange(false)}
               disabled={uploading}
             >
-              Cancel
+              {tr("Cancel", "取消")}
             </Button>
             <Button
               onClick={handleUploadConfirm}
@@ -331,37 +339,37 @@ export default function SkillsPage() {
               {uploading ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Uploading…
+                  {tr("Uploading…", "正在上传…")}
                 </>
               ) : (
-                "Upload"
+                tr("Upload", "上传")
               )}
             </Button>
           </div>
         </DialogContent>
-      </Dialog>
+      </Dialog>}
 
-      <AlertDialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
+      {canManage && <AlertDialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Remove Skill</AlertDialogTitle>
+            <AlertDialogTitle>{tr("Remove skill", "移除技能")}</AlertDialogTitle>
             <AlertDialogDescription>
-              Remove <strong>{deleteTarget}</strong> from installed skills?
+              {tr("Remove", "从已安装技能中移除")} <strong>{deleteTarget}</strong>?
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{tr("Cancel", "取消")}</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleDelete}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              Remove
+              {tr("Remove", "移除")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
-      </AlertDialog>
+      </AlertDialog>}
 
-      <InstallSkillDialog
+      {canManage && <InstallSkillDialog
         open={installOpen}
         onOpenChange={setInstallOpen}
         onInstalled={() => {
@@ -369,11 +377,12 @@ export default function SkillsPage() {
           fetchSkills();
         }}
         installedNames={new Set(skills.map((s) => s.name))}
-      />
+      />}
 
       <ConfigureSkillDialog
         skill={configureTarget}
         existing={configureTarget ? skillEntries[configureTarget.name] : undefined}
+        scope={scope}
         onClose={() => setConfigureTarget(null)}
         onSaved={() => {
           setConfigureTarget(null);
@@ -396,6 +405,7 @@ function InstallSkillDialog({
   onInstalled: () => void;
   installedNames: Set<string>;
 }) {
+  const { tr } = useLocale();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SkillSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
@@ -440,12 +450,12 @@ function InstallSkillDialog({
     try {
       const resp = await installSkill({ source: "skillssh", name: r.skillId });
       if (!resp.ok) {
-        setInstallError(resp.error || "install failed");
+        setInstallError(resp.error || tr("Install failed", "安装失败"));
         return;
       }
       onInstalled();
     } catch (e) {
-      setInstallError(e instanceof Error ? e.message : "install failed");
+      setInstallError(e instanceof Error ? e.message : tr("Install failed", "安装失败"));
     } finally {
       setInstallingId(null);
     }
@@ -455,11 +465,11 @@ function InstallSkillDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Install Skill</DialogTitle>
+          <DialogTitle>{tr("Install skill", "安装技能")}</DialogTitle>
           <DialogDescription>
-            Search skills.sh for a published skill. Installs land in{" "}
-            <code className="font-mono text-xs">~/.fastclaw/skills/</code> and
-            become available to every agent.
+            {tr("Search skills.sh for a published skill. Installed files are saved to", "在 skills.sh 搜索已发布技能。安装文件将保存到")} {" "}
+            <code className="font-mono text-xs">~/.fastclaw/skills/</code>
+            {tr(" and become available to every agent.", "，并可供所有 Agent 使用。")}
           </DialogDescription>
         </DialogHeader>
 
@@ -467,7 +477,7 @@ function InstallSkillDialog({
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/70" />
           <Input
             autoFocus
-            placeholder="pdf, translation, web scraping…"
+            placeholder={tr("PDF, translation, web scraping…", "PDF、翻译、网页抓取…")}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="pl-9"
@@ -479,7 +489,7 @@ function InstallSkillDialog({
             <div className="flex flex-col items-center justify-center py-12 text-center">
               <Sparkles className="h-8 w-8 text-muted-foreground/40 mb-3" />
               <p className="text-sm text-muted-foreground">
-                Start typing to search skills.sh
+                {tr("Start typing to search skills.sh", "输入关键词搜索 skills.sh")}
               </p>
             </div>
           ) : searching ? (
@@ -491,19 +501,19 @@ function InstallSkillDialog({
           ) : visible.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-10 text-center">
               <p className="text-sm text-muted-foreground mb-1">
-                No skills found on skills.sh for{" "}
+                {tr("No skills found on skills.sh for", "skills.sh 中没有找到与以下内容相关的技能：")} {" "}
                 <strong className="text-foreground">{query}</strong>
               </p>
               <p className="text-xs text-muted-foreground/70 max-w-sm">
-                Ask one of your agents to build a custom skill with the{" "}
-                <code className="font-mono">skill-creator</code> skill — it
-                will scaffold and iterate a new skill for you.
+                {tr("Ask an agent to build a custom skill with", "可以让 Agent 使用")} {" "}
+                <code className="font-mono">skill-creator</code>
+                {tr(" to scaffold and refine a new skill for you.", "来创建并完善自定义技能。")}
               </p>
             </div>
           ) : (
             <>
               <p className="text-[10px] uppercase tracking-wider text-muted-foreground/70 mb-1.5 px-1">
-                Results from skills.sh
+                {tr("Results from skills.sh", "skills.sh 搜索结果")}
               </p>
               <div className="space-y-1.5 py-1">
                 {visible.map((r) => {
@@ -524,7 +534,7 @@ function InstallSkillDialog({
                             {r.skillId}
                           </p>
                           <span className="text-[10px] text-muted-foreground">
-                            {r.installs.toLocaleString()} installs
+                            {tr("{{count}} installs", "安装 {{count}} 次", { count: r.installs.toLocaleString() })}
                           </span>
                         </div>
                         <a
@@ -532,7 +542,7 @@ function InstallSkillDialog({
                           target="_blank"
                           rel="noopener noreferrer"
                           className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground font-mono truncate"
-                          title={`View on skills.sh: ${r.id}`}
+                          title={tr("View on skills.sh: {{id}}", "在 skills.sh 查看：{{id}}", { id: r.id })}
                         >
                           {r.source}
                           <ExternalLink className="h-3 w-3 shrink-0" />
@@ -545,11 +555,11 @@ function InstallSkillDialog({
                         onClick={() => handleInstall(r)}
                       >
                         {already ? (
-                          <><Check className="h-3.5 w-3.5 mr-1.5" /> Installed</>
+                          <><Check className="h-3.5 w-3.5 mr-1.5" /> {tr("Installed", "已安装")}</>
                         ) : busy ? (
-                          <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> Installing…</>
+                          <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> {tr("Installing…", "正在安装…")}</>
                         ) : (
-                          "Install"
+                          tr("Install", "安装")
                         )}
                       </Button>
                     </div>

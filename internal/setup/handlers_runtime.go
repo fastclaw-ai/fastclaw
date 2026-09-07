@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/fastclaw-ai/fastclaw/internal/store"
@@ -22,6 +23,7 @@ import (
 //	POST   /api/agents/{id}/projects/{pid}/runtime/up     — provision+boot (body: {templateRef})
 //	POST   /api/agents/{id}/projects/{pid}/runtime/sleep  — stop container, keep files
 //	POST   /api/agents/{id}/projects/{pid}/runtime/wake   — re-boot a sleeping runtime
+//	POST   /api/agents/{id}/projects/{pid}/runtime/exec   — one sandboxed coding-tool command
 //	DELETE /api/agents/{id}/projects/{pid}/runtime        — tear down + forget (files kept)
 //	GET    /api/agents/{id}/projects/{pid}/preview        — {previewUrl, status}
 //	GET    /api/agents/{id}/projects/{pid}/runtime/logs   — dev-server log tail
@@ -153,6 +155,66 @@ func (s *Server) handleRuntimeWake(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonResponse(w, http.StatusOK, runtimeToJSON(rec))
+}
+
+// handleRuntimeExec is the narrow tool bridge used by an upstream agent loop.
+// The command always runs inside this project's live sandbox; it never falls
+// back to the FastClaw host. Authentication, effective-user partitioning and
+// project ownership are the same as the other mutating runtime endpoints.
+func (s *Server) handleRuntimeExec(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	pid := r.PathValue("pid")
+	uid, ok := s.runtimeReady(w, r, id, true)
+	if !ok {
+		return
+	}
+	if proj, err := s.dataStore.GetProject(r.Context(), uid, id, pid); err != nil || proj == nil {
+		jsonResponse(w, http.StatusNotFound, map[string]any{"error": "project not found"})
+		return
+	}
+
+	const maxCommandBytes = 1 << 20
+	const maxOutputBytes = 1 << 20
+	var req struct {
+		Command        string `json:"command"`
+		TimeoutSeconds int    `json:"timeoutSeconds"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxCommandBytes))
+	if err := decoder.Decode(&req); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "invalid exec request"})
+		return
+	}
+	if strings.TrimSpace(req.Command) == "" {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "command is required"})
+		return
+	}
+	timeoutSeconds := req.TimeoutSeconds
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = 30
+	}
+	if timeoutSeconds > 120 {
+		timeoutSeconds = 120
+	}
+	timeout := time.Duration(timeoutSeconds) * time.Second
+	ctx, cancel := context.WithTimeout(r.Context(), timeout+5*time.Second)
+	defer cancel()
+	out, err := s.runtimeMgr.Exec(ctx, uid, id, pid, "", req.Command, timeout)
+	truncated := len(out) > maxOutputBytes
+	if truncated {
+		out = out[:maxOutputBytes]
+	}
+	if err != nil {
+		jsonResponse(w, http.StatusConflict, map[string]any{
+			"error":     err.Error(),
+			"output":    out,
+			"truncated": truncated,
+		})
+		return
+	}
+	jsonResponse(w, http.StatusOK, map[string]any{
+		"output":    out,
+		"truncated": truncated,
+	})
 }
 
 func (s *Server) handleRuntimeStop(w http.ResponseWriter, r *http.Request) {

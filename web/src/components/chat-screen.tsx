@@ -4,12 +4,17 @@ import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { useAgentIdFromURL } from "@/hooks/use-agent-id";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { fileUrl, getAgent, getAgentKnowledgeFile, getChangedFiles, getChatHistoryWithCursor, getChatSessions, getChatTodo, getMe, getScopePreview, getScopePreviewLogs, getSessionHistory, listAgentFiles, listProjects, renameChatSession, restoreSessionHistory, revealAgentWorkspace, sendChatStream, steerChat, uploadAgentFiles, getSkills, type ChatHistoryMessage, type ChatStreamEvent, type KnowledgeSource, type ScopePreview, type SkillInfo, type TodoItem, type ToolResultMetadata, type WorkspaceFile, type WorkspaceHistoryEntry } from "@/lib/api";
-import { Bot, Send, Copy, Check, Pencil, Wrench, ChevronDown, ChevronRight, Download, X, File, FileText, Folder, FolderSearch, Image as ImageIcon, FileCode, Film, Music, Puzzle, SlidersHorizontal, ShieldCheck, Paperclip, Square, FolderOpen, RefreshCw, Eye, Code2, RotateCcw, ListChecks, Terminal, ExternalLink, MoreHorizontal, PanelLeftClose, PanelLeftOpen, BookOpen } from "lucide-react";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { createProject, deleteChatSession, fileUrl, getAgent, getAgentKnowledgeFile, getChangedFiles, getChatHistoryWithCursor, getChatSessions, getChatTodo, getMe, getScopePreview, getScopePreviewLogs, getSessionHistory, listAgentFiles, listProjects, renameChatSession, restoreSessionHistory, revealAgentWorkspace, sendChatStream, steerChat, updateAgent, updateProject, uploadAgentFiles, getSkills, type AgentDetail, type ChatHistoryMessage, type ChatStreamEvent, type KnowledgeSource, type ProjectEntry, type ScopePreview, type SkillInfo, type TodoItem, type ToolResultMetadata, type WorkspaceFile, type WorkspaceHistoryEntry } from "@/lib/api";
+import { ArrowLeft, ArrowUp, BookOpen, Brain, Check, ChevronDown, ChevronRight, ChevronsRight, Clock, Code2, Copy, Download, Eye, ExternalLink, File, FileCode, FileText, Film, Folder, FolderOpen, FolderPlus, FolderSearch, Globe2, Image as ImageIcon, Link2, ListChecks, LockKeyhole, MoreHorizontal, Music, PanelLeftClose, PanelLeftOpen, PanelRight, Paperclip, Pencil, Plus, Puzzle, Radio, RefreshCw, RotateCcw, Settings, Share2, ShieldCheck, SlidersHorizontal, Sparkles, Square, SquarePen, Terminal, Trash2, Wrench, X } from "lucide-react";
 import Link from "next/link";
 import { ChatMarkdown } from "@/components/chat-markdown";
+import type { AgentSettingsTab } from "@/components/agent-settings-dialog";
 
 // Split a string on `![alt](data:image/...;base64,...)` markdown.
 //
@@ -102,6 +107,8 @@ function renderContentWithDataImages(
 import { usePageHeader } from "@/components/sidebar";
 import { useSidebarOptional } from "@/components/ui/sidebar";
 import { channelLabel } from "@/components/channel-icon";
+import { BotAvatar } from "@/components/bot-avatar";
+import { useLocale, type Locale, type MessageKey } from "@/components/locale-provider";
 
 interface ProducedFile {
   path: string; // path relative to workspace
@@ -208,10 +215,79 @@ function parseWrittenSize(result: string): number | undefined {
   return m ? parseInt(m[1], 10) : undefined;
 }
 
+function isTodoPath(path: unknown): boolean {
+  return typeof path === "string" && /(^|[\\/])todo\.md$/i.test(path.trim());
+}
+
+// File tools carry their target in different places. write_file/edit_file
+// expose a top-level path, while apply_patch embeds every path in its Codex
+// patch envelope. Keep this decoding in one place so a successful patch of
+// todo.md triggers the same live-panel refresh as an edit_file call.
+function toolMutationTouchesTodo(toolName: string, rawArguments: string): boolean {
+  if (toolName !== "write_file" && toolName !== "edit_file" && toolName !== "apply_patch") {
+    return false;
+  }
+  try {
+    const args = JSON.parse(rawArguments);
+    if (toolName !== "apply_patch") {
+      return isTodoPath(args?.path) || isTodoPath(args?.file_path);
+    }
+
+    const patch = typeof args?.input === "string" ? args.input : "";
+    return patch.split("\n").some((line: string) => {
+      const match = /^\*\*\* (?:Add|Update|Delete) File:\s*(.+?)\s*$/.exec(line)
+        || /^\*\*\* Move to:\s*(.+?)\s*$/.exec(line);
+      return match ? isTodoPath(match[1]) : false;
+    });
+  } catch {
+    return false;
+  }
+}
+
+// Anchor the current todo.md to the conversation turn that last changed it.
+// A turn can contain several tool rounds and assistant bubbles, so the card
+// belongs after the final non-user message before the next user turn begins.
+// This keeps completed checklists in their original place instead of letting
+// them drift down to the composer when a later conversation starts.
+function findTodoAnchorMessageId(messages: ChatMessage[]): string | null {
+  let mutationIndex = -1;
+  for (let i = 0; i < messages.length; i++) {
+    const message = messages[i];
+    if (
+      message.role === "tool-group"
+      && message.toolCalls?.some((call) =>
+        toolMutationTouchesTodo(call.name, call.arguments),
+      )
+    ) {
+      mutationIndex = i;
+    }
+  }
+
+  if (mutationIndex >= 0) {
+    let anchorId = messages[mutationIndex].id;
+    for (let i = mutationIndex + 1; i < messages.length; i++) {
+      if (messages[i].role === "user") break;
+      anchorId = messages[i].id;
+    }
+    return anchorId;
+  }
+
+  // Older histories may not retain tool-call details. In that case, keep
+  // the checklist with the latest assistant-side message rather than hiding
+  // it or placing it outside the timeline.
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role !== "user") return messages[i].id;
+  }
+  return null;
+}
+
 interface ChatSession {
   id: string;
+  projectId?: string;
   title?: string;
   preview: string;
+  createdAt?: number;
+  updatedAt?: number;
   // channel/accountId/chatId travel with the listing so the chat
   // page can decide whether composing into this session is allowed
   // (only `web` is — IM channels have no reverse-send path).
@@ -370,22 +446,14 @@ function isPendingPlanContent(content: string): boolean {
   return false;
 }
 
-// Parse the per-route ids out of the pathname. ChatScreen is mounted
-// once at the agent layout level and stays alive across these routes:
-//
-//   /agents/<aid>/                         — fresh loose chat
-//   /agents/<aid>/chat/                    — fresh loose chat
-//   /agents/<aid>/chat/<session>           — open existing chat by id
-//   /agents/<aid>/project/<pid>            — fresh chat in a project
-//
-// Reading from `usePathname()` (instead of accepting props from the
 // TodoPanel renders the per-session todo.md the agent maintains as a
-// live progress checklist above the conversation. "Current step" is
+// live progress checklist inside the conversation. "Current step" is
 // the first unchecked item — we surface it as a single line with a
 // "<n>/<total>" counter, and the full list expands on click. Hidden
 // entirely when no items exist (caller's responsibility — keeps this
 // dumb-component pure).
 function TodoPanel({ items, active }: { items: TodoItem[]; active: boolean }) {
+  const { tr } = useLocale();
   const [open, setOpen] = useState(true);
   const total = items.length;
   const doneCount = items.filter((i) => i.done).length;
@@ -396,12 +464,10 @@ function TodoPanel({ items, active }: { items: TodoItem[]; active: boolean }) {
   const currentIdx = allDone ? total - 1 : items.findIndex((i) => !i.done);
   const current = currentIdx >= 0 ? items[currentIdx] : null;
   return (
-    // Wrapper keeps the panel aligned with the composer's max-w-2xl
-    // column. Only the inner div carries border/background, so the
-    // surrounding chat area stays clean — no full-width strip across
-    // the page.
-    <div className="shrink-0 px-4 pt-2">
-      <div className="mx-auto max-w-2xl">
+    // Keep the checklist visually attached to an assistant turn while
+    // retaining the compact reading width used by the previous panel.
+    <div className="flex justify-start">
+      <div className="w-full max-w-2xl">
         <div className="rounded-lg border border-border bg-muted/40 px-3 py-2 shadow-sm">
           <button
             type="button"
@@ -423,7 +489,7 @@ function TodoPanel({ items, active }: { items: TodoItem[]; active: boolean }) {
               {doneCount}/{total}
             </span>
             <span className="truncate flex-1">
-              {current ? current.text : "Plan checklist"}
+              {current ? current.text : tr("Plan checklist", "计划清单")}
             </span>
             {open ? (
               <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
@@ -473,6 +539,15 @@ function TodoPanel({ items, active }: { items: TodoItem[]; active: boolean }) {
   );
 }
 
+// Parse the per-route ids out of the pathname. ChatScreen is mounted
+// once at the agent layout level and stays alive across these routes:
+//
+//   /agents/<aid>/                         — fresh loose chat
+//   /agents/<aid>/chat/                    — fresh loose chat
+//   /agents/<aid>/chat/<session>           — open existing chat by id
+//   /agents/<aid>/project/<pid>            — fresh chat in a project
+//
+// Reading from `usePathname()` (instead of accepting props from the
 // page tree) is what lets the component instance survive sidebar
 // navigations — sessionId / projectId become reactive values that
 // update in place rather than gating a remount.
@@ -495,10 +570,23 @@ function parseAgentRoute(pathname: string): {
   return { sessionId: "", projectId: "" };
 }
 
+function conversationDayLabel(timestamp: number, locale: Locale) {
+  if (!timestamp) return locale === "zh-CN" ? "今天" : "Today";
+  const date = new Date(timestamp);
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const startOfDate = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const dayDelta = Math.round((startOfToday - startOfDate) / 86_400_000);
+  if (dayDelta === 0) return locale === "zh-CN" ? "今天" : "Today";
+  if (dayDelta === 1) return locale === "zh-CN" ? "昨天" : "Yesterday";
+  return date.toLocaleDateString(locale, { month: "short", day: "numeric", year: "numeric" });
+}
+
 export function ChatScreen() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const { locale, t, tr } = useLocale();
   // When `?actAs=<uid>` is in the URL, this chat is being opened by a
   // super_admin viewing another user's session (read-only by middleware).
   // Forces the composer into a disabled state and surfaces a banner so
@@ -516,17 +604,8 @@ export function ChatScreen() {
   // panel showed stale history under the new URL.
   const selectedAgent = useAgentIdFromURL();
   const [agentName, setAgentName] = useState<string>("");
-  // Resolved metadata for `urlProjectId`, surfaced as the
-  // empty-state info card on /agents/<aid>/project/<pid>. Null until
-  // the fetch lands; the card hides while loading rather than
-  // flashing a placeholder.
-  const [projectInfo, setProjectInfo] = useState<{
-    id: string;
-    name: string;
-    description?: string;
-    updatedAt?: string;
-    createdAt?: string;
-  } | null>(null);
+  const [agentDetail, setAgentDetail] = useState<AgentDetail | null>(null);
+  const [projects, setProjects] = useState<ProjectEntry[]>([]);
   const [sessionId, setSessionId] = useState<string>(
     () => urlSessionId || generateSessionId(),
   );
@@ -551,21 +630,48 @@ export function ChatScreen() {
   }>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [filesSheetOpen, setFilesSheetOpen] = useState(false);
+  const [botPanelOpen, setBotPanelOpen] = useState(false);
+  const [workspaceReturnsToBotPanel, setWorkspaceReturnsToBotPanel] = useState(false);
   const [knowledgePreview, setKnowledgePreview] = useState<KnowledgeSource | null>(null);
-  // Opening the workspace/preview panel collapses the platform sidebar to
-  // free horizontal room (null when there's no provider, e.g. act-as view).
+  // The compact workspace is only a file navigator, so it can coexist with
+  // the platform sidebar. Collapse that sidebar only while a file/app preview
+  // needs the extra canvas, then restore the state the user had before.
   const sidebar = useSidebarOptional();
+  const sidebarOpenRef = useRef(sidebar?.open ?? false);
+  const sidebarSetOpenRef = useRef(sidebar?.setOpen);
+  const workspacePreviewActiveRef = useRef(false);
+  const sidebarWasOpenBeforePreviewRef = useRef(false);
   useEffect(() => {
-    if (filesSheetOpen) sidebar?.setOpen(false);
-    // Intentionally keyed only on filesSheetOpen: collapse once when the
-    // panel opens; don't fight the user if they re-expand while it's open.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filesSheetOpen]);
-  const openKnowledgeCitation = useCallback((source: KnowledgeSource) => {
-    setKnowledgePreview(source);
+    sidebarOpenRef.current = sidebar?.open ?? false;
+    sidebarSetOpenRef.current = sidebar?.setOpen;
+  }, [sidebar?.open, sidebar?.setOpen]);
+  const handleWorkspacePreviewChange = useCallback((active: boolean) => {
+    if (workspacePreviewActiveRef.current === active) return;
+    workspacePreviewActiveRef.current = active;
+    if (active) {
+      sidebarWasOpenBeforePreviewRef.current = sidebarOpenRef.current;
+      if (sidebarOpenRef.current) sidebarSetOpenRef.current?.(false);
+      return;
+    }
+    if (sidebarWasOpenBeforePreviewRef.current) {
+      sidebarSetOpenRef.current?.(true);
+    }
+    sidebarWasOpenBeforePreviewRef.current = false;
+  }, []);
+  const openWorkspace = useCallback(() => {
+    setWorkspaceReturnsToBotPanel(false);
+    setBotPanelOpen(false);
     setFilesSheetOpen(true);
   }, []);
-  const [sessionTitle, setSessionTitle] = useState<string>("");
+  const openWorkspaceFromBotPanel = useCallback(() => {
+    setWorkspaceReturnsToBotPanel(true);
+    setBotPanelOpen(false);
+    setFilesSheetOpen(true);
+  }, []);
+  const openKnowledgeCitation = useCallback((source: KnowledgeSource) => {
+    setKnowledgePreview(source);
+    openWorkspace();
+  }, [openWorkspace]);
   const [attachments, setAttachments] = useState<File[]>([]);
   // Lightbox for clicking either an attachment thumbnail (compose box)
   // or an inline image in a sent message bubble. `null` = closed.
@@ -595,6 +701,44 @@ export function ChatScreen() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pasteIdRef = useRef(0);
+  // Todo reads are asynchronous and can finish after the user has moved to
+  // another conversation. Keep both the active scope and a monotonically
+  // increasing request token so neither an old session response nor an
+  // earlier request within the same session can overwrite current state.
+  const activeTodoScopeRef = useRef({ agentId: selectedAgent, sessionId });
+  const todoRequestTokenRef = useRef(0);
+  const resetTodoScope = useCallback((agentId: string, nextSessionId: string) => {
+    activeTodoScopeRef.current = { agentId, sessionId: nextSessionId };
+    todoRequestTokenRef.current += 1;
+    setTodoItems([]);
+  }, []);
+  const refreshTodoForScope = useCallback((agentId: string, targetSessionId: string) => {
+    const active = activeTodoScopeRef.current;
+    if (active.agentId !== agentId || active.sessionId !== targetSessionId) return;
+
+    const requestToken = ++todoRequestTokenRef.current;
+    getChatTodo(agentId, targetSessionId)
+      .then((todo) => {
+        const current = activeTodoScopeRef.current;
+        if (
+          todoRequestTokenRef.current === requestToken
+          && current.agentId === agentId
+          && current.sessionId === targetSessionId
+        ) {
+          setTodoItems(todo.items);
+        }
+      })
+      .catch(() => {
+        const current = activeTodoScopeRef.current;
+        if (
+          todoRequestTokenRef.current === requestToken
+          && current.agentId === agentId
+          && current.sessionId === targetSessionId
+        ) {
+          setTodoItems([]);
+        }
+      });
+  }, []);
 
   // Dedupe events arriving on both the active POST stream and the
   // parallel /api/chat/subscribe SSE — both subscribe to the same
@@ -668,12 +812,14 @@ export function ChatScreen() {
   useEffect(() => {
     if (lastAgentRef.current === selectedAgent) return;
     lastAgentRef.current = selectedAgent;
+    resetTodoScope(selectedAgent, sessionId);
     setMessages([]);
     setSessions([]);
-    setSessionTitle("");
+    setProjects([]);
     setAgentName("");
+    setAgentDetail(null);
     setAttachments([]);
-  }, [selectedAgent]);
+  }, [selectedAgent, sessionId, resetTodoScope]);
 
   // Resolve the agent's display name once. The chat title and any
   // future header bits should show "Chat with My Helper", not the
@@ -686,39 +832,35 @@ export function ChatScreen() {
     getAgent(selectedAgent)
       .then((a) => {
         if (aborted) return;
+        setAgentDetail(a);
         setAgentName(a?.name || a?.id || selectedAgent);
       })
       .catch(() => {
-        if (!aborted) setAgentName(selectedAgent);
+        if (!aborted) {
+          setAgentDetail(null);
+          setAgentName(selectedAgent);
+        }
       });
     return () => {
       aborted = true;
     };
   }, [selectedAgent]);
 
-  // Resolve project name for the hero title when the URL points at a
-  // project's empty new-chat state. Cheap enough to do via listProjects
-  // — projects per (user, agent) is small and the sidebar has already
-  // warmed the network cache.
+  const loadProjects = useCallback((agentId: string) => {
+    listProjects(agentId)
+      .then((list) => setProjects(list || []))
+      .catch(() => setProjects([]));
+  }, []);
+
   useEffect(() => {
-    if (!selectedAgent || !urlProjectId) {
-      setProjectInfo(null);
-      return;
-    }
-    let aborted = false;
-    listProjects(selectedAgent)
-      .then((list) => {
-        if (aborted) return;
-        const p = list.find((x) => x.id === urlProjectId);
-        setProjectInfo(p ?? null);
-      })
-      .catch(() => {
-        if (!aborted) setProjectInfo(null);
-      });
-    return () => {
-      aborted = true;
-    };
-  }, [selectedAgent, urlProjectId]);
+    if (!selectedAgent) return;
+    loadProjects(selectedAgent);
+  }, [selectedAgent, loadProjects]);
+
+  const projectInfo = useMemo(
+    () => (urlProjectId ? projects.find((project) => project.id === urlProjectId) ?? null : null),
+    [projects, urlProjectId],
+  );
 
   // Detect whether the caret is inside a /token and, if so, what's been
   // typed after the slash. Cheap enough to run every keystroke.
@@ -926,7 +1068,7 @@ export function ChatScreen() {
           }
           case "error": {
             claim();
-            const msg = data.data?.message || "Unknown error";
+            const msg = data.data?.message || tr("Unknown error", "未知错误");
             // Older gateways persisted cancellation as an error event.
             // Ignore those on replay so Stop produces one clear status
             // instead of "(Stopped)" followed by a stale error bubble.
@@ -1021,7 +1163,7 @@ export function ChatScreen() {
     return () => {
       es.close();
     };
-  }, [selectedAgent, sessionId, loadedSessionId]);
+  }, [selectedAgent, sessionId, loadedSessionId, tr]);
 
   // Reactively swap sessionId when the URL changes underneath us.
   // Three URL transitions matter, all handled by the same branch logic:
@@ -1039,6 +1181,7 @@ export function ChatScreen() {
     if (urlSessionId) {
       prevHadSessionRef.current = true;
       if (urlSessionId !== sessionId) {
+        resetTodoScope(selectedAgent, urlSessionId);
         setSessionId(urlSessionId);
         setMessages([]);
       }
@@ -1046,10 +1189,12 @@ export function ChatScreen() {
     }
     if (prevHadSessionRef.current) {
       prevHadSessionRef.current = false;
-      setSessionId(generateSessionId());
+      const nextSessionId = generateSessionId();
+      resetTodoScope(selectedAgent, nextSessionId);
+      setSessionId(nextSessionId);
       setMessages([]);
     }
-  }, [urlSessionId, sessionId]);
+  }, [urlSessionId, sessionId, selectedAgent, resetTodoScope]);
 
   // Switching conversations (sidebar chat click, New chat, opening a project)
   // changes the URL ids — close the workspace panel so the previous chat's
@@ -1058,14 +1203,6 @@ export function ChatScreen() {
   useEffect(() => {
     setFilesSheetOpen(false);
   }, [urlSessionId, urlProjectId]);
-
-  // Keep the local sessionTitle in sync with the session list. Unknown
-  // sessions (brand-new, not saved yet) fall back to empty so the header
-  // can render "New chat".
-  useEffect(() => {
-    const s = sessions.find((x) => x.id === sessionId);
-    setSessionTitle(s?.title || s?.preview || "");
-  }, [sessionId, sessions]);
 
   // Channel of the currently-open session, derived from the sessions
   // list. Brand-new web chats don't have a row yet — the fallback to
@@ -1087,61 +1224,88 @@ export function ChatScreen() {
     canUseComposer && (!isReadOnlyView || inputIsReadOnlySafeSlashCommand);
   const canAttach = !!selectedAgent && !sending && !isReadOnlyView;
 
-  const handleRenameTitle = useCallback(
-    async (next: string) => {
-      const trimmed = next.trim();
-      if (!trimmed || !selectedAgent || trimmed === sessionTitle) return;
-      setSessionTitle(trimmed);
-      try {
-        await renameChatSession(selectedAgent, sessionId, trimmed);
-      } finally {
-        loadSessions(selectedAgent);
-        // Tell the global sidebar to refetch its Chats list so the new
-        // title shows up without a full page reload. AppSidebar's own
-        // fetch only re-runs when activeAgentId changes, which doesn't
-        // happen on rename.
-        if (typeof window !== "undefined") {
-          window.dispatchEvent(
-            new CustomEvent("fastclaw:sessions-changed", {
-              detail: { agentId: selectedAgent },
-            }),
-          );
-        }
-      }
-    },
-    [selectedAgent, sessionId, sessionTitle, loadSessions],
-  );
+  const openBotSettings = useCallback(() => {
+    if (typeof window === "undefined" || !selectedAgent) return;
+    window.dispatchEvent(
+      new CustomEvent("fastclaw:open-agent-settings", {
+        detail: { agentId: selectedAgent },
+      }),
+    );
+  }, [selectedAgent]);
 
-  // Render the editable title + the workspace-panel toggle into the
-  // global sticky header (the chat container injects whatever JSX it
-  // wants here, next to the sidebar toggle). The toggle stays wired
-  // even when the panel is open so users can collapse it from the
-  // same control they used to expand it.
+  const openBotSettingsTab = useCallback((tab: AgentSettingsTab, userOnly = false) => {
+    if (typeof window === "undefined" || !selectedAgent) return;
+    window.dispatchEvent(
+      new CustomEvent("fastclaw:open-agent-settings", {
+        detail: { agentId: selectedAgent, tab, userOnly },
+      }),
+    );
+  }, [selectedAgent]);
+
+  const handleAgentPublicChange = useCallback((isPublic: boolean) => {
+    setAgentDetail((current) => current ? { ...current, isPublic } : current);
+  }, []);
+
+  // Conversation header follows the compact Bot pattern: identity opens
+  // settings, while the monitor action opens the live workspace.
   const headerSlot = useMemo(
     () => (
-      <div className="flex flex-1 items-center justify-between gap-2 min-w-0">
-        <ChatHeaderTitle
-          title={sessionTitle}
-          fallback={`Chat with ${agentName || selectedAgent}`}
-          onSave={handleRenameTitle}
+      <div className="flex h-full min-w-0 flex-1 items-center gap-3 px-4 md:px-5">
+        <button
+          type="button"
+          onClick={openBotSettings}
+          className="group flex min-w-0 max-w-[min(60vw,32rem)] items-center gap-3 rounded-xl px-1.5 py-1 transition-colors hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring"
+          title={tr("Open settings for {{agent}}", "打开 {{agent}} 的设置", { agent: agentName || selectedAgent })}
+          aria-label={tr("Open settings for {{agent}}", "打开 {{agent}} 的设置", { agent: agentName || selectedAgent })}
+        >
+          <BotAvatar
+            agentId={selectedAgent}
+            avatarUrl={agentDetail?.avatarUrl}
+            size={28}
+          />
+          <span className="truncate text-sm font-semibold text-foreground">
+            {agentName || selectedAgent}
+          </span>
+        </button>
+        <ShareAgentMenu
+          agentId={selectedAgent}
+          agentName={agentName || selectedAgent}
+          isPublic={agentDetail?.isPublic === true}
+          canChangeVisibility={agentDetail?.role === "owner" && !isActAsView}
+          onPublicChange={handleAgentPublicChange}
         />
         <button
           type="button"
-          onClick={() => setFilesSheetOpen((v) => !v)}
-          className={`shrink-0 inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors ${
-            filesSheetOpen
+          onClick={() => {
+            setFilesSheetOpen(false);
+            setKnowledgePreview(null);
+            setWorkspaceReturnsToBotPanel(false);
+            setBotPanelOpen((value) => !value);
+          }}
+          className={`inline-flex size-9 shrink-0 items-center justify-center rounded-xl transition-colors ${
+            botPanelOpen
               ? "bg-muted text-foreground"
-              : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+              : "text-muted-foreground hover:bg-muted/70 hover:text-foreground"
           }`}
-          title={filesSheetOpen ? "Hide workspace" : "Show workspace"}
-          aria-pressed={filesSheetOpen}
+          title={botPanelOpen ? tr("Close navigation panel", "关闭导航侧栏") : tr("Open projects and recent chats", "打开项目和最近话题")}
+          aria-label={botPanelOpen ? tr("Close navigation panel", "关闭导航侧栏") : tr("Open projects and recent chats", "打开项目和最近话题")}
+          aria-pressed={botPanelOpen}
         >
-          <FolderOpen className="h-4 w-4" />
-          <span className="sr-only">Toggle workspace</span>
+          <PanelRight className="size-[18px]" />
         </button>
       </div>
     ),
-    [sessionTitle, agentName, selectedAgent, handleRenameTitle, filesSheetOpen],
+    [
+      agentName,
+      selectedAgent,
+      agentDetail?.avatarUrl,
+      agentDetail?.isPublic,
+      agentDetail?.role,
+      openBotSettings,
+      handleAgentPublicChange,
+      botPanelOpen,
+      tr,
+    ],
   );
   usePageHeader(headerSlot, [headerSlot]);
 
@@ -1163,18 +1327,16 @@ export function ChatScreen() {
     // Close the SSE gate for this sessionId; reopens once the history
     // fetch lands and subscribeSinceRef has been set to the real cursor.
     setLoadedSessionId(null);
-    // Reset the todo panel on session change so the previous chat's
-    // checklist doesn't briefly flash before the new one's fetch lands.
-    setTodoItems([]);
+    // Reset the todo panel on session change and invalidate every request
+    // started for the previous conversation before loading this scope.
+    resetTodoScope(selectedAgent, sessionId);
     // Same for the subagent progress indicator — never carry it across
     // sessions; a fresh load means no in-flight delegate_task to track.
     setSubagentProgress(null);
     // Refresh todo.md alongside the history fetch. We don't gate the
     // rest of the load on it — a 404 (no todo.md yet) is the normal
     // empty-session case.
-    getChatTodo(selectedAgent, sessionId)
-      .then((todo) => setTodoItems(todo.items))
-      .catch(() => setTodoItems([]));
+    refreshTodoForScope(selectedAgent, sessionId);
     let aborted = false;
     getChatHistoryWithCursor(selectedAgent, sessionId)
       .then(async ({ history, latestEventSeq }) => {
@@ -1229,7 +1391,7 @@ export function ChatScreen() {
     return () => {
       aborted = true;
     };
-  }, [selectedAgent, sessionId]);
+  }, [selectedAgent, sessionId, refreshTodoForScope, resetTodoScope]);
 
   useEffect(() => {
     if (!stickToBottomRef.current) return;
@@ -1255,7 +1417,7 @@ export function ChatScreen() {
     const el = textareaRef.current;
     if (el) {
       el.style.height = "auto";
-      el.style.height = Math.min(el.scrollHeight, 200) + "px";
+      el.style.height = Math.min(el.scrollHeight, 180) + "px";
     }
   }, [input]);
 
@@ -1618,18 +1780,8 @@ export function ChatScreen() {
             // every tool_result so the network cost stays proportional
             // to actual updates (a long run with 50 web_search calls
             // doesn't trigger 50 refetches).
-            if (tc && (tc.name === "write_file" || tc.name === "edit_file" || tc.name === "apply_patch")) {
-              try {
-                const args = JSON.parse(tc.arguments);
-                const path: string =
-                  (typeof args?.path === "string" ? args.path : "") ||
-                  (typeof args?.file_path === "string" ? args.file_path : "");
-                if (path && /(^|\/)todo\.md$/i.test(path)) {
-                  getChatTodo(selectedAgent, sessionId)
-                    .then((todo) => setTodoItems(todo.items))
-                    .catch(() => {});
-                }
-              } catch { /* ignore bad args */ }
+            if (tc && toolMutationTouchesTodo(tc.name, tc.arguments)) {
+              refreshTodoForScope(selectedAgent, sessionId);
             }
             const groupId = curGroupId;
             const calls = [...curCalls];
@@ -1671,11 +1823,11 @@ export function ChatScreen() {
             // turn just hangs — the model failed (provider 4xx/5xx,
             // serialization mismatch, etc.) and the only signal was a
             // gateway log line the user can't see.
-            const msg = evt.data?.message || "Unknown error";
+            const msg = evt.data?.message || tr("Unknown error", "未知错误");
             if (/\bcontext canceled\b/i.test(msg)) break;
             setMessages((prev) => [
               ...prev,
-              { id: `e-${Date.now()}`, role: "agent", content: `Error: ${msg}`, timestamp: Date.now() },
+              { id: `e-${Date.now()}`, role: "agent", content: tr("Error: {{error}}", "错误：{{error}}", { error: msg }), timestamp: Date.now() },
             ]);
             break;
           }
@@ -1769,7 +1921,7 @@ export function ChatScreen() {
               ? {
                   ...m,
                   toolCalls: m.toolCalls.map((tc) =>
-                    tc.result === undefined ? { ...tc, result: "(stopped)" } : tc,
+                    tc.result === undefined ? { ...tc, result: tr("(stopped)", "（已停止）") } : tc,
                   ),
                 }
               : m,
@@ -1777,7 +1929,7 @@ export function ChatScreen() {
         );
         setMessages((prev) => [
           ...prev,
-          { id: `e-${Date.now()}`, role: "agent", content: "(Stopped)", timestamp: Date.now() },
+          { id: `e-${Date.now()}`, role: "agent", content: tr("(Stopped)", "（已停止）"), timestamp: Date.now() },
         ]);
       } else {
         setMessages((prev) => {
@@ -1790,7 +1942,7 @@ export function ChatScreen() {
           }
           const errMsg = err instanceof Error && err.message
             ? err.message
-            : "Failed to get a response. Is the gateway running?";
+            : tr("Failed to get a response. Is the gateway running?", "获取回复失败，请确认网关是否正在运行。")
           return [
             ...prev,
             {
@@ -1814,7 +1966,7 @@ export function ChatScreen() {
       setSubagentProgress(null);
       textareaRef.current?.focus();
     }
-  }, [input, attachments, selectedAgent, sessionId, sending, isReadOnlyView, isReadOnlySafeSlashCommand, loadSessions, pathname, router, urlProjectId]);
+  }, [input, attachments, selectedAgent, sessionId, sending, isReadOnlyView, isReadOnlySafeSlashCommand, loadSessions, pathname, refreshTodoForScope, router, tr, urlProjectId]);
 
   const handleStop = useCallback(() => {
     abortRef.current?.abort();
@@ -1981,12 +2133,14 @@ export function ChatScreen() {
 
   const handleNewChat = () => {
     const newId = generateSessionId();
+    resetTodoScope(selectedAgent, newId);
     setSessionId(newId);
     setMessages([]);
     router.replace(`/agents/${selectedAgent}/chat/`);
   };
 
   const handleSelectSession = (sid: string) => {
+    resetTodoScope(selectedAgent, sid);
     setSessionId(sid);
     // history.replaceState (not router.replace) for the same reason as
     // handleSend: /chat/[session] is only pre-rendered for the `_`
@@ -1996,13 +2150,33 @@ export function ChatScreen() {
   };
 
   const formatTime = (ts: number) =>
-    new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    new Date(ts).toLocaleTimeString(locale === "zh-CN" ? "zh-CN" : "en-US", { hour: "2-digit", minute: "2-digit" });
 
-  // Empty new-chat state: collapse the messages scroll out of the
-  // flex-1 lane and center title + composer vertically, Manus-style.
-  // Once any message exists the layout swings back to the standard
-  // "scroll above, sticky composer at bottom" shape.
+  // A newly created Bot opens directly in conversation mode with a local
+  // welcome bubble. Existing session URLs keep their normal history-loading
+  // behavior, while project landing pages retain the centered hero composer.
   const isEmpty = messages.length === 0;
+  const showBotWelcome = isEmpty && !urlSessionId && !urlProjectId;
+  const showEmptyHero = isEmpty && !showBotWelcome;
+  const todoAnchorMessageId = todoItems.length > 0
+    ? findTodoAnchorMessageId(messages)
+    : null;
+  const todoIsActive = sending && todoAnchorMessageId !== null && (() => {
+    const anchorIndex = messages.findIndex((message) => message.id === todoAnchorMessageId);
+    return anchorIndex >= 0
+      && !messages.slice(anchorIndex + 1).some((message) => message.role === "user");
+  })();
+  const botWelcome = agentDetail?.description?.trim()
+    ? tr(
+        "Hey, I am {{name}}. {{description}} What should we start with?",
+        "Hey，我是{{name}}。{{description}} 想先从哪件事开始？",
+        { name: agentName || tr("your new Agent", "新来的 Agent"), description: agentDetail.description.trim() },
+      )
+    : tr(
+        "Hey, I am {{name}}. Did you create me to focus on one job, or to be a general assistant whenever you need one?",
+        "Hey，我是{{name}}。你把我创建出来，是想让我专门做好一件事，还是做一个随时待命的通用助手？",
+        { name: agentName || tr("your new Agent", "新来的 Agent") },
+      );
   // Compute the id of the latest agent bubble that's a pending plan
   // (numbered plan + "Reply `go` to execute" footer), only when no
   // user message has followed it. This is the single bubble that gets
@@ -2022,42 +2196,56 @@ export function ChatScreen() {
   // render a small info card UNDER the hero (folder + name + meta)
   // instead of taking over the headline, so users always know which
   // agent they're chatting with first.
-  const heroTitle = "What can I do for you?";
+  const heroTitle = tr("What can I do for you?", "我能为你做什么？");
 
   return (
-    <div className="flex h-[calc(100vh-3rem)] flex-row">
+    <div className="flex h-[calc(100vh-3.5rem)] flex-row bg-background">
       <div
         className={
-          "flex flex-1 min-w-0 flex-col" +
-          // pb-12 (3rem) matches the header height we already subtracted
-          // from the parent's h-[calc(100vh-3rem)]. Without it `justify-
+          "flex flex-1 min-w-0 flex-col xl:min-w-[520px]" +
+          // pb-14 (3.5rem) matches the header height we already subtracted
+          // from the parent's h-[calc(100vh-3.5rem)]. Without it `justify-
           // center` centers content inside the post-header area, which
           // sits visually ~24px below the true viewport mid-line — the
           // user notices the hero + composer pair drifting low. Adding
           // an equal bottom padding biases the centered group upward by
           // half the header height so the optical centre lines up with
           // the geometric centre of the screen.
-          (isEmpty ? " justify-center pb-12" : "")
+          (showEmptyHero ? " justify-center pb-14" : "")
         }
       >
       {/* Messages */}
         <div
           ref={messagesScrollRef}
           className={
-            // scrollbar-gutter:stable always reserves the 6px scrollbar track
+            // scrollbar-gutter:stable always reserves the 4px scrollbar track
             // so message rows keep a fixed content width that lines up with the
             // composer below (which gets a matching right inset) — otherwise the
             // scrollbar shifts message edges out of alignment on a narrow panel.
             "min-h-0 px-4 [scrollbar-gutter:stable] " +
-            (isEmpty ? "shrink-0" : "flex-1 overflow-y-auto py-4")
+            (showEmptyHero ? "shrink-0" : "flex-1 overflow-y-auto py-4")
           }
         >
-          <div className="mx-auto max-w-2xl space-y-3">
-            {isEmpty && (
+          <div className="mx-auto w-full max-w-5xl space-y-3">
+            {showEmptyHero && (
               <div className="py-8 text-center">
                 <h1 className="text-3xl md:text-4xl font-semibold tracking-tight">
                   {heroTitle}
                 </h1>
+              </div>
+            )}
+
+            {!showEmptyHero && (
+              <div className="pb-5 pt-1 text-center text-xs font-medium text-muted-foreground/75">
+                {conversationDayLabel(messages[0]?.timestamp || Date.now(), locale)}
+              </div>
+            )}
+
+            {showBotWelcome && (
+              <div className="flex justify-start">
+                <div className="max-w-full rounded-2xl rounded-bl-md bg-[#f1f1f1] px-4 py-2.5 text-[#202020] dark:bg-white/[0.09] dark:text-foreground">
+                  <p className="whitespace-pre-wrap text-[15px] leading-6">{botWelcome}</p>
+                </div>
               </div>
             )}
 
@@ -2118,7 +2306,7 @@ export function ChatScreen() {
                       <FilesPanel
                         key={`files-${r.id}`}
                         files={r.files!}
-                        onOpen={() => setFilesSheetOpen(true)}
+                        onOpen={openWorkspace}
                       />
                     ));
                   if (rounds.length === 1) {
@@ -2150,6 +2338,11 @@ export function ChatScreen() {
                       </div>,
                     );
                   }
+                  if (rounds.some((round) => round.id === todoAnchorMessageId)) {
+                    elements.push(
+                      <TodoPanel key="todo-panel" items={todoItems} active={todoIsActive} />,
+                    );
+                  }
                   continue;
                 }
                 // Agent bubbles may carry the `<|split|>` marker the
@@ -2172,9 +2365,19 @@ export function ChatScreen() {
                       }),
                     );
                   });
+                  if (msg.id === todoAnchorMessageId) {
+                    elements.push(
+                      <TodoPanel key="todo-panel" items={todoItems} active={todoIsActive} />,
+                    );
+                  }
                   continue;
                 }
                 elements.push(renderRegularBubble(msg));
+                if (msg.id === todoAnchorMessageId) {
+                  elements.push(
+                    <TodoPanel key="todo-panel" items={todoItems} active={todoIsActive} />,
+                  );
+                }
               }
               return elements;
 
@@ -2213,8 +2416,8 @@ export function ChatScreen() {
                     <div
                       className={`rounded-2xl px-4 py-2.5 break-words ${
                         msg.role === "user"
-                          ? "bg-primary/10 dark:bg-primary/15 text-foreground rounded-br-md"
-                          : "bg-muted rounded-bl-md"
+                          ? "user-chat-bubble bg-[#111111] text-white rounded-br-md dark:bg-white dark:text-black"
+                          : "bg-[#f1f1f1] text-[#202020] rounded-bl-md dark:bg-white/[0.09] dark:text-foreground"
                       }`}
                     >
                       {(() => {
@@ -2242,7 +2445,7 @@ export function ChatScreen() {
                                 type="button"
                                 onClick={() => setLightboxSrc(att.previewUrl!)}
                                 className="block cursor-zoom-in"
-                                aria-label={`Preview ${att.name}`}
+                                aria-label={tr("Preview {{name}}", "预览 {{name}}", { name: att.name })}
                               >
                                 {/* eslint-disable-next-line @next/next/no-img-element */}
                                 <img
@@ -2284,18 +2487,18 @@ export function ChatScreen() {
                       )}
                       {msg.role === "agent" && msg.metadata?.iterationCapReached && (
                         <div className="mt-2 flex items-start gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-900 dark:text-amber-200">
-                          <span className="font-medium">Iteration limit reached</span>
+                          <span className="font-medium">{tr("Iteration limit reached", "已达到迭代上限")}</span>
                           <span className="opacity-80">
-                            Agent hit the {msg.metadata.iterationCapValue ?? ""} tool-call budget before finishing. The answer above was synthesized from partial results — fields may be marked unknown / partial. Continue the conversation to push further.
+                            {tr("The agent reached its {{count}} tool-call budget before finishing. The answer above was synthesized from partial results, so some fields may be marked unknown or partial. Continue the conversation to go further.", "Agent 在完成任务前已用完 {{count}} 次工具调用预算。上方回答基于部分结果整理，某些字段可能标记为未知或不完整；可继续对话以进一步处理。", { count: msg.metadata.iterationCapValue ?? "" })}
                           </span>
                         </div>
                       )}
                       {msg.role === "agent" && msg.metadata?.planMode && (
                         <div className="mt-2 flex items-start gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-900 dark:text-amber-200">
                           <ListChecks className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                          <span className="font-medium">Plan only — review before executing.</span>
+                          <span className="font-medium">{tr("Plan only — review before executing.", "仅生成计划——请确认后再执行。")}</span>
                           <span className="opacity-80">
-                            Tools were disabled for this turn. Reply with &quot;go&quot; (or edits) to run it.
+                            {tr('Tools were disabled for this turn. Reply with "go" or your edits to run it.', "本轮未启用工具。回复“go”或提出修改后即可执行。")}
                           </span>
                         </div>
                       )}
@@ -2308,7 +2511,7 @@ export function ChatScreen() {
                             className="h-8 gap-1.5"
                           >
                             <Check className="h-3.5 w-3.5" />
-                            Run plan
+                            {tr("Run plan", "执行计划")}
                           </Button>
                           <Button
                             size="sm"
@@ -2326,16 +2529,16 @@ export function ChatScreen() {
                             className="h-8 gap-1.5"
                           >
                             <X className="h-3.5 w-3.5" />
-                            Edit
+                            {tr("Edit", "修改")}
                           </Button>
                           <span className="text-xs text-muted-foreground">
-                            Run plan to authorize the agent end-to-end, or Edit to revise below.
+                            {tr("Run the plan to authorize the agent to complete it end to end, or choose Edit to revise it below.", "选择“执行计划”可授权 Agent 完整执行；选择“修改”可在下方调整计划。")}
                           </span>
                         </div>
                       )}
                     </div>
                     {msg.files && msg.files.length > 0 && (
-                      <FilesPanel files={msg.files} onOpen={() => setFilesSheetOpen(true)} />
+                      <FilesPanel files={msg.files} onOpen={openWorkspace} />
                     )}
                     <div
                       className={`flex items-center gap-1.5 mt-1 ${
@@ -2352,7 +2555,7 @@ export function ChatScreen() {
                           <button
                             onClick={() => handleCopy(msg)}
                             className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-muted text-muted-foreground/60 hover:text-muted-foreground transition-all"
-                            title="Copy"
+                            title={tr("Copy", "复制")}
                           >
                             {copiedId === msg.id ? (
                               <Check className="h-3 w-3 text-emerald-500" />
@@ -2363,7 +2566,7 @@ export function ChatScreen() {
                           <button
                             onClick={() => handleRetry(msg)}
                             className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-muted text-muted-foreground/60 hover:text-muted-foreground transition-all"
-                            title="Resend (refills the composer)"
+                            title={tr("Resend (refills the composer)", "重新发送（填回输入框）")}
                           >
                             <RotateCcw className="h-3 w-3" />
                           </button>
@@ -2378,7 +2581,7 @@ export function ChatScreen() {
                           <button
                             onClick={() => handleCopy(msg)}
                             className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-muted text-muted-foreground/60 hover:text-muted-foreground transition-all"
-                            title="Copy"
+                            title={tr("Copy", "复制")}
                           >
                             {copiedId === msg.id ? (
                               <Check className="h-3 w-3 text-emerald-500" />
@@ -2387,12 +2590,12 @@ export function ChatScreen() {
                             )}
                           </button>
                           <button
-                            onClick={() => setFilesSheetOpen(true)}
+                            onClick={openWorkspace}
                             className="opacity-0 group-hover:opacity-100 inline-flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-muted text-[10px] text-muted-foreground/60 hover:text-muted-foreground transition-all"
-                            title="View task files"
+                            title={tr("View task files", "查看任务文件")}
                           >
                             <FolderOpen className="h-3 w-3" />
-                            <span>Files</span>
+                            <span>{tr("Files", "文件")}</span>
                           </button>
                         </>
                       )}
@@ -2419,19 +2622,9 @@ export function ChatScreen() {
           </div>
         </div>
 
-        {/* Live progress panel: agent maintains a per-session `todo.md`
-            checklist and we render it here right above the composer so
-            the user's eye is on the next step they're about to authorize,
-            not buried at the top behind a long scroll history. Auto-
-            hides when the file doesn't exist or has no checkbox items. */}
-        {!isEmpty && todoItems.length > 0 && (
-          <TodoPanel items={todoItems} active={sending} />
-        )}
-
-        {/* Input — right inset matches the messages' reserved scrollbar gutter
-            (6px) so the composer's edges line up with the message rows above. */}
-        <div className="shrink-0 pl-4 pr-[calc(1rem+6px)] pb-6 pt-2">
-          <div className="mx-auto max-w-2xl relative">
+        {/* Full-width conversation composer, matching the compact Bot layout. */}
+        <div className="shrink-0 px-3 pb-5 pt-2 sm:px-5">
+          <div className="relative mx-auto w-full">
             {isReadOnlyChannel && (
               // The web compose path can't deliver into upstream IM
               // platforms (no reverse channel adapter, no outbound
@@ -2443,14 +2636,13 @@ export function ChatScreen() {
               // Block the input outright and tell the user where to
               // reply.
               <div className="mb-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                This conversation lives on{" "}
+                {tr("This conversation is hosted on", "此对话来自")} {" "}
                 <span className="font-medium text-foreground">
                   {channelLabel(currentChannel)}
                 </span>
-                . Reply from there — slash commands like{" "}
-                <span className="font-mono text-foreground">/usage</span> can
-                run here, but normal messages typed here won&apos;t reach the user
-                on the other side.
+                {tr(". Reply there. Slash commands such as", "。请在该渠道中回复。这里仍可运行类似")} {" "}
+                <span className="font-mono text-foreground">/usage</span>{" "}
+                {tr("can run here, but normal messages typed here will not reach the user on the other side.", "的斜杠命令，但在此输入的普通消息不会发送给渠道另一端的用户。")}
               </div>
             )}
             {isActAsView && !isReadOnlyChannel && (
@@ -2459,8 +2651,7 @@ export function ChatScreen() {
               // read-only for the whole request, so any send would 403
               // — disable the composer and surface why.
               <div className="mb-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-                Read-only — you&apos;re viewing another user&apos;s chat.
-                Sending messages here is disabled.
+                {tr("Read-only — you are viewing another user's chat. Sending messages here is disabled.", "只读模式——你正在查看其他用户的对话，无法在此发送消息。")}
               </div>
             )}
             {slashOpen && filteredItems.length > 0 && (
@@ -2471,14 +2662,9 @@ export function ChatScreen() {
                 onSelect={selectItem}
               />
             )}
-            <div
-              className={
-                "border border-border bg-card focus-within:ring-2 focus-within:ring-ring/20 transition-shadow " +
-                (isEmpty ? "rounded-2xl px-5 pt-4 pb-3" : "rounded-xl px-4 py-3")
-              }
-            >
+            <div className="rounded-[22px] border border-black/10 bg-card p-1.5 shadow-[0_8px_28px_rgba(0,0,0,0.055)] transition-shadow focus-within:border-black/15 focus-within:ring-2 focus-within:ring-black/5 dark:border-white/10 dark:focus-within:border-white/16 dark:focus-within:ring-white/5">
               {attachments.length > 0 && (
-                <div className="flex flex-wrap gap-2 mb-2 pb-2 border-b border-border/60">
+                <div className="mx-1 mb-2 flex flex-wrap gap-2 border-b border-border/60 px-1 pb-2 pt-1">
                   {attachments.map((f, i) => {
                     const preview = attachmentPreviews[i];
                     if (preview) {
@@ -2491,7 +2677,7 @@ export function ChatScreen() {
                             type="button"
                             onClick={() => setLightboxSrc(preview)}
                             className="block h-full w-full cursor-zoom-in"
-                            aria-label={`Preview ${f.name}`}
+                            aria-label={tr("Preview {{name}}", "预览 {{name}}", { name: f.name })}
                           >
                             {/* eslint-disable-next-line @next/next/no-img-element */}
                             <img
@@ -2504,7 +2690,7 @@ export function ChatScreen() {
                             type="button"
                             onClick={() => removeAttachment(i)}
                             className="absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-background/80 text-muted-foreground opacity-0 transition group-hover:opacity-100 hover:text-foreground"
-                            aria-label="Remove attachment"
+                            aria-label={tr("Remove attachment", "移除附件")}
                           >
                             <X className="h-3 w-3" />
                           </button>
@@ -2522,7 +2708,7 @@ export function ChatScreen() {
                           type="button"
                           onClick={() => removeAttachment(i)}
                           className="p-0.5 rounded hover:bg-muted-foreground/15 text-muted-foreground hover:text-foreground"
-                          aria-label="Remove attachment"
+                          aria-label={tr("Remove attachment", "移除附件")}
                         >
                           <X className="h-3 w-3" />
                         </button>
@@ -2531,156 +2717,99 @@ export function ChatScreen() {
                   })}
                 </div>
               )}
-              {/* Empty-state composer: Manus-style — textarea fills the
-                  top, action row sits below it. Once messages exist we
-                  swing back to the compact single-row layout so the
-                  composer doesn't dominate the chat. */}
-              {isEmpty ? (
-                <>
-                  <textarea
-                    ref={textareaRef}
-                    value={input}
-                    onChange={handleInputChange}
-                    onPaste={handlePaste}
-                    onKeyDown={handleKeyDown}
-                    onBlur={() => setTimeout(() => setSlashOpen(false), 120)}
-                    placeholder={
-                      isActAsView
-                        ? "Read-only — viewing another user's chat"
-                        : isReadOnlyChannel
-                          ? `Slash commands only — reply from ${channelLabel(currentChannel)}`
-                          : selectedAgent
-                            ? `Message ${agentName || selectedAgent}... ("/" to pick a skill)`
-                            : "Select an agent first"
-                    }
+              <div className="flex items-end gap-2">
+                <DropdownMenu>
+                  <DropdownMenuTrigger
                     disabled={!canUseComposer}
-                    rows={3}
-                    className="block w-full resize-none bg-transparent text-[15px] placeholder:text-muted-foreground/50 outline-none disabled:opacity-50"
-                    style={{ maxHeight: 240, minHeight: 72 }}
+                    render={
+                      <button
+                        type="button"
+                        className="flex size-8 shrink-0 items-center justify-center rounded-full border border-border/80 bg-muted/35 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-45"
+                        aria-label={t("composer.moreOptions")}
+                        title={t("composer.moreOptions")}
+                      >
+                        <Plus className="size-[17px]" />
+                      </button>
+                    }
                   />
-                  <div className="mt-2 flex items-center justify-between">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <label
-                        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border text-muted-foreground transition-colors ${
-                          !canAttach
-                            ? "opacity-50 cursor-not-allowed"
-                            : "hover:bg-muted hover:text-foreground cursor-pointer"
-                        }`}
-                        aria-label="Attach files"
-                      >
-                        <Paperclip className="h-4 w-4" />
-                        <input
-                          ref={fileInputRef}
-                          type="file"
-                          multiple
-                          className="sr-only"
-                          onChange={handleFilePick}
-                          disabled={!canAttach}
-                        />
-                      </label>
-                      {urlProjectId && projectInfo && (
-                        <div
-                          className="flex h-9 min-w-0 items-center gap-1.5 rounded-full border border-border px-3 text-xs text-muted-foreground"
-                          title={projectInfo.name}
-                        >
-                          <FolderOpen className="size-3.5 shrink-0" />
-                          <span className="truncate max-w-[20ch]">
-                            {projectInfo.name}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                    {sending ? (
-                      <Button
-                        onClick={handleStop}
-                        size="icon"
-                        className="h-9 w-9 shrink-0 rounded-full"
-                        aria-label="Stop generating"
-                      >
-                        <Square className="h-3.5 w-3.5 fill-current" />
-                      </Button>
-                    ) : (
-                      <Button
-                        onMouseDown={(e) => {
-                          e.preventDefault();
-                          handleSend();
-                        }}
-                        disabled={(!input.trim() && attachments.length === 0) || !canSendComposer}
-                        size="icon"
-                        className="h-9 w-9 shrink-0 rounded-full"
-                        aria-label="Send message"
-                      >
-                        <Send className="h-4 w-4" />
-                      </Button>
-                    )}
-                  </div>
-                </>
-              ) : (
-                <div className="flex items-center gap-2">
-                  <label
-                    className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors ${
-                      !canAttach
-                        ? "opacity-50 cursor-not-allowed"
-                        : "hover:bg-muted hover:text-foreground cursor-pointer"
-                    }`}
-                    aria-label="Attach files"
+                  <DropdownMenuContent
+                    align="start"
+                    side="top"
+                    sideOffset={10}
+                    className="w-56 rounded-2xl p-1.5 shadow-xl"
                   >
-                    <Paperclip className="h-4 w-4" />
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      multiple
-                      className="sr-only"
-                      onChange={handleFilePick}
+                    <DropdownMenuItem
                       disabled={!canAttach}
-                    />
-                  </label>
-                  <textarea
-                    ref={textareaRef}
-                    value={input}
-                    onChange={handleInputChange}
-                    onPaste={handlePaste}
-                    onKeyDown={handleKeyDown}
-                    onBlur={() => setTimeout(() => setSlashOpen(false), 120)}
-                    placeholder={
-                      isActAsView
-                        ? "Read-only — viewing another user's chat"
-                        : isReadOnlyChannel
-                          ? `Slash commands only — reply from ${channelLabel(currentChannel)}`
-                          : selectedAgent
-                            ? `Message ${agentName || selectedAgent}... ("/" to pick a skill)`
-                            : "Select an agent first"
-                    }
-                    disabled={!canUseComposer}
-                    rows={1}
-                    className="flex-1 resize-none bg-transparent text-[15px] leading-8 placeholder:text-muted-foreground/50 outline-none disabled:opacity-50"
-                    style={{ maxHeight: 200, minHeight: 32 }}
-                  />
-                  {sending ? (
-                    <Button
-                      onClick={handleStop}
-                      size="icon"
-                      className="h-8 w-8 shrink-0 rounded-lg"
-                      aria-label="Stop generating"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="gap-2.5 rounded-xl px-3 py-2.5"
                     >
-                      <Square className="h-3.5 w-3.5 fill-current" />
-                    </Button>
-                  ) : (
-                    <Button
-                      onMouseDown={(e) => {
-                        e.preventDefault();
-                        handleSend();
-                      }}
-                      disabled={(!input.trim() && attachments.length === 0) || !canSendComposer}
-                      size="icon"
-                      className="h-8 w-8 shrink-0 rounded-lg"
-                      aria-label="Send message"
-                    >
-                      <Send className="h-4 w-4" />
-                    </Button>
-                  )}
-                </div>
-              )}
+                      <Paperclip className="size-4 text-muted-foreground" />
+                      <span>{t("composer.addAttachment")}</span>
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  className="sr-only"
+                  onChange={handleFilePick}
+                  disabled={!canAttach}
+                />
+                {urlProjectId && projectInfo && (
+                  <div
+                    className="flex h-8 min-w-0 shrink-0 items-center gap-1.5 rounded-full border border-border px-2.5 text-xs text-muted-foreground"
+                    title={projectInfo.name}
+                  >
+                    <FolderOpen className="size-3.5 shrink-0" />
+                    <span className="max-w-[14ch] truncate">{projectInfo.name}</span>
+                  </div>
+                )}
+                <textarea
+                  ref={textareaRef}
+                  value={input}
+                  onChange={handleInputChange}
+                  onPaste={handlePaste}
+                  onKeyDown={handleKeyDown}
+                  onBlur={() => setTimeout(() => setSlashOpen(false), 120)}
+                  placeholder={
+                    isActAsView
+                      ? t("composer.readOnly")
+                      : isReadOnlyChannel
+                        ? t("composer.slashOnly", { channel: channelLabel(currentChannel) })
+                        : selectedAgent
+                          ? t("composer.message", { name: agentName || selectedAgent })
+                          : t("composer.selectAgent")
+                  }
+                  disabled={!canUseComposer}
+                  rows={1}
+                  className="block min-w-0 flex-1 resize-none bg-transparent px-1 py-1 text-[15px] leading-6 placeholder:text-muted-foreground/45 outline-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden disabled:opacity-50"
+                  style={{ maxHeight: 180, minHeight: 32 }}
+                />
+                {sending ? (
+                  <Button
+                    onClick={handleStop}
+                    size="icon"
+                    className="size-8 shrink-0 rounded-full bg-[#111] text-white hover:bg-black disabled:bg-[#111] dark:bg-white dark:text-black dark:hover:bg-white/90"
+                    aria-label={t("composer.stop")}
+                  >
+                    <Square className="size-3 fill-current" />
+                  </Button>
+                ) : input.trim() || attachments.length > 0 ? (
+                  <Button
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                      handleSend();
+                    }}
+                    disabled={!canSendComposer}
+                    size="icon"
+                    className="size-8 shrink-0 rounded-full bg-[#111] text-white hover:bg-black disabled:bg-[#111] disabled:text-white/70 dark:bg-white dark:text-black dark:hover:bg-white/90"
+                    aria-label={t("composer.send")}
+                  >
+                    <ArrowUp className="size-[17px] stroke-[2.25]" />
+                  </Button>
+                ) : null}
+              </div>
             </div>
           </div>
         </div>
@@ -2690,12 +2819,12 @@ export function ChatScreen() {
             onClick={() => setLightboxSrc(null)}
             role="dialog"
             aria-modal="true"
-            aria-label="Image preview"
+            aria-label={tr("Image preview", "图片预览")}
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={lightboxSrc}
-              alt="Preview"
+              alt={tr("Preview", "预览")}
               className="max-h-full max-w-full rounded-lg shadow-2xl"
               onClick={(e) => e.stopPropagation()}
             />
@@ -2703,13 +2832,54 @@ export function ChatScreen() {
               type="button"
               onClick={() => setLightboxSrc(null)}
               className="absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-full bg-background/80 text-foreground hover:bg-background"
-              aria-label="Close preview"
+              aria-label={tr("Close preview", "关闭预览")}
             >
               <X className="h-5 w-5" />
             </button>
           </div>
         )}
       </div>
+      {botPanelOpen && selectedAgent && (
+        <BotControlPanel
+          agentId={selectedAgent}
+          projects={projects}
+          activeProjectId={urlProjectId || null}
+          expandedProjectId={
+            urlProjectId
+              || sessions.find((topic) => topic.id === sessionId)?.projectId
+              || null
+          }
+          topics={sessions}
+          activeTopicId={sessionId}
+          agentRole={agentDetail?.role}
+          onOpenSettings={openBotSettings}
+          onOpenSettingsTab={openBotSettingsTab}
+          onOpenWorkspace={openWorkspaceFromBotPanel}
+          workspaceAvailable={Boolean(urlSessionId || urlProjectId)}
+          onSelectProject={(projectId) => {
+            router.push(`/agents/${selectedAgent}/project/${encodeURIComponent(projectId)}/`);
+          }}
+          onProjectsChanged={() => {
+            loadProjects(selectedAgent);
+            window.dispatchEvent(
+              new CustomEvent("fastclaw:sessions-changed", {
+                detail: { agentId: selectedAgent },
+              }),
+            );
+          }}
+          onSelectTopic={handleSelectSession}
+          onNewTopic={handleNewChat}
+          onTopicsChanged={() => {
+            loadSessions(selectedAgent);
+            window.dispatchEvent(
+              new CustomEvent("fastclaw:sessions-changed", {
+                detail: { agentId: selectedAgent },
+              }),
+            );
+          }}
+          onClose={() => setBotPanelOpen(false)}
+        />
+      )}
       {filesSheetOpen && selectedAgent && (sessionId || urlProjectId) && (
         <WorkspacePanel
           agentId={selectedAgent}
@@ -2722,9 +2892,21 @@ export function ChatScreen() {
           projectId={!urlSessionId && urlProjectId ? urlProjectId : undefined}
           knowledgePreview={knowledgePreview}
           onClearKnowledgePreview={() => setKnowledgePreview(null)}
+          onPreviewStateChange={handleWorkspacePreviewChange}
+          onBack={
+            workspaceReturnsToBotPanel
+              ? () => {
+                  setFilesSheetOpen(false);
+                  setKnowledgePreview(null);
+                  setWorkspaceReturnsToBotPanel(false);
+                  setBotPanelOpen(true);
+                }
+              : undefined
+          }
           onClose={() => {
             setFilesSheetOpen(false);
             setKnowledgePreview(null);
+            setWorkspaceReturnsToBotPanel(false);
           }}
         />
       )}
@@ -2732,81 +2914,1099 @@ export function ChatScreen() {
   );
 }
 
-interface ChatHeaderTitleProps {
-  title: string;
-  fallback: string;
-  onSave: (next: string) => void | Promise<void>;
-}
+const BOT_PANEL_MIN_WIDTH = 300;
+const BOT_PANEL_DEFAULT_WIDTH = 400;
+const BOT_PANEL_MAX_WIDTH = 520;
+const CHAT_PANE_MIN_WIDTH = 520;
+const BOT_PANEL_WIDTH_KEY = "fastclaw:bot-panel-width";
 
-/** Editable chat title rendered into the global sticky header via
- *  usePageHeader. Click / focus to edit; Enter or blur commits. */
-function ChatHeaderTitle({ title, fallback, onSave }: ChatHeaderTitleProps) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(title);
-  const inputRef = useRef<HTMLInputElement>(null);
+function ShareAgentMenu({
+  agentId,
+  agentName,
+  isPublic,
+  canChangeVisibility,
+  onPublicChange,
+}: {
+  agentId: string;
+  agentName: string;
+  isPublic: boolean;
+  canChangeVisibility: boolean;
+  onPublicChange: (isPublic: boolean) => void;
+}) {
+  const { tr } = useLocale();
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState("");
+  const rootRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!editing) setDraft(title);
-  }, [title, editing]);
+    if (!open) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open]);
 
-  useEffect(() => {
-    if (editing) inputRef.current?.select();
-  }, [editing]);
-
-  const commit = () => {
-    setEditing(false);
-    const next = draft.trim();
-    if (!next || next === title) return;
-    onSave(next);
+  const copyLink = async () => {
+    const url = `${window.location.origin}/agents/${encodeURIComponent(agentId)}/chat/`;
+    let copiedToClipboard = false;
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(url);
+        copiedToClipboard = true;
+      } catch {
+        // Clipboard API is commonly blocked on HTTP/self-signed installs.
+        // Fall through to the selection-based copy path below.
+      }
+    }
+    if (!copiedToClipboard) {
+      const input = document.createElement("textarea");
+      input.value = url;
+      input.setAttribute("readonly", "");
+      input.style.position = "fixed";
+      input.style.left = "-9999px";
+      document.body.appendChild(input);
+      input.select();
+      copiedToClipboard = document.execCommand("copy");
+      input.remove();
+    }
+    if (!copiedToClipboard) {
+      throw new Error(tr("Could not copy the link", "无法复制链接，请检查浏览器权限"));
+    }
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1800);
   };
 
-  if (editing) {
-    // field-sizing: content grows the input to match its text; min width
-    // keeps it reasonable right after entering edit mode even if the
-    // current title is very short.
-    return (
-      <input
-        ref={inputRef}
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onKeyDown={(e) => {
-          // Ignore Enter while the user is mid-composition (CJK IME). Both
-          // conditions matter: isComposing is the modern signal, keyCode 229
-          // is the legacy flag some browsers (and macOS Pinyin in particular)
-          // still emit without isComposing set.
-          if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-          if (e.key === "Enter") {
-            e.preventDefault();
-            commit();
-          } else if (e.key === "Escape") {
-            setDraft(title);
-            setEditing(false);
-          }
-        }}
-        onBlur={commit}
-        style={{ fieldSizing: "content" } as React.CSSProperties}
-        className="h-7 min-w-[8ch] max-w-[40ch] rounded-md bg-transparent px-2 text-sm outline-none ring-1 ring-border focus:ring-primary/40"
-      />
-    );
-  }
+  const changeVisibility = async (nextPublic: boolean, copyAfter = false) => {
+    if (busy) return;
+    if (nextPublic !== isPublic && !canChangeVisibility) return;
+    setBusy(true);
+    setError("");
+    setCopied(false);
+    try {
+      if (nextPublic !== isPublic) {
+        const response = await updateAgent(agentId, { isPublic: nextPublic });
+        if (response?.ok === false || response?.error) {
+          throw new Error(response?.error || tr("Could not update sharing", "无法更新分享设置"));
+        }
+        onPublicChange(nextPublic);
+      }
+      if (copyAfter) await copyLink();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : tr("Could not update sharing", "无法更新分享设置"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const triggerLabel = tr("Share {{agent}}", "分享 {{agent}}", { agent: agentName });
 
   return (
-    <button
-      onClick={() => {
-        setDraft(title);
-        setEditing(true);
-      }}
-      // Cap the title width responsively so a long auto-summary doesn't
-      // push the whole header off-screen on small viewports. The
-      // arbitrary `min(...)` keeps narrow widths on phones (60vw) while
-      // capping at ~32rem on desktop; sm:/md: bumps give intermediate
-      // breakpoints a deterministic width too.
-      className="group flex min-w-0 max-w-[min(60vw,18rem)] sm:max-w-[24rem] md:max-w-[28rem] lg:max-w-[32rem] items-center gap-1.5 rounded-md px-2 py-1 text-sm text-foreground hover:bg-muted/50"
-      title={title || fallback}
+    <div ref={rootRef} className="relative ml-auto shrink-0">
+      <button
+        type="button"
+        onClick={() => {
+          setOpen((current) => !current);
+          setError("");
+          setCopied(false);
+        }}
+        className={`inline-flex size-9 items-center justify-center rounded-lg transition-colors focus-visible:ring-2 focus-visible:ring-ring ${
+          open
+            ? "bg-muted text-foreground"
+            : "text-muted-foreground hover:bg-muted/70 hover:text-foreground"
+        }`}
+        title={triggerLabel}
+        aria-label={triggerLabel}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+      >
+        <Share2 className="size-[17px]" />
+      </button>
+
+      {open && (
+        <div
+          role="dialog"
+          aria-label={triggerLabel}
+          className="absolute right-0 top-full z-50 mt-1.5 w-[min(320px,calc(100vw-24px))] rounded-xl border border-border bg-popover p-1.5 text-popover-foreground shadow-lg ring-1 ring-foreground/5"
+        >
+          <button
+            type="button"
+            disabled={busy || (!canChangeVisibility && isPublic)}
+            onClick={() => void changeVisibility(false)}
+            className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none disabled:cursor-default disabled:opacity-60"
+          >
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-foreground">
+              <LockKeyhole className="size-[18px] stroke-[1.8]" />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-sm font-medium">{tr("Only me", "仅自己")}</span>
+              <span className="block truncate text-xs text-muted-foreground">{tr("Only you can view", "只有你自己可以查看")}</span>
+            </span>
+            {!isPublic && <Check className="size-4 shrink-0" />}
+          </button>
+
+          <button
+            type="button"
+            disabled={busy || !canChangeVisibility}
+            onClick={() => void changeVisibility(true)}
+            className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none disabled:cursor-default disabled:opacity-60"
+          >
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-foreground">
+              <Globe2 className="size-[18px] stroke-[1.8]" />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-sm font-medium">{tr("Public access", "公开访问")}</span>
+              <span className="block truncate text-xs text-muted-foreground">{tr("Anyone with the link can view", "任何拿到链接的人都可以查看")}</span>
+            </span>
+            {busy && !isPublic ? (
+              <RefreshCw className="size-4 shrink-0 animate-spin" />
+            ) : isPublic ? (
+              <Check className="size-4 shrink-0" />
+            ) : null}
+          </button>
+
+          {error && <p role="alert" className="px-2 pb-1 pt-1 text-xs text-destructive">{error}</p>}
+
+          {isPublic && (
+            <Button
+              type="button"
+              disabled={busy}
+              onClick={() => void changeVisibility(true, true)}
+              className="mt-1 w-full"
+              aria-live="polite"
+            >
+              {busy ? (
+                <RefreshCw className="size-4 animate-spin" />
+              ) : copied ? (
+                <Check className="size-4" />
+              ) : (
+                <Link2 className="size-4" />
+              )}
+              {busy
+                ? tr("Copying…", "正在复制…")
+                : copied
+                  ? tr("Link copied", "链接已复制")
+                  : tr("Copy link", "复制链接")}
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const BOT_QUICK_ACTIONS: Array<{
+  id: string;
+  labelKey: MessageKey;
+  icon: typeof Brain;
+  tab?: AgentSettingsTab;
+  userOnly?: boolean;
+  ownerOnly?: boolean;
+  action?: "workspace" | "settings";
+}> = [
+  { id: "models", tab: "models", labelKey: "settings.tab.models", icon: Brain },
+  { id: "skills", tab: "skills", labelKey: "settings.tab.skills", icon: Sparkles, ownerOnly: true },
+  { id: "channels", tab: "channels", labelKey: "settings.tab.channels", icon: Radio },
+  { id: "scheduler", tab: "scheduler", labelKey: "settings.tab.scheduler", icon: Clock, ownerOnly: true },
+  { id: "workspace", labelKey: "workspace.title", icon: FolderOpen, action: "workspace" },
+  { id: "settings", labelKey: "sidebar.moreSettings", icon: Settings, action: "settings" },
+];
+
+function BotControlPanel({
+  agentId,
+  projects,
+  activeProjectId,
+  expandedProjectId,
+  topics,
+  activeTopicId,
+  agentRole,
+  onOpenSettings,
+  onOpenSettingsTab,
+  onOpenWorkspace,
+  workspaceAvailable,
+  onSelectProject,
+  onProjectsChanged,
+  onSelectTopic,
+  onNewTopic,
+  onTopicsChanged,
+  onClose,
+}: {
+  agentId: string;
+  projects: ProjectEntry[];
+  activeProjectId: string | null;
+  expandedProjectId: string | null;
+  topics: ChatSession[];
+  activeTopicId: string;
+  agentRole?: "owner" | "viewer";
+  onOpenSettings: () => void;
+  onOpenSettingsTab: (tab: AgentSettingsTab, userOnly?: boolean) => void;
+  onOpenWorkspace: () => void;
+  workspaceAvailable: boolean;
+  onSelectProject: (projectId: string) => void;
+  onProjectsChanged: () => void;
+  onSelectTopic: (sessionId: string) => void;
+  onNewTopic: () => void;
+  onTopicsChanged: () => void;
+  onClose: () => void;
+}) {
+  const { t, tr } = useLocale();
+  const [showAllProjects, setShowAllProjects] = useState(false);
+  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(
+    () => new Set(expandedProjectId ? [expandedProjectId] : []),
+  );
+  const [createProjectOpen, setCreateProjectOpen] = useState(false);
+  const [editProject, setEditProject] = useState<ProjectEntry | null>(null);
+  const [editTopic, setEditTopic] = useState<ChatSession | null>(null);
+  const [deleteTopic, setDeleteTopic] = useState<ChatSession | null>(null);
+  const [panelWidth, setPanelWidth] = useState(() => {
+    if (typeof window === "undefined") return BOT_PANEL_DEFAULT_WIDTH;
+    const stored = Number(window.localStorage.getItem(BOT_PANEL_WIDTH_KEY));
+    return Number.isFinite(stored) && stored >= BOT_PANEL_MIN_WIDTH && stored <= BOT_PANEL_MAX_WIDTH
+      ? stored
+      : BOT_PANEL_DEFAULT_WIDTH;
+  });
+  const [resizing, setResizing] = useState(false);
+  const panelRef = useRef<HTMLElement>(null);
+  const resizeStartRef = useRef({ x: 0, width: BOT_PANEL_DEFAULT_WIDTH });
+  const latestPanelWidthRef = useRef(panelWidth);
+
+  const clampPanelWidth = useCallback((candidate: number) => {
+    const containerWidth = panelRef.current?.parentElement?.getBoundingClientRect().width
+      || window.innerWidth;
+    const responsiveMax = Math.max(
+      BOT_PANEL_MIN_WIDTH,
+      containerWidth - CHAT_PANE_MIN_WIDTH,
+    );
+    return Math.round(
+      Math.max(
+        BOT_PANEL_MIN_WIDTH,
+        Math.min(BOT_PANEL_MAX_WIDTH, responsiveMax, candidate),
+      ),
+    );
+  }, []);
+
+  const commitPanelWidth = useCallback((width: number) => {
+    const next = clampPanelWidth(width);
+    latestPanelWidthRef.current = next;
+    setPanelWidth(next);
+    try {
+      window.localStorage.setItem(BOT_PANEL_WIDTH_KEY, String(next));
+    } catch {
+      // Ignore private-mode and quota failures.
+    }
+  }, [clampPanelWidth]);
+
+  useEffect(() => {
+    if (!resizing) return;
+    const handleMove = (event: PointerEvent) => {
+      const next = clampPanelWidth(
+        resizeStartRef.current.width + resizeStartRef.current.x - event.clientX,
+      );
+      latestPanelWidthRef.current = next;
+      setPanelWidth(next);
+    };
+    const handleUp = () => {
+      setResizing(false);
+      try {
+        window.localStorage.setItem(
+          BOT_PANEL_WIDTH_KEY,
+          String(latestPanelWidthRef.current),
+        );
+      } catch {
+        // Ignore private-mode and quota failures.
+      }
+    };
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp, { once: true });
+    return () => {
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+  }, [clampPanelWidth, resizing]);
+
+  useEffect(() => {
+    const handleShortcut = (event: KeyboardEvent) => {
+      if (
+        (event.metaKey || event.ctrlKey)
+        && event.key.toLowerCase() === "n"
+        && !createProjectOpen
+        && !editProject
+        && !editTopic
+        && !deleteTopic
+      ) {
+        event.preventDefault();
+        onNewTopic();
+      }
+    };
+    window.addEventListener("keydown", handleShortcut);
+    return () => window.removeEventListener("keydown", handleShortcut);
+  }, [createProjectOpen, deleteTopic, editProject, editTopic, onNewTopic]);
+
+  useEffect(() => {
+    if (!expandedProjectId) return;
+    setExpandedProjects((current) => {
+      if (current.has(expandedProjectId)) return current;
+      const next = new Set(current);
+      next.add(expandedProjectId);
+      return next;
+    });
+  }, [expandedProjectId]);
+
+  const visibleProjects = showAllProjects ? projects : projects.slice(0, 5);
+  const recentTopics = topics.filter((topic) => !topic.projectId).slice(0, 12);
+  const topicsByProject = useMemo(() => {
+    const grouped = new Map<string, ChatSession[]>();
+    for (const topic of topics) {
+      if (!topic.projectId) continue;
+      const projectTopics = grouped.get(topic.projectId) || [];
+      projectTopics.push(topic);
+      grouped.set(topic.projectId, projectTopics);
+    }
+    return grouped;
+  }, [topics]);
+
+  const handleProjectClick = (projectId: string, active: boolean) => {
+    setExpandedProjects((current) => {
+      const next = new Set(current);
+      if (next.has(projectId)) next.delete(projectId);
+      else next.add(projectId);
+      return next;
+    });
+    if (!active) onSelectProject(projectId);
+  };
+
+  return (
+    <>
+      <button
+        type="button"
+        className="fixed inset-0 z-40 bg-black/20 xl:hidden"
+        onClick={onClose}
+        aria-label={tr("Close Agent panel", "关闭 Agent 侧栏")}
+      />
+      <aside
+        ref={panelRef}
+        data-resizable-right-panel="true"
+        style={{ "--bot-panel-width": `${panelWidth}px` } as React.CSSProperties}
+        className="fixed inset-y-0 right-0 z-50 flex h-dvh w-[min(94vw,420px)] shrink-0 flex-col border-l border-border bg-background shadow-2xl xl:relative xl:z-30 xl:-mt-14 xl:h-screen xl:w-[var(--bot-panel-width)] xl:min-w-[300px] xl:max-w-[calc(100%_-_520px)] xl:shadow-none"
+      >
+        <button
+          type="button"
+          className={`absolute inset-y-0 left-0 z-40 hidden w-3 -translate-x-1/2 cursor-col-resize touch-none outline-none after:absolute after:inset-y-0 after:left-1/2 after:w-px after:transition-colors hover:after:bg-foreground/25 focus-visible:after:bg-ring xl:block ${
+            resizing ? "after:bg-ring" : "after:bg-transparent"
+          }`}
+          onPointerDown={(event) => {
+            event.preventDefault();
+            resizeStartRef.current = {
+              x: event.clientX,
+              width: panelRef.current?.getBoundingClientRect().width || panelWidth,
+            };
+            latestPanelWidthRef.current = resizeStartRef.current.width;
+            setResizing(true);
+          }}
+          onDoubleClick={() => commitPanelWidth(BOT_PANEL_DEFAULT_WIDTH)}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowLeft") {
+              event.preventDefault();
+              commitPanelWidth(panelWidth + 16);
+            } else if (event.key === "ArrowRight") {
+              event.preventDefault();
+              commitPanelWidth(panelWidth - 16);
+            } else if (event.key === "Home") {
+              event.preventDefault();
+              commitPanelWidth(BOT_PANEL_DEFAULT_WIDTH);
+            }
+          }}
+          aria-label={tr("Resize right panel", "调整右侧栏宽度")}
+          aria-orientation="vertical"
+          aria-valuemin={BOT_PANEL_MIN_WIDTH}
+          aria-valuemax={BOT_PANEL_MAX_WIDTH}
+          aria-valuenow={panelWidth}
+          role="separator"
+          title={tr("Drag to resize · Double-click to reset", "拖动调整宽度 · 双击恢复默认宽度")}
+        />
+        <div className="flex h-14 shrink-0 items-center justify-between gap-3 px-5">
+          <h2 className="min-w-0 truncate text-sm font-semibold text-foreground">
+            {t("common.agent")}
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex size-8 items-center justify-center rounded-lg text-muted-foreground transition hover:bg-black/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring dark:hover:bg-white/8"
+            aria-label={tr("Collapse Agent panel", "收起 Agent 侧栏")}
+            title={tr("Collapse", "收起")}
+          >
+            <ChevronsRight className="size-[18px]" />
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-8 pt-1">
+          <section aria-label={t("common.agent")} className="mb-5">
+            <div className="grid grid-cols-3 gap-1 rounded-2xl border border-border/70 bg-muted/25 p-1">
+              {BOT_QUICK_ACTIONS.map((action) => {
+                const Icon = action.icon;
+                const label = t(action.labelKey);
+                const disabled =
+                  (action.action === "workspace" && !workspaceAvailable)
+                  || (action.ownerOnly && agentRole !== "owner");
+                const title = action.action === "workspace" && !workspaceAvailable
+                  ? t("workspace.unavailable")
+                  : label;
+                return (
+                  <button
+                    key={action.id}
+                    type="button"
+                    onClick={() => {
+                      if (action.action === "workspace") onOpenWorkspace();
+                      else if (action.action === "settings") onOpenSettings();
+                      else if (action.tab) onOpenSettingsTab(action.tab, action.userOnly);
+                    }}
+                    disabled={disabled}
+                    className="group flex min-h-[68px] min-w-0 flex-col items-center justify-center gap-1.5 rounded-xl px-1.5 py-2 text-muted-foreground transition-[background-color,color,box-shadow,transform] hover:-translate-y-px hover:bg-background hover:text-foreground hover:shadow-sm focus-visible:bg-background focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:translate-y-0 disabled:hover:bg-transparent disabled:hover:text-muted-foreground disabled:hover:shadow-none dark:hover:bg-white/[0.06] dark:hover:shadow-none dark:disabled:hover:bg-transparent"
+                    aria-label={label}
+                    title={title}
+                  >
+                    <Icon className="size-[18px] stroke-[1.7] transition-transform group-hover:scale-105" />
+                    <span className="max-w-full truncate text-[12px] font-medium leading-4">
+                      {label}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+
+          <section>
+            <div className="mb-1 flex h-7 items-center justify-between px-1">
+              <h3 className="text-sm font-semibold text-muted-foreground">{tr("Projects", "项目")}</h3>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      onClick={() => setCreateProjectOpen(true)}
+                      className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition hover:bg-black/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring dark:hover:bg-white/8"
+                      aria-label={tr("New project", "新建项目")}
+                    >
+                      <FolderPlus className="size-4" />
+                    </button>
+                  }
+                />
+                <TooltipContent side="left">{tr("New project", "新建项目")}</TooltipContent>
+              </Tooltip>
+            </div>
+            {projects.length === 0 ? (
+              <p className="px-2 py-1.5 text-sm leading-5 text-muted-foreground/75">{tr("No projects yet", "还没有项目")}</p>
+            ) : (
+              <div>
+                {visibleProjects.map((project) => {
+                  const active = project.id === activeProjectId;
+                  const open = expandedProjects.has(project.id);
+                  const projectTopics = topicsByProject.get(project.id) || [];
+                  return (
+                    <div key={project.id}>
+                      <div
+                        className={`group relative -ml-2 w-[calc(100%+0.5rem)] rounded-xl transition-colors ${
+                          active
+                            ? "bg-black/[0.07] dark:bg-white/[0.11]"
+                            : "hover:bg-black/[0.04] dark:hover:bg-white/[0.07]"
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => handleProjectClick(project.id, active)}
+                          className="flex h-10 w-full min-w-0 items-center gap-2.5 rounded-xl pl-[1.125rem] pr-[4.5rem] text-left focus-visible:ring-2 focus-visible:ring-ring"
+                          aria-current={active ? "page" : undefined}
+                          aria-expanded={open}
+                          title={project.name}
+                        >
+                          {open ? (
+                            <FolderOpen className="size-[17px] shrink-0 text-foreground/85" />
+                          ) : (
+                            <Folder className="size-[17px] shrink-0 text-foreground/85" />
+                          )}
+                          <span className="min-w-0 flex-1 truncate text-[15px] font-medium">
+                            {project.name}
+                          </span>
+                        </button>
+                        <div className={`absolute right-2 top-1/2 flex -translate-y-1/2 items-center gap-0.5 transition-opacity ${
+                          active ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+                        }`}>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger
+                              render={
+                                <button
+                                  type="button"
+                                  onClick={(event) => event.stopPropagation()}
+                                  className="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-background/70 hover:text-foreground"
+                                  aria-label={tr("More actions for {{name}}", "{{name}} 的更多操作", { name: project.name })}
+                                >
+                                  <MoreHorizontal className="size-4" />
+                                </button>
+                              }
+                            />
+                            <DropdownMenuContent align="end" className="w-40 rounded-xl">
+                              <DropdownMenuItem onClick={() => onSelectProject(project.id)}>
+                                <Plus className="size-4 text-muted-foreground" />
+                                {tr("New chat in project", "新建项目话题")}
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => setEditProject(project)}>
+                                <Pencil className="size-4 text-muted-foreground" />
+                                {tr("Edit project", "编辑项目")}
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setEditProject(project);
+                            }}
+                            className="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-background/70 hover:text-foreground"
+                            aria-label={tr("Edit {{name}}", "编辑 {{name}}", { name: project.name })}
+                            title={tr("Edit project", "编辑项目")}
+                          >
+                            <Pencil className="size-4" />
+                          </button>
+                        </div>
+                      </div>
+                      {open && projectTopics.length > 0 && (
+                        <div className="-ml-2 mt-1 w-[calc(100%+0.5rem)] space-y-1 pb-1">
+                          {projectTopics.map((topic) => (
+                            <BotTopicNavigationRow
+                              key={topic.id}
+                              topic={topic}
+                              active={topic.id === activeTopicId}
+                              nested
+                              onSelect={() => onSelectTopic(topic.id)}
+                              onRename={() => setEditTopic(topic)}
+                              onDelete={() => setDeleteTopic(topic)}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {projects.length > 5 && (
+              <button
+                type="button"
+                onClick={() => setShowAllProjects((value) => !value)}
+                className="mt-1 rounded-lg px-1 py-1 text-sm font-medium text-muted-foreground transition hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {showAllProjects ? tr("Show less", "收起") : tr("Show all", "展开显示")}
+              </button>
+            )}
+          </section>
+
+          <section className="mt-5">
+            <div className="mb-1 flex h-7 items-center justify-between px-1">
+              <h3 className="text-sm font-semibold text-muted-foreground">{tr("Recent", "最近")}</h3>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      onClick={onNewTopic}
+                      className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition hover:bg-black/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring dark:hover:bg-white/8"
+                      aria-label={tr("New chat", "新建对话")}
+                    >
+                      <SquarePen className="size-4" />
+                    </button>
+                  }
+                />
+                <TooltipContent side="left">
+                  <span>{tr("New chat", "新建对话")}</span>
+                  <kbd data-slot="kbd" className="bg-background/15 px-1.5 py-0.5 text-[10px]">⌘N</kbd>
+                </TooltipContent>
+              </Tooltip>
+            </div>
+            {recentTopics.length === 0 ? (
+              <p className="px-2 py-1.5 text-sm leading-5 text-muted-foreground/75">{tr("Recent chats appear here after you send a message.", "发送消息后，最近话题会显示在这里。")}</p>
+            ) : (
+              <div>
+                {recentTopics.map((topic) => {
+                  const active = topic.id === activeTopicId;
+                  const topicTitle = topic.title?.trim() || topic.preview?.trim() || tr("Untitled chat", "未命名话题");
+                  return (
+                    <div
+                      key={topic.id}
+                      className={`group relative -ml-2 w-[calc(100%+0.5rem)] rounded-md transition-colors ${
+                        active
+                          ? "bg-black/[0.07] font-medium text-foreground dark:bg-white/[0.11]"
+                          : "hover:bg-black/[0.04] dark:hover:bg-white/[0.07]"
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => onSelectTopic(topic.id)}
+                        className="block w-full truncate rounded-md py-1.5 pl-4 pr-9 text-left text-[15px] leading-5 focus-visible:ring-2 focus-visible:ring-ring"
+                        aria-current={active ? "page" : undefined}
+                      >
+                        {topicTitle}
+                      </button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger
+                          render={
+                            <button
+                              type="button"
+                              onClick={(event) => event.stopPropagation()}
+                              className={`absolute right-1 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-opacity hover:bg-background/60 hover:text-foreground aria-expanded:opacity-100 ${
+                                active ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+                              }`}
+                              aria-label={tr("More actions for {{name}}", "{{name}} 的更多操作", { name: topicTitle })}
+                            >
+                              <MoreHorizontal className="size-4" />
+                            </button>
+                          }
+                        />
+                        <DropdownMenuContent align="end" className="w-36 rounded-xl">
+                          <DropdownMenuItem onClick={() => setEditTopic(topic)}>
+                            <Pencil className="size-4 text-muted-foreground" />
+                            {tr("Rename", "重命名")}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => setDeleteTopic(topic)}
+                            className="text-destructive focus:text-destructive"
+                          >
+                            <Trash2 className="size-4 text-destructive" />
+                            {tr("Delete", "删除")}
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        </div>
+      </aside>
+      {createProjectOpen && (
+        <BotProjectCreateDialog
+          agentId={agentId}
+          onClose={() => setCreateProjectOpen(false)}
+          onCreated={(project) => {
+            onProjectsChanged();
+            setCreateProjectOpen(false);
+            onSelectProject(project.id);
+          }}
+        />
+      )}
+      {editProject && (
+        <BotProjectEditDialog
+          key={editProject.id}
+          agentId={agentId}
+          project={editProject}
+          onClose={() => setEditProject(null)}
+          onSaved={onProjectsChanged}
+        />
+      )}
+      {editTopic && (
+        <BotTopicEditDialog
+          key={editTopic.id}
+          agentId={agentId}
+          topic={editTopic}
+          onClose={() => setEditTopic(null)}
+          onSaved={onTopicsChanged}
+        />
+      )}
+      {deleteTopic && (
+        <BotTopicDeleteDialog
+          key={deleteTopic.id}
+          agentId={agentId}
+          topic={deleteTopic}
+          onClose={() => setDeleteTopic(null)}
+          onDeleted={() => {
+            const deletedActiveTopic = deleteTopic.id === activeTopicId;
+            setDeleteTopic(null);
+            onTopicsChanged();
+            if (deletedActiveTopic) onNewTopic();
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+function BotTopicNavigationRow({
+  topic,
+  active,
+  nested = false,
+  onSelect,
+  onRename,
+  onDelete,
+}: {
+  topic: ChatSession;
+  active: boolean;
+  nested?: boolean;
+  onSelect: () => void;
+  onRename: () => void;
+  onDelete: () => void;
+}) {
+  const { tr } = useLocale();
+  const topicTitle = topic.title?.trim() || topic.preview?.trim() || tr("Untitled chat", "未命名话题");
+  return (
+    <div
+      className={`group relative rounded-md transition-colors ${
+        active
+          ? "bg-black/[0.07] font-medium text-foreground dark:bg-white/[0.11]"
+          : "hover:bg-black/[0.04] dark:hover:bg-white/[0.07]"
+      }`}
     >
-      <span className="truncate">{title || fallback}</span>
-      <Pencil className="h-3 w-3 shrink-0 text-muted-foreground/50 opacity-0 transition-opacity group-hover:opacity-100" />
-    </button>
+      <button
+        type="button"
+        onClick={onSelect}
+        className={`block w-full truncate rounded-md py-1.5 pr-8 text-left leading-5 focus-visible:ring-2 focus-visible:ring-ring ${
+          nested ? "pl-[2.75rem] text-[15px]" : "px-2 text-[15px]"
+        }`}
+        aria-current={active ? "page" : undefined}
+      >
+        {topicTitle}
+      </button>
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <button
+              type="button"
+              onClick={(event) => event.stopPropagation()}
+              className={`absolute right-1 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-opacity hover:bg-background/60 hover:text-foreground aria-expanded:opacity-100 ${
+                active ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+              }`}
+              aria-label={tr("More actions for {{name}}", "{{name}} 的更多操作", { name: topicTitle })}
+            >
+              <MoreHorizontal className="size-4" />
+            </button>
+          }
+        />
+        <DropdownMenuContent align="end" className="w-36 rounded-xl">
+          <DropdownMenuItem onClick={onRename}>
+            <Pencil className="size-4 text-muted-foreground" />
+            {tr("Rename", "重命名")}
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onClick={onDelete}
+            className="text-destructive focus:text-destructive"
+          >
+            <Trash2 className="size-4 text-destructive" />
+            {tr("Delete", "删除")}
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
+}
+
+function BotProjectCreateDialog({
+  agentId,
+  onClose,
+  onCreated,
+}: {
+  agentId: string;
+  onClose: () => void;
+  onCreated: (project: ProjectEntry) => void;
+}) {
+  const { tr } = useLocale();
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const save = async () => {
+    const nextName = name.trim();
+    if (!nextName || saving) return;
+    setSaving(true);
+    setError("");
+    try {
+      const result = await createProject(agentId, {
+        name: nextName,
+        description: description.trim(),
+      });
+      if ("error" in result) {
+        setError(result.error || tr("Creation failed. Try again.", "创建失败，请重试。"));
+        return;
+      }
+      onCreated(result);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : tr("Creation failed. Try again.", "创建失败，请重试。"));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{tr("New project", "新建项目")}</DialogTitle>
+          <DialogDescription>{tr("Organize related chats and files in one project.", "将相关对话和文件整理到同一个项目中。")}</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div>
+            <label className="mb-1.5 block text-xs font-medium" htmlFor="new-bot-project-name">{tr("Project name", "项目名称")}</label>
+            <Input
+              id="new-bot-project-name"
+              autoFocus
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void save();
+                }
+              }}
+            />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-medium" htmlFor="new-bot-project-description">{tr("Project description", "项目说明")}</label>
+            <Textarea
+              id="new-bot-project-description"
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+              rows={3}
+            />
+          </div>
+          {error && <p className="text-sm text-destructive">{error}</p>}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={saving}>{tr("Cancel", "取消")}</Button>
+          <Button onClick={() => void save()} disabled={saving || !name.trim()}>
+            {saving ? tr("Creating…", "创建中…") : tr("Create", "创建")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function BotTopicEditDialog({
+  agentId,
+  topic,
+  onClose,
+  onSaved,
+}: {
+  agentId: string;
+  topic: ChatSession;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const { tr } = useLocale();
+  const currentTitle = topic.title?.trim() || topic.preview?.trim() || tr("Untitled chat", "未命名话题");
+  const [title, setTitle] = useState(currentTitle);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const save = async () => {
+    const nextTitle = title.trim();
+    if (!nextTitle || saving) return;
+    if (nextTitle === currentTitle) {
+      onClose();
+      return;
+    }
+    setSaving(true);
+    setError("");
+    try {
+      const result = await renameChatSession(agentId, topic.id, nextTitle);
+      if (result?.error) {
+        setError(result.error);
+        return;
+      }
+      onSaved();
+      onClose();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : tr("Save failed. Try again.", "保存失败，请重试。"));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{tr("Rename chat", "重命名对话")}</DialogTitle>
+          <DialogDescription>{tr("Use a title that makes this chat easier to find.", "使用更容易查找的话题名称。")}</DialogDescription>
+        </DialogHeader>
+        <Input
+          autoFocus
+          value={title}
+          onChange={(event) => setTitle(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+            if (event.key === "Enter") {
+              event.preventDefault();
+              void save();
+            }
+          }}
+        />
+        {error && <p className="text-sm text-destructive">{error}</p>}
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={saving}>{tr("Cancel", "取消")}</Button>
+          <Button onClick={() => void save()} disabled={saving || !title.trim()}>
+            {saving ? tr("Saving…", "保存中…") : tr("Save", "保存")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function BotTopicDeleteDialog({
+  agentId,
+  topic,
+  onClose,
+  onDeleted,
+}: {
+  agentId: string;
+  topic: ChatSession;
+  onClose: () => void;
+  onDeleted: () => void;
+}) {
+  const { tr } = useLocale();
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState("");
+  const topicTitle = topic.title?.trim() || topic.preview?.trim() || tr("Untitled chat", "未命名话题");
+
+  const remove = async () => {
+    if (deleting) return;
+    setDeleting(true);
+    setError("");
+    try {
+      const result = await deleteChatSession(agentId, topic.id);
+      if (result?.error) {
+        setError(result.error);
+        return;
+      }
+      onDeleted();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : tr("Deletion failed. Try again.", "删除失败，请重试。"));
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  return (
+    <AlertDialog open onOpenChange={(open) => !open && onClose()}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{tr("Delete chat", "删除对话")}</AlertDialogTitle>
+          <AlertDialogDescription>
+            {tr("Delete “{{title}}”? The complete chat history will be permanently deleted.", "确定删除“{{title}}”吗？完整对话记录将被永久删除。", { title: topicTitle })}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        {error && <p className="text-sm text-destructive">{error}</p>}
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={deleting}>{tr("Cancel", "取消")}</AlertDialogCancel>
+          <AlertDialogAction
+            disabled={deleting}
+            onClick={(event) => {
+              event.preventDefault();
+              void remove();
+            }}
+            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+          >
+            {deleting ? tr("Deleting…", "删除中…") : tr("Delete", "删除")}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+function BotProjectEditDialog({
+  agentId,
+  project,
+  onClose,
+  onSaved,
+}: {
+  agentId: string;
+  project: ProjectEntry;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const { tr } = useLocale();
+  const [name, setName] = useState(project.name);
+  const [description, setDescription] = useState(project.description || "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const save = async () => {
+    const nextName = name.trim();
+    if (!nextName || saving) return;
+    setSaving(true);
+    setError("");
+    try {
+      const result = await updateProject(agentId, project.id, {
+        name: nextName,
+        description: description.trim(),
+      });
+      if ("error" in result && result.error) {
+        setError(result.error);
+        return;
+      }
+      onSaved();
+      onClose();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : tr("Save failed. Try again.", "保存失败，请重试。"));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{tr("Edit project", "编辑项目")}</DialogTitle>
+          <DialogDescription>{tr("Change the project name and description without moving its files.", "修改项目名称和说明，不会移动项目中的文件。")}</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div>
+            <label className="mb-1.5 block text-xs font-medium" htmlFor="bot-project-name">{tr("Project name", "项目名称")}</label>
+            <Input
+              id="bot-project-name"
+              autoFocus
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") void save();
+              }}
+            />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-medium" htmlFor="bot-project-description">{tr("Project description", "项目说明")}</label>
+            <Textarea
+              id="bot-project-description"
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+              rows={3}
+            />
+          </div>
+          {error && <p className="text-sm text-destructive">{error}</p>}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={saving}>{tr("Cancel", "取消")}</Button>
+          <Button onClick={() => void save()} disabled={saving || !name.trim()}>
+            {saving ? tr("Saving…", "保存中…") : tr("Save", "保存")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -2815,6 +4015,7 @@ function ChatHeaderTitle({ title, fallback, onSave }: ChatHeaderTitleProps) {
  *  container (ToolRoundsBundle) can stack rounds without each one
  *  re-imposing its own bubble alignment. */
 function ToolCallGroup({ msg, surfacedSrcs, agentId, sessionId, nested = false, roundIndex, subagentProgress, onKnowledgeCitationClick }: { msg: ChatMessage; surfacedSrcs?: ReadonlySet<string>; agentId: string; sessionId: string; nested?: boolean; roundIndex?: number; subagentProgress?: { iteration?: number; max?: number; phase?: "thinking" | "running" | "final-delivery" | "done"; tools?: string[] } | null; onKnowledgeCitationClick?: (source: KnowledgeSource) => void }) {
+  const { tr } = useLocale();
   const [groupOpen, setGroupOpen] = useState(false);
   const [expandedTool, setExpandedTool] = useState<Record<string, boolean>>({});
 
@@ -2875,8 +4076,8 @@ function ToolCallGroup({ msg, surfacedSrcs, agentId, sessionId, nested = false, 
             )}
             <span className="font-medium text-foreground">
               {allDone
-                ? `Executed ${tools.length} tool${tools.length > 1 ? "s" : ""}`
-                : `Running tools (${doneCount}/${tools.length})...`}
+                ? tr("Executed {{count}} tool(s)", "已执行 {{count}} 个工具", { count: tools.length })
+                : tr("Running tools ({{done}}/{{total}})…", "正在运行工具（{{done}}/{{total}}）…", { done: doneCount, total: tools.length })}
             </span>
             <span className="text-muted-foreground/60 text-[11px] flex-1 text-left truncate">
               {tools.map((tc) => tc.name).join(", ")}
@@ -2905,10 +4106,10 @@ function ToolCallGroup({ msg, surfacedSrcs, agentId, sessionId, nested = false, 
                     {tc.metadata?.sandbox && (
                       <span
                         className="flex items-center gap-0.5 rounded bg-emerald-500/10 px-1 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400"
-                        title="Executed inside a sandboxed container"
+                        title={tr("Executed inside a sandboxed container", "在沙盒容器中执行")}
                       >
                         <ShieldCheck className="h-2.5 w-2.5" />
-                        sandbox
+                        {tr("sandbox", "沙盒")}
                       </span>
                     )}
                     <span className="text-muted-foreground/50 font-mono truncate flex-1 text-left text-[11px]">
@@ -2943,7 +4144,7 @@ function ToolCallGroup({ msg, surfacedSrcs, agentId, sessionId, nested = false, 
                   {expandedTool[tc.id] && (
                     <div className="px-3 py-2 space-y-2 bg-muted/20">
                       <div>
-                        <p className="text-[10px] font-medium text-muted-foreground uppercase mb-1">Input</p>
+                        <p className="text-[10px] font-medium text-muted-foreground uppercase mb-1">{tr("Input", "输入")}</p>
                         <pre className="text-xs font-mono bg-muted/50 rounded p-2 overflow-x-auto whitespace-pre-wrap break-all max-h-40">
                           {(() => {
                             try { return JSON.stringify(JSON.parse(tc.arguments), null, 2); }
@@ -2953,7 +4154,7 @@ function ToolCallGroup({ msg, surfacedSrcs, agentId, sessionId, nested = false, 
                       </div>
                       {tc.result != null ? (
                         <div>
-                          <p className="text-[10px] font-medium text-muted-foreground uppercase mb-1">Output</p>
+                          <p className="text-[10px] font-medium text-muted-foreground uppercase mb-1">{tr("Output", "输出")}</p>
                           <pre className="text-xs font-mono bg-muted/50 rounded p-2 overflow-x-auto whitespace-pre-wrap break-all max-h-60">
                             {tc.result.length > 2000 ? tc.result.slice(0, 2000) + "..." : tc.result}
                           </pre>
@@ -2965,18 +4166,20 @@ function ToolCallGroup({ msg, surfacedSrcs, agentId, sessionId, nested = false, 
                             const mx = subagentProgress.max;
                             const phase = subagentProgress.phase;
                             const tools = subagentProgress.tools;
-                            const counter = it && mx ? `Iteration ${it}/${mx}` : "Sub-agent running";
+                            const counter = it && mx
+                              ? tr("Iteration {{current}}/{{max}}", "迭代 {{current}}/{{max}}", { current: it, max: mx })
+                              : tr("Sub-agent running", "子 Agent 正在运行");
                             let detail = "";
-                            if (phase === "thinking") detail = "thinking";
-                            else if (phase === "running" && tools?.length) detail = `running ${tools.join(", ")}`;
-                            else if (phase === "final-delivery") detail = "synthesizing final answer";
+                            if (phase === "thinking") detail = tr("thinking", "思考中");
+                            else if (phase === "running" && tools?.length) detail = tr("running {{tools}}", "正在运行 {{tools}}", { tools: tools.join(", ") });
+                            else if (phase === "final-delivery") detail = tr("synthesizing final answer", "正在整理最终回答");
                             return detail ? `${counter} · ${detail}` : counter;
                           })()}
                         </div>
                       ) : tc.name === "delegate_task" && tc.result == null && tc.id !== activeDelegateId ? (
-                        <p className="text-xs text-muted-foreground/60 italic">Queued (waiting on prior sub-agent)…</p>
+                        <p className="text-xs text-muted-foreground/60 italic">{tr("Queued (waiting for the previous sub-agent)…", "已排队（等待前一个子 Agent）…")}</p>
                       ) : (
-                        <p className="text-xs text-muted-foreground/60 italic">Executing...</p>
+                        <p className="text-xs text-muted-foreground/60 italic">{tr("Executing…", "正在执行…")}</p>
                       )}
                     </div>
                   )}
@@ -3021,6 +4224,7 @@ function ToolRoundsBundle({
   subagentProgress?: { iteration?: number; max?: number; phase?: "thinking" | "running" | "final-delivery" | "done"; tools?: string[] } | null;
   onKnowledgeCitationClick?: (source: KnowledgeSource) => void;
 }) {
+  const { tr } = useLocale();
   const [open, setOpen] = useState(false);
   const allTools = rounds.flatMap((r) => r.toolCalls || []);
   const totalTools = allTools.length;
@@ -3041,8 +4245,8 @@ function ToolRoundsBundle({
             )}
             <span className="font-medium text-foreground">
               {allDone
-                ? `Used ${totalTools} tool${totalTools === 1 ? "" : "s"} across ${rounds.length} round${rounds.length === 1 ? "" : "s"}`
-                : `Running tools… (${doneCount}/${totalTools} across ${rounds.length} rounds)`}
+                ? tr("Used {{tools}} tool(s) across {{rounds}} round(s)", "共 {{rounds}} 轮，使用了 {{tools}} 个工具", { tools: totalTools, rounds: rounds.length })
+                : tr("Running tools… ({{done}}/{{total}} across {{rounds}} rounds)", "正在运行工具…（{{rounds}} 轮中已完成 {{done}}/{{total}}）", { done: doneCount, total: totalTools, rounds: rounds.length })}
             </span>
             <span className="ml-auto" />
             {open ? (
@@ -3140,6 +4344,7 @@ function zipUrl(agentId: string, sessionId: string, projectId?: string): string 
 // BuildLogView renders the live scaffold/dev log as a scrolling terminal,
 // auto-pinned to the bottom so the latest pnpm-install lines stay visible.
 function BuildLogView({ text }: { text: string }) {
+  const { tr } = useLocale();
   const ref = useRef<HTMLPreElement>(null);
   useEffect(() => {
     const el = ref.current;
@@ -3150,22 +4355,23 @@ function BuildLogView({ text }: { text: string }) {
       ref={ref}
       className="h-full w-full overflow-auto whitespace-pre-wrap break-words bg-zinc-950 px-4 py-3 text-left font-mono text-[11px] leading-relaxed text-zinc-300"
     >
-      {text || "Starting build…"}
+      {text || tr("Starting build…", "正在开始构建…")}
     </pre>
   );
 }
 
 function FilesPanel({ files, onOpen }: { files: ProducedFile[]; onOpen: () => void }) {
+  const { tr } = useLocale();
   return (
     <div className="mt-2 max-w-[85%]">
       <button
         type="button"
         onClick={onOpen}
-        className="group inline-flex items-center gap-2 rounded-lg border border-border bg-card/50 px-3 py-2 hover:bg-card/80 transition-colors"
-        title="Open workspace files"
+        className="group inline-flex items-center gap-2 rounded-lg border border-border bg-card/50 px-3 py-2 text-xs hover:bg-card/80 transition-colors"
+        title={tr("Open workspace files", "打开工作区文件")}
       >
-        <FolderOpen className="h-4 w-4 text-muted-foreground shrink-0 group-hover:text-foreground transition-colors" />
-        <span className="text-sm font-medium text-foreground">Open files</span>
+        <FolderOpen className="h-3.5 w-3.5 text-muted-foreground shrink-0 group-hover:text-foreground transition-colors" />
+        <span className="font-medium text-foreground">{tr("Open files", "打开文件")}</span>
         <span className="rounded-full bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground/80 tabular-nums">
           {files.length}
         </span>
@@ -3176,12 +4382,32 @@ function FilesPanel({ files, onOpen }: { files: ProducedFile[]; onOpen: () => vo
 
 const FILES_PANEL_MIN = 280;
 const FILES_PANEL_MAX = 1000; // wide enough to view a desktop preview iframe
-const FILES_PANEL_DEFAULT = 280;
+const FILES_PANEL_DEFAULT = BOT_PANEL_DEFAULT_WIDTH;
 const FILES_PANEL_KEY = "chat:filesPanelWidth";
 // When the user switches to the Preview tab and the panel is still narrow,
 // auto-grow to this so the embedded site isn't cramped. Transient (not
 // persisted), so the Code tab keeps its own saved width.
 const PREVIEW_AUTO_WIDTH = 760;
+
+function compactWorkspaceWidth(): number {
+  if (typeof window === "undefined") return FILES_PANEL_DEFAULT;
+  const botWidth = Number(window.localStorage.getItem(BOT_PANEL_WIDTH_KEY));
+  return Number.isFinite(botWidth)
+    && botWidth >= BOT_PANEL_MIN_WIDTH
+    && botWidth <= BOT_PANEL_MAX_WIDTH
+    ? botWidth
+    : FILES_PANEL_DEFAULT;
+}
+
+function expandedWorkspaceWidth(): number {
+  if (typeof window === "undefined") return PREVIEW_AUTO_WIDTH;
+  const stored = Number(window.localStorage.getItem(FILES_PANEL_KEY));
+  return Number.isFinite(stored)
+    && stored >= PREVIEW_AUTO_WIDTH
+    && stored <= FILES_PANEL_MAX
+    ? stored
+    : PREVIEW_AUTO_WIDTH;
+}
 
 // WorkspacePanel renders the files in the active scope:
 //   - chat scope (sessionId set): files produced in this conversation.
@@ -3390,6 +4616,8 @@ function WorkspacePanel({
   projectId,
   knowledgePreview,
   onClearKnowledgePreview,
+  onPreviewStateChange,
+  onBack,
   onClose,
 }: {
   agentId: string;
@@ -3397,8 +4625,11 @@ function WorkspacePanel({
   projectId?: string;
   knowledgePreview?: KnowledgeSource | null;
   onClearKnowledgePreview?: () => void;
+  onPreviewStateChange?: (active: boolean) => void;
+  onBack?: () => void;
   onClose: () => void;
 }) {
+  const { locale, t, tr } = useLocale();
   const [files, setFiles] = useState<WorkspaceFile[]>([]);
   const [loading, setLoading] = useState(false);
   const [previewing, setPreviewing] = useState<ProducedFile | null>(null);
@@ -3439,14 +4670,7 @@ function WorkspacePanel({
       cancelled = true;
     };
   }, []);
-  const [width, setWidth] = useState<number>(() => {
-    if (typeof window === "undefined") return FILES_PANEL_DEFAULT;
-    const stored = Number(window.localStorage.getItem(FILES_PANEL_KEY));
-    if (Number.isFinite(stored) && stored >= FILES_PANEL_MIN && stored <= FILES_PANEL_MAX) {
-      return stored;
-    }
-    return FILES_PANEL_DEFAULT;
-  });
+  const [width, setWidth] = useState<number>(compactWorkspaceWidth);
   const [resizing, setResizing] = useState(false);
 
   // Measure the panel's ACTUAL rendered width (not the `width` state, which
@@ -3466,6 +4690,7 @@ function WorkspacePanel({
   // Below this the secondary action icons fold into a "⋯" menu and the
   // "Files" label drops, so the header always fits the narrow panel.
   const compactHeader = panelW < 480;
+  const viewerExpanded = tab === "preview" || Boolean(previewing || knowledgePreview);
 
   useEffect(() => {
     if (!resizing) return;
@@ -3478,9 +4703,11 @@ function WorkspacePanel({
     };
     const handleUp = () => {
       setResizing(false);
-      try {
-        window.localStorage.setItem(FILES_PANEL_KEY, String(width));
-      } catch { /* ignore quota errors */ }
+      if (viewerExpanded) {
+        try {
+          window.localStorage.setItem(FILES_PANEL_KEY, String(width));
+        } catch { /* ignore quota errors */ }
+      }
     };
     window.addEventListener("mousemove", handleMove);
     window.addEventListener("mouseup", handleUp);
@@ -3492,7 +4719,7 @@ function WorkspacePanel({
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
     };
-  }, [resizing, width]);
+  }, [resizing, viewerExpanded, width]);
 
   const handleReveal = useCallback(async () => {
     if (!agentId || (!sessionId && !projectId)) return;
@@ -3504,12 +4731,12 @@ function WorkspacePanel({
         // toast lib we don't have. The message comes from the
         // backend (e.g. "S3-backed store, no host path").
         // eslint-disable-next-line no-alert
-        alert(res.error || "Could not open workspace folder");
+        alert(res.error || tr("Could not open workspace folder", "无法打开工作区文件夹"));
       }
     } finally {
       setRevealing(false);
     }
-  }, [agentId, sessionId, projectId]);
+  }, [agentId, sessionId, projectId, tr]);
 
   const refresh = useCallback(async () => {
     // Project scope (no session) is handled via projectId; chat scope
@@ -3566,7 +4793,7 @@ function WorkspacePanel({
     async (commit: string) => {
       if (!sessionId || restoring) return;
       // eslint-disable-next-line no-alert
-      if (!window.confirm("将此会话的工作区回滚到该版本？当前未提交的文件修改会被覆盖。")) return;
+      if (!window.confirm(tr("Restore this chat's workspace to this version? Current uncommitted file changes will be overwritten.", "将此会话的工作区回滚到该版本？当前未提交的文件修改会被覆盖。"))) return;
       setRestoring(true);
       try {
         await restoreSessionHistory(agentId, sessionId, commit);
@@ -3575,12 +4802,12 @@ function WorkspacePanel({
         await refresh();
       } catch (error) {
         // eslint-disable-next-line no-alert
-        alert("回滚失败：" + String(error));
+        alert(tr("Restore failed: {{error}}", "回滚失败：{{error}}", { error: String(error) }));
       } finally {
         setRestoring(false);
       }
     },
-    [agentId, sessionId, restoring, refresh],
+    [agentId, sessionId, restoring, refresh, tr],
   );
 
   // Switching conversations swaps the file tree to the new scope — clear the
@@ -3615,22 +4842,17 @@ function WorkspacePanel({
     };
   }, [tab, agentId, sessionId, projectId]);
 
-  // Open at a comfortable width: the 280px drag-floor is far too cramped to
-  // read a file tree + viewer. Grow to PREVIEW_AUTO_WIDTH on mount (panel
-  // open) — capped by the 70% container maxWidth, so it never overflows. The
-  // user can still drag narrower within the session; reopening re-widens.
+  // Default to the same width as the Bot panel and show only the file tree.
+  // Selecting a file (or the live Preview tab) promotes the workspace into
+  // its wide inspection mode; closing the viewer returns it to navigation.
   useEffect(() => {
-    setWidth((w) => (w < PREVIEW_AUTO_WIDTH ? Math.min(PREVIEW_AUTO_WIDTH, FILES_PANEL_MAX) : w));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Also grow when entering Preview / opening a file (in case the user dragged
-  // narrow earlier) so the iframe / viewer column isn't cramped.
-  useEffect(() => {
-    if (tab === "preview" || previewing || knowledgePreview) {
-      setWidth((w) => (w < PREVIEW_AUTO_WIDTH ? Math.min(PREVIEW_AUTO_WIDTH, FILES_PANEL_MAX) : w));
-    }
-  }, [tab, previewing, knowledgePreview]);
+    setWidth(viewerExpanded ? expandedWorkspaceWidth() : compactWorkspaceWidth());
+    if (!viewerExpanded) setTreeCollapsed(false);
+    onPreviewStateChange?.(viewerExpanded);
+    return () => {
+      if (viewerExpanded) onPreviewStateChange?.(false);
+    };
+  }, [onPreviewStateChange, viewerExpanded]);
 
   // The Preview tab only exists for coding projects with a live dev server.
   // When there's no app preview, hide the tab and snap back to Files.
@@ -3651,12 +4873,14 @@ function WorkspacePanel({
         // still bounds it to FILES_PANEL_MAX on very wide screens. overflow-
         // hidden is the belt-and-suspenders against inner content overflow.
         style={{ width, maxWidth: `min(${FILES_PANEL_MAX}px, 70%)` }}
-        className="relative z-30 hidden md:flex shrink-0 flex-col overflow-hidden border-l border-border bg-background -mt-12 h-screen"
+        className={`relative z-30 hidden md:flex shrink-0 flex-col overflow-hidden border-l border-border bg-background -mt-14 h-screen ${
+          resizing ? "" : "transition-[width] duration-200 ease-out motion-reduce:transition-none"
+        }`}
       >
         <div
           onMouseDown={(e) => { e.preventDefault(); setResizing(true); }}
           className={`absolute left-0 top-0 bottom-0 w-2 cursor-col-resize z-10 group ${resizing ? "" : ""}`}
-          title="Drag to resize"
+          title={tr("Drag to resize", "拖动调整大小")}
         >
           <div
             className={`absolute inset-y-0 left-1/2 w-px -translate-x-1/2 transition-colors ${
@@ -3666,8 +4890,24 @@ function WorkspacePanel({
         </div>
         <div className="flex h-12 items-center justify-between gap-2 border-b border-border px-4">
           <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
-            <FolderOpen className="h-4 w-4 shrink-0" />
-            {!compactHeader && <span className="truncate">{knowledgePreview ? "Knowledge" : "Workspace"}</span>}
+            {onBack ? (
+              <button
+                type="button"
+                onClick={onBack}
+                className="-ml-1 flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                aria-label={t("workspace.back")}
+                title={t("workspace.back")}
+              >
+                <ArrowLeft className="size-4" />
+              </button>
+            ) : (
+              <FolderOpen className="h-4 w-4 shrink-0" />
+            )}
+            {!compactHeader && (
+              <span className="truncate">
+                {knowledgePreview ? tr("Knowledge", "知识库") : t("workspace.title")}
+              </span>
+            )}
           </div>
           <div className="flex shrink-0 items-center gap-1">
             {/* Secondary actions: inline on a wide panel, folded into a "⋯"
@@ -3679,7 +4919,7 @@ function WorkspacePanel({
                   render={
                     <button
                       className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
-                      title="More actions"
+                      title={tr("More actions", "更多操作")}
                     >
                       <MoreHorizontal className="h-4 w-4" />
                     </button>
@@ -3693,7 +4933,7 @@ function WorkspacePanel({
                       }
                     >
                       <ExternalLink className="h-4 w-4 text-muted-foreground" />
-                      <span>Open in new tab</span>
+                      <span>{tr("Open in new tab", "在新标签页中打开")}</span>
                     </DropdownMenuItem>
                   )}
                   <DropdownMenuItem
@@ -3707,7 +4947,7 @@ function WorkspacePanel({
                     }}
                   >
                     <Download className="h-4 w-4 text-muted-foreground" />
-                    <span>Download zip</span>
+                    <span>{tr("Download zip", "下载 ZIP")}</span>
                   </DropdownMenuItem>
                   {deployMode === "self-hosted" && (
                     <DropdownMenuItem
@@ -3715,12 +4955,12 @@ function WorkspacePanel({
                       onClick={handleReveal}
                     >
                       <FolderSearch className="h-4 w-4 text-muted-foreground" />
-                      <span>Open in Finder</span>
+                      <span>{tr("Open in Finder", "在访达中打开")}</span>
                     </DropdownMenuItem>
                   )}
                   <DropdownMenuItem disabled={loading} onClick={refresh}>
                     <RefreshCw className="h-4 w-4 text-muted-foreground" />
-                    <span>Refresh</span>
+                    <span>{tr("Refresh", "刷新")}</span>
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -3732,7 +4972,7 @@ function WorkspacePanel({
                     target="_blank"
                     rel="noopener noreferrer"
                     className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
-                    title={`Open preview in new tab: ${appPreview.previewUrl}`}
+                    title={tr("Open preview in a new tab: {{url}}", "在新标签页中打开预览：{{url}}", { url: appPreview.previewUrl })}
                   >
                     <ExternalLink className="h-4 w-4" />
                   </a>
@@ -3745,7 +4985,7 @@ function WorkspacePanel({
                       ? "pointer-events-none text-muted-foreground/40"
                       : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
                   }`}
-                  title="Download all as zip"
+                  title={tr("Download all as zip", "下载全部文件为 ZIP")}
                 >
                   <Download className="h-4 w-4" />
                 </a>
@@ -3754,7 +4994,7 @@ function WorkspacePanel({
                     onClick={handleReveal}
                     disabled={revealing || (!sessionId && !projectId)}
                     className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:opacity-50"
-                    title="Open folder in Finder"
+                    title={tr("Open folder in Finder", "在访达中打开文件夹")}
                   >
                     <FolderSearch className="h-4 w-4" />
                   </button>
@@ -3763,7 +5003,7 @@ function WorkspacePanel({
                   onClick={refresh}
                   disabled={loading}
                   className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:opacity-50"
-                  title="Refresh"
+                  title={tr("Refresh", "刷新")}
                 >
                   <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
                 </button>
@@ -3773,15 +5013,15 @@ function WorkspacePanel({
                       onClick={toggleHistory}
                       disabled={restoring}
                       className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:opacity-50"
-                      title="版本历史（回滚工作区）"
+                      title={tr("Version history (restore workspace)", "版本历史（回滚工作区）")}
                     >
                       <RotateCcw className={`h-4 w-4 ${restoring ? "animate-spin" : ""}`} />
                     </button>
                     {historyOpen && (
                       <div className="absolute right-0 top-8 z-20 w-72 rounded-md border border-border bg-popover p-1 shadow-lg">
-                        <div className="px-2 py-1 text-xs font-medium text-muted-foreground">版本历史</div>
+                        <div className="px-2 py-1 text-xs font-medium text-muted-foreground">{tr("Version history", "版本历史")}</div>
                         {history.length === 0 ? (
-                          <div className="px-2 py-3 text-center text-xs text-muted-foreground">暂无历史快照</div>
+                          <div className="px-2 py-3 text-center text-xs text-muted-foreground">{tr("No history snapshots", "暂无历史快照")}</div>
                         ) : (
                           history.slice(0, 20).map((entry) => (
                             <div
@@ -3791,7 +5031,7 @@ function WorkspacePanel({
                               <div className="min-w-0 flex-1">
                                 <div className="truncate text-xs">{entry.message}</div>
                                 <div className="text-[10px] text-muted-foreground">
-                                  {entry.hash.slice(0, 7)} · {new Date(entry.time * 1000).toLocaleString()}
+                                  {entry.hash.slice(0, 7)} · {new Date(entry.time * 1000).toLocaleString(locale === "zh-CN" ? "zh-CN" : "en-US")}
                                 </div>
                               </div>
                               <button
@@ -3799,7 +5039,7 @@ function WorkspacePanel({
                                 disabled={restoring}
                                 className="shrink-0 rounded bg-muted px-2 py-0.5 text-xs hover:bg-accent disabled:opacity-50"
                               >
-                                回滚
+                                {tr("Restore", "回滚")}
                               </button>
                             </div>
                           ))
@@ -3813,7 +5053,7 @@ function WorkspacePanel({
             <button
               onClick={onClose}
               className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
-              title="Close"
+              title={tr("Close", "关闭")}
             >
               <X className="h-4 w-4" />
             </button>
@@ -3833,7 +5073,7 @@ function WorkspacePanel({
                     : "text-muted-foreground hover:text-foreground"
                 }`}
               >
-                Files
+                {tr("Files", "文件")}
               </button>
               <button
                 onClick={() => setTab("preview")}
@@ -3843,20 +5083,20 @@ function WorkspacePanel({
                     : "text-muted-foreground hover:text-foreground"
                 }`}
               >
-                Preview
+                {tr("Preview", "预览")}
                 {(appPreview.status === "starting" || appPreview.status === "scaffolding") && (
                   <RefreshCw className="h-3 w-3 animate-spin" />
                 )}
               </button>
             </div>
           ) : (
-            <span className="px-1 text-xs font-medium text-muted-foreground">Files</span>
+            <span className="px-1 text-xs font-medium text-muted-foreground">{tr("Files", "文件")}</span>
           )}
-          {tab === "code" && (
+          {tab === "code" && viewerExpanded && (
             <button
               onClick={() => setTreeCollapsed((c) => !c)}
               className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
-              title={treeCollapsed ? "Show file tree" : "Hide file tree"}
+              title={treeCollapsed ? tr("Show file tree", "显示文件树") : tr("Hide file tree", "隐藏文件树")}
             >
               {treeCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
             </button>
@@ -3865,8 +5105,8 @@ function WorkspacePanel({
         {tab === "code" ? (
           <div className="flex min-h-0 flex-1">
             {/* Left: file tree (collapsible). */}
-            {!treeCollapsed && (
-            <div className="flex w-56 shrink-0 flex-col border-r border-border">
+            {!(viewerExpanded && treeCollapsed) && (
+            <div className={`flex flex-col ${viewerExpanded ? "w-56 shrink-0 border-r border-border" : "w-full"}`}>
               {/* When there's a template baseline, default to showing only the
                   files THIS task changed; let the user flip to the full tree. */}
               {changed.available && (
@@ -3877,7 +5117,7 @@ function WorkspacePanel({
                       !showAll ? "bg-muted font-medium text-foreground" : "text-muted-foreground hover:text-foreground"
                     }`}
                   >
-                    Changed{changed.files.length ? ` (${changed.files.length})` : ""}
+                    {tr("Changed", "已更改")}{changed.files.length ? ` (${changed.files.length})` : ""}
                   </button>
                   <button
                     onClick={() => setShowAll(true)}
@@ -3885,7 +5125,7 @@ function WorkspacePanel({
                       showAll ? "bg-muted font-medium text-foreground" : "text-muted-foreground hover:text-foreground"
                     }`}
                   >
-                    All files
+                    {tr("All files", "全部文件")}
                   </button>
                 </div>
               )}
@@ -3897,10 +5137,10 @@ function WorkspacePanel({
                     return (
                       <p className="px-3 py-8 text-center text-sm text-muted-foreground">
                         {showChanged
-                          ? "No changes yet — the agent hasn't edited any files."
+                          ? tr("No changes yet — the agent has not edited any files.", "还没有更改——Agent 尚未编辑任何文件。")
                           : projectId
-                            ? "No files in this project yet."
-                            : "No files in this session yet."}
+                            ? tr("No files in this project yet.", "此项目中还没有文件。")
+                            : tr("No files in this session yet.", "此会话中还没有文件。")}
                       </p>
                     );
                   }
@@ -3921,6 +5161,7 @@ function WorkspacePanel({
             )}
             {/* Right: viewer for the selected file — overflow-hidden so wide
                 content (a PDF, long code lines) never scrolls the panel. */}
+            {viewerExpanded && (
             <div className="min-w-0 flex-1 overflow-hidden">
               {knowledgePreview ? (
                 <KnowledgeFileViewer
@@ -3938,13 +5179,9 @@ function WorkspacePanel({
                   file={previewing}
                   onClose={() => setPreviewing(null)}
                 />
-              ) : (
-                <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-muted-foreground">
-                  <FileText className="h-6 w-6" />
-                  <p className="text-sm">Select a file to view it here.</p>
-                </div>
-              )}
+              ) : null}
             </div>
+            )}
           </div>
         ) : (
           <div className="flex-1 min-h-0">
@@ -3952,7 +5189,7 @@ function WorkspacePanel({
               <iframe
                 src={appPreview.previewUrl}
                 className="h-full w-full border-0 bg-white"
-                title="App preview"
+                title={tr("App preview", "应用预览")}
               />
             ) : appPreview.status === "starting" || appPreview.status === "scaffolding" ? (
               <div className="flex h-full flex-col">
@@ -3960,8 +5197,8 @@ function WorkspacePanel({
                   <RefreshCw className="h-4 w-4 shrink-0 animate-spin" />
                   <span>
                     {appPreview.status === "scaffolding"
-                      ? "Installing dependencies — this can take a few minutes…"
-                      : "Starting the dev server…"}
+                      ? tr("Installing dependencies — this can take a few minutes…", "正在安装依赖——可能需要几分钟…")
+                      : tr("Starting the dev server…", "正在启动开发服务器…")}
                   </span>
                 </div>
                 <div className="min-h-0 flex-1">
@@ -3970,17 +5207,17 @@ function WorkspacePanel({
               </div>
             ) : appPreview.status === "crashed" ? (
               <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
-                <p className="text-sm text-destructive">Preview failed to start.</p>
+                <p className="text-sm text-destructive">{tr("Preview failed to start.", "预览启动失败。")}</p>
                 <p className="text-xs text-muted-foreground">
-                  Ask the agent to check the dev-server logs (app_preview_logs).
+                  {tr("Ask the agent to check the development server logs (app_preview_logs).", "请让 Agent 检查开发服务器日志（app_preview_logs）。")}
                 </p>
               </div>
             ) : (
               <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-muted-foreground">
                 <Eye className="h-6 w-6" />
-                <p className="text-sm">No preview yet.</p>
+                <p className="text-sm">{tr("No preview yet.", "还没有预览。")}</p>
                 <p className="text-xs">
-                  Ask the agent to build an app, and it shows up here.
+                  {tr("Ask the agent to build an app, and it will appear here.", "让 Agent 构建应用后，预览会显示在这里。")}
                 </p>
               </div>
             )}
@@ -3991,22 +5228,11 @@ function WorkspacePanel({
   );
 }
 
-function formatRelativeTime(ts?: number): string {
-  if (!ts) return "—";
-  const d = new Date(ts * 1000);
-  const now = Date.now();
-  const diff = now - d.getTime();
-  if (diff < 60_000) return "just now";
-  if (diff < 3600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  if (diff < 86400_000) return `${Math.floor(diff / 3600_000)}h ago`;
-  if (diff < 7 * 86400_000) return `${Math.floor(diff / 86400_000)}d ago`;
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
-
 // FileViewer renders a selected workspace file inline (right column of the
 // Files tab): image / pdf / markdown / highlighted text / rendered-or-source
 // HTML. onClose, when given, deselects the file.
 function KnowledgeFileViewer({ agentId, source, onClose }: { agentId: string; source: KnowledgeSource; onClose?: () => void }) {
+  const { tr } = useLocale();
   const storedName = source.path.startsWith("knowledge/") ? source.path.slice("knowledge/".length) : source.path;
   const [file, setFile] = useState<{ name: string; content: string; size: number; hash?: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -4038,8 +5264,8 @@ function KnowledgeFileViewer({ agentId, source, onClose }: { agentId: string; so
           </div>
           <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
             {source.id}
-            {source.chunk ? ` · chunk ${source.chunk}` : ""}
-            {source.score ? ` · score ${source.score}` : ""}
+            {source.chunk ? ` · ${tr("chunk", "分块")} ${source.chunk}` : ""}
+            {source.score ? ` · ${tr("score", "相关度")} ${source.score}` : ""}
             {file?.hash ? ` · ${file.hash.slice(0, 8)}` : ""}
           </p>
         </div>
@@ -4048,7 +5274,7 @@ function KnowledgeFileViewer({ agentId, source, onClose }: { agentId: string; so
             <button
               onClick={() => setView(view === "rendered" ? "source" : "rendered")}
               className="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted/50"
-              title={view === "rendered" ? "View source" : "View rendered"}
+              title={view === "rendered" ? tr("View source", "查看源码") : tr("View rendered", "查看渲染结果")}
             >
               {view === "rendered" ? <Code2 className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
             </button>
@@ -4057,7 +5283,7 @@ function KnowledgeFileViewer({ agentId, source, onClose }: { agentId: string; so
             <button
               onClick={onClose}
               className="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted/50"
-              title="Close knowledge file"
+              title={tr("Close knowledge file", "关闭知识库文件")}
             >
               <X className="h-4 w-4" />
             </button>
@@ -4066,9 +5292,9 @@ function KnowledgeFileViewer({ agentId, source, onClose }: { agentId: string; so
       </div>
       <div className="min-h-0 flex-1">
         {error ? (
-          <p className="p-4 text-sm text-destructive">Failed to load: {error}</p>
+          <p className="p-4 text-sm text-destructive">{tr("Failed to load: {{error}}", "加载失败：{{error}}", { error })}</p>
         ) : !file ? (
-          <p className="p-4 text-sm text-muted-foreground">Loading…</p>
+          <p className="p-4 text-sm text-muted-foreground">{tr("Loading…", "正在加载…")}</p>
         ) : preview !== "text" && view === "rendered" ? (
           <div className="h-full overflow-auto p-4">
             <ChatMarkdown text={file.content} />
@@ -4086,6 +5312,7 @@ function KnowledgeFileViewer({ agentId, source, onClose }: { agentId: string; so
 }
 
 function FileViewer({ agentId, file, onClose }: { agentId: string; file: ProducedFile; onClose?: () => void }) {
+  const { tr } = useLocale();
   const { preview } = fileKind(file.path);
   const src = fileUrl(agentId, file.path, false);
   const downloadUrl = fileUrl(agentId, file.path, true);
@@ -4124,7 +5351,7 @@ function FileViewer({ agentId, file, onClose }: { agentId: string; file: Produce
               <button
                 onClick={() => setView(view === "rendered" ? "source" : "rendered")}
                 className="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted/50"
-                title={view === "rendered" ? "View source" : "View rendered"}
+                title={view === "rendered" ? tr("View source", "查看源码") : tr("View rendered", "查看渲染结果")}
               >
                 {view === "rendered" ? <Code2 className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               </button>
@@ -4134,7 +5361,7 @@ function FileViewer({ agentId, file, onClose }: { agentId: string; file: Produce
               target="_blank"
               rel="noopener noreferrer"
               className="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted/50"
-              title="Open in new tab"
+              title={tr("Open in new tab", "在新标签页中打开")}
             >
               <ExternalLink className="h-4 w-4" />
             </a>
@@ -4142,7 +5369,7 @@ function FileViewer({ agentId, file, onClose }: { agentId: string; file: Produce
               <button
                 onClick={onClose}
                 className="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted/50"
-                title="Close file"
+                title={tr("Close file", "关闭文件")}
               >
                 <X className="h-4 w-4" />
               </button>
@@ -4177,9 +5404,9 @@ function FileViewer({ agentId, file, onClose }: { agentId: string; file: Produce
                 </div>
               )
             ) : error ? (
-              <p className="p-4 text-sm text-destructive">Failed to load: {error}</p>
+              <p className="p-4 text-sm text-destructive">{tr("Failed to load: {{error}}", "加载失败：{{error}}", { error })}</p>
             ) : text === null ? (
-              <p className="p-4 text-sm text-muted-foreground">Loading…</p>
+              <p className="p-4 text-sm text-muted-foreground">{tr("Loading…", "正在加载…")}</p>
             ) : text.includes("```") ? (
               // Content with its own fences would break the fenced wrapper —
               // fall back to a plain (unhighlighted) full-bleed block.
@@ -4195,9 +5422,9 @@ function FileViewer({ agentId, file, onClose }: { agentId: string; file: Produce
           {preview === "none" && (
             <div className="flex h-full flex-col items-center justify-center gap-3 p-4 text-center">
               <File className="h-12 w-12 text-muted-foreground/50" />
-              <p className="text-sm text-muted-foreground">Preview not available for this file type.</p>
+              <p className="text-sm text-muted-foreground">{tr("Preview is not available for this file type.", "此文件类型不支持预览。")}</p>
               <a href={downloadUrl} className="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90">
-                <Download className="h-3.5 w-3.5" /> Download
+                <Download className="h-3.5 w-3.5" /> {tr("Download", "下载")}
               </a>
             </div>
           )}
@@ -4217,13 +5444,29 @@ function SlashMenu({
   onHover: (i: number) => void;
   onSelect: (s: SlashItem) => void;
 }) {
+  const { tr } = useLocale();
+  const commandDescriptions: Record<string, string> = {
+    new: tr("Clear session history", "清空会话历史"),
+    reset: tr("Clear session history", "清空会话历史"),
+    retry: tr("Re-run last message", "重新运行上一条消息"),
+    undo: tr("Undo last turn", "撤销上一轮对话"),
+    compact: tr("Compress context window", "压缩上下文窗口"),
+    status: tr("Agent status & memory info", "Agent 状态与记忆信息"),
+    usage: tr("Billing usage and session stats", "计费用量与会话统计"),
+    insights: tr("Activity insights (last N days)", "最近 N 天的活动分析"),
+    personality: tr("List or switch personality", "查看或切换个性") ,
+    model: tr("Show or switch LLM model", "查看或切换模型"),
+    goal: tr("Persistent multi-turn objective", "持续多轮目标"),
+    help: tr("Show command help", "显示命令帮助"),
+    version: tr("Show version", "显示版本"),
+  };
   return (
     <div className="absolute bottom-full left-0 right-0 mb-2 rounded-xl border border-border bg-popover shadow-lg overflow-hidden z-20">
       <div className="max-h-[320px] overflow-y-auto py-1">
         {items.map((it, i) => {
           const isCmd = it.kind === "command";
           const Icon = isCmd ? Terminal : Puzzle;
-          const badge = isCmd ? "command" : (it.type || "skill");
+          const badge = isCmd ? tr("command", "命令") : (it.type || tr("skill", "技能"));
           const label = isCmd ? `/${it.name}` : it.name;
           return (
             <button
@@ -4249,7 +5492,7 @@ function SlashMenu({
                 </div>
                 {it.description && (
                   <p className="text-xs text-muted-foreground line-clamp-1">
-                    {it.description}
+                    {isCmd ? commandDescriptions[it.name] || it.description : it.description}
                   </p>
                 )}
               </div>
@@ -4262,7 +5505,7 @@ function SlashMenu({
         className="flex items-center gap-2 border-t border-border px-3 py-2 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
       >
         <SlidersHorizontal className="h-3.5 w-3.5" />
-        Manage Skills
+        {tr("Manage Skills", "管理技能")}
       </Link>
     </div>
   );

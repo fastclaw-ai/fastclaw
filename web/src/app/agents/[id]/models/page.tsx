@@ -45,6 +45,7 @@ import {
   type ProviderRow,
 } from "@/lib/api";
 import { useAgentIdFromURL } from "@/hooks/use-agent-id";
+import { useLocale } from "@/components/locale-provider";
 import { useAgentName } from "@/hooks/use-agent-name";
 
 // Per-agent Models page — same UI/UX as the admin /models page, but
@@ -129,6 +130,7 @@ function presetModelRows(preset: string): ModelEntry[] {
 }
 
 export default function AgentModelsPage() {
+  const { tr } = useLocale();
   const agentId = useAgentIdFromURL();
   const agentName = useAgentName(agentId);
 
@@ -361,12 +363,12 @@ export default function AgentModelsPage() {
             ...prev,
             [idx]: result.ok
               ? { status: "success" }
-              : { status: "error", error: result.error || "Connection failed" },
+              : { status: "error", error: result.error || tr("Connection failed", "连接失败") },
           }));
         } catch {
           setModelTests((prev) => ({
             ...prev,
-            [idx]: { status: "error", error: "Connection failed" },
+            [idx]: { status: "error", error: tr("Connection failed", "连接失败") },
           }));
         }
       }),
@@ -526,22 +528,22 @@ export default function AgentModelsPage() {
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight">Models</h2>
+          <h2 className="text-2xl font-semibold tracking-tight">{tr("Models", "模型")}</h2>
           <p className="text-sm text-muted-foreground mt-1">
-            LLM providers and active model scoped to{" "}
-            <strong>{agentName || "this agent"}</strong>. Agent-scope settings
-            override the system default.
+            {tr("LLM providers and active model for", "大模型服务商和当前模型，适用于")} {" "}
+            <strong>{agentName || tr("this agent", "此 Agent")}</strong>
+            {tr(". Agent settings override the system default.", "。Agent 配置优先于系统默认值。")}
           </p>
         </div>
         <div className="flex items-center gap-2">
           {saved && (
             <span className="inline-flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400 mr-2">
-              <Check className="h-3.5 w-3.5" /> Saved
+              <Check className="h-3.5 w-3.5" /> {tr("Saved", "已保存")}
             </span>
           )}
           <Button variant="outline" onClick={openAddDialog} disabled={saving}>
             <Plus className="h-4 w-4 mr-2" />
-            Add Provider
+            {tr("Add provider", "添加服务商")}
           </Button>
         </div>
       </div>
@@ -552,19 +554,18 @@ export default function AgentModelsPage() {
           <div className="flex items-start gap-3 min-w-0">
             <Share2 className="h-4 w-4 text-primary mt-0.5 shrink-0" />
             <div className="min-w-0">
-              <h3 className="font-medium">Share model config with chatters</h3>
+              <h3 className="font-medium">{tr("Share model configuration with chatters", "向聊天用户共享模型配置")}</h3>
               <p className="text-sm text-muted-foreground mt-1">
                 {shareModelConfig ? (
                   <>
-                    Chatters using <strong>{agentName || "this agent"}</strong>{" "}
-                    inherit your model and provider credentials. Your tokens
-                    are spent on their messages.
+                    {tr("Chatters using", "使用")} <strong>{agentName || tr("this agent", "此 Agent")}</strong>
+                    {tr(" inherit your model and provider credentials. Their messages use your tokens.", " 的聊天用户会继承你的模型和服务商凭据，其消息将消耗你的 Token。")}
                   </>
                 ) : (
                   <>
-                    Only you use this configuration. Chatters bring their own
-                    model + providers under <em>User → Models</em>, otherwise
-                    the agent falls back to the system default.
+                    {tr("Only you use this configuration. Chatters use their own model and providers under ", "此配置仅供你使用。聊天用户需在")}
+                    <em>{tr("User → Models", "用户 → 模型")}</em>
+                    {tr(", otherwise the agent falls back to the system default.", "中配置自己的模型和服务商，否则 Agent 将回退到系统默认值。")}
                   </>
                 )}
               </p>
@@ -574,7 +575,7 @@ export default function AgentModelsPage() {
             checked={shareModelConfig}
             onCheckedChange={handleShareToggle}
             disabled={saving}
-            aria-label="Share model config with chatters"
+            aria-label={tr("Share model configuration with chatters", "向聊天用户共享模型配置")}
           />
         </div>
       </div>
@@ -584,14 +585,14 @@ export default function AgentModelsPage() {
         <div className="flex items-center justify-between gap-2 mb-3">
           <div className="flex items-center gap-2">
             <Cpu className="h-4 w-4 text-primary" />
-            <h3 className="font-medium">Active Model</h3>
+            <h3 className="font-medium">{tr("Active model", "当前模型")}</h3>
             {inheriting ? (
               <Badge variant="outline" className="text-[10px]">
-                Inheriting
+                {tr("Inheriting", "继承中")}
               </Badge>
             ) : (
               <Badge className="bg-primary/10 text-primary hover:bg-primary/10 text-[10px]">
-                Override
+                {tr("Override", "已覆盖")}
               </Badge>
             )}
           </div>
@@ -603,7 +604,7 @@ export default function AgentModelsPage() {
               onClick={handleClearOverride}
               disabled={saving}
             >
-              Clear override
+              {tr("Clear override", "清除覆盖")}
             </Button>
           )}
         </div>
@@ -614,7 +615,7 @@ export default function AgentModelsPage() {
             disabled={saving}
           >
             <SelectTrigger className="font-mono text-sm max-w-md">
-              <SelectValue placeholder={inheriting ? `Inherit (${systemDefault || "no system default"})` : "Select a model"} />
+              <SelectValue placeholder={inheriting ? tr("Inherit ({{model}})", "继承（{{model}}）", { model: systemDefault || tr("no system default", "无系统默认值") }) : tr("Select a model", "选择模型")} />
             </SelectTrigger>
             <SelectContent className="!w-auto !min-w-[var(--anchor-width)] !overflow-x-visible">
               {allModelOptions.map((opt) => (
@@ -629,32 +630,32 @@ export default function AgentModelsPage() {
             value={model}
             onChange={(e) => setModel(e.target.value)}
             onBlur={() => handleModelChange(model)}
-            placeholder={systemDefault ? `Inherit (${systemDefault})` : "Add a provider with models below"}
+            placeholder={systemDefault ? tr("Inherit ({{model}})", "继承（{{model}}）", { model: systemDefault }) : tr("Add a provider with models below", "请在下方添加包含模型的服务商")}
             className="font-mono text-sm max-w-md"
           />
         )}
         <p className="text-xs text-muted-foreground mt-2">
           {inheriting ? (
             <>
-              Using system default
+              {tr("Using system default", "正在使用系统默认值")}
               {systemDefault ? (
                 <>
                   : <code className="text-[11px]">{systemDefault}</code>
                 </>
               ) : (
-                <> (none configured)</>
+                <> {tr("(none configured)", "（尚未配置）")}</>
               )}
-              . Pick a model above to override for{" "}
-              <strong>{agentName || "this agent"}</strong> only.
+              {tr(". Pick a model above to override it only for", "。选择上方模型可仅为")} {" "}
+              <strong>{agentName || tr("this agent", "此 Agent")}</strong>{tr(".", "覆盖该配置。")}
             </>
           ) : (
             <>
-              Override applies to <strong>{agentName || "this agent"}</strong>{" "}
-              only. Format <code className="text-[11px]">provider/modelId</code>.
+              {tr("Override applies only to", "覆盖配置仅适用于")} <strong>{agentName || tr("this agent", "此 Agent")}</strong>.
+              {tr(" Format: ", " 格式：")}<code className="text-[11px]">provider/modelId</code>.
               {systemDefault && (
                 <>
                   {" "}
-                  Clearing falls back to{" "}
+                  {tr("Clearing falls back to", "清除后将回退到")} {" "}
                   <code className="text-[11px]">{systemDefault}</code>.
                 </>
               )}
@@ -670,17 +671,13 @@ export default function AgentModelsPage() {
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-500/10 mb-4">
               <Brain className="h-7 w-7 text-amber-500" />
             </div>
-            <p className="text-sm text-muted-foreground mb-1">
-              No providers available
-            </p>
+            <p className="text-sm text-muted-foreground mb-1">{tr("No providers available", "没有可用的服务商")}</p>
             <p className="text-xs text-muted-foreground/60 mb-4 max-w-md text-center">
-              No agent / user / system providers are configured. Add one here to
-              give this agent credentials, or configure shared ones from the
-              top-level Models page.
+              {tr("No agent, user, or system providers are configured. Add one here for this agent, or configure shared providers from the top-level Models page.", "尚未配置 Agent、用户或系统级服务商。可在此为当前 Agent 添加凭据，或在顶层模型页面中配置共享服务商。")}
             </p>
             <Button variant="outline" size="sm" onClick={openAddDialog}>
               <Plus className="h-4 w-4 mr-2" />
-              Add Provider
+              {tr("Add provider", "添加服务商")}
             </Button>
           </div>
         </div>
@@ -689,12 +686,12 @@ export default function AgentModelsPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>API Base</TableHead>
-                <TableHead>API Key</TableHead>
-                <TableHead>Models</TableHead>
-                <TableHead>Source</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
+                <TableHead>{tr("Name", "名称")}</TableHead>
+                <TableHead>{tr("API base", "API 地址")}</TableHead>
+                <TableHead>{tr("API key", "API 密钥")}</TableHead>
+                <TableHead>{tr("Models", "模型")}</TableHead>
+                <TableHead>{tr("Source", "来源")}</TableHead>
+                <TableHead className="text-right">{tr("Actions", "操作")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -702,10 +699,10 @@ export default function AgentModelsPage() {
                 const editable = provider.scope === "agent";
                 const sourceLabel =
                   provider.scope === "agent"
-                    ? "Mine (agent)"
+                    ? tr("Mine (agent)", "我的配置（Agent）")
                     : provider.scope === "user"
-                    ? "Inherited from owner"
-                    : "Inherited from admin";
+                    ? tr("Inherited from owner", "继承自所有者")
+                    : tr("Inherited from admin", "继承自管理员");
                 return (
                 <TableRow key={`${provider.scope}:${provider.id}`}>
                   <TableCell className="font-medium">
@@ -713,7 +710,7 @@ export default function AgentModelsPage() {
                       {provider.name}
                       {editable && systemProviders.includes(provider.name) && (
                         <Badge variant="outline" className="text-[10px]">
-                          shadows system
+                          {tr("shadows system", "覆盖系统配置")}
                         </Badge>
                       )}
                     </div>
@@ -740,7 +737,7 @@ export default function AgentModelsPage() {
                         {sourceLabel}
                       </Badge>
                     ) : (
-                      <Badge variant="outline" className="text-muted-foreground" title="Read-only — owner / admin owns this row">
+                      <Badge variant="outline" className="text-muted-foreground" title={tr("Read-only — owned by the owner or admin", "只读 — 由所有者或管理员维护")}>
                         {sourceLabel}
                       </Badge>
                     )}
@@ -751,7 +748,7 @@ export default function AgentModelsPage() {
                         size="icon"
                         variant="ghost"
                         onClick={() => openEditDialog(provider)}
-                        title={editable ? "Edit" : "Read-only — inherited row"}
+                        title={editable ? tr("Edit", "编辑") : tr("Read-only — inherited row", "只读 — 继承的配置")}
                         disabled={!editable}
                       >
                         <Pencil className="size-4" />
@@ -761,7 +758,7 @@ export default function AgentModelsPage() {
                         variant="ghost"
                         className="text-destructive hover:text-destructive"
                         onClick={() => handleDeleteProvider(provider)}
-                        title={editable ? "Remove" : "Read-only — inherited row"}
+                        title={editable ? tr("Remove", "移除") : tr("Read-only — inherited row", "只读 — 继承的配置")}
                         disabled={!editable}
                       >
                         <Trash2 className="size-4" />
@@ -780,18 +777,18 @@ export default function AgentModelsPage() {
         <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
-              {editingName ? "Edit Provider" : "Add Provider"}
+              {editingName ? tr("Edit provider", "编辑服务商") : tr("Add provider", "添加服务商")}
             </DialogTitle>
             <DialogDescription>
-              Configure an LLM provider scoped to{" "}
-              <strong>{agentName || "this agent"}</strong>. Use the same name as
-              a system provider to shadow it.
+              {tr("Configure an LLM provider for", "为")} {" "}
+              <strong>{agentName || tr("this agent", "此 Agent")}</strong>
+              {tr(". Use the same name as a system provider to override it.", " 配置大模型服务商。使用与系统服务商相同的名称即可覆盖它。")}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">
-                <Label>Provider</Label>
+                <Label>{tr("Provider", "服务商")}</Label>
                 <Select
                   value={formPreset}
                   onValueChange={(v: string | null) => v && handlePresetChange(v)}
@@ -805,14 +802,14 @@ export default function AgentModelsPage() {
                   <SelectContent>
                     {Object.keys(PROVIDER_PRESETS).map((p) => (
                       <SelectItem key={p} value={p}>
-                        {PROVIDER_LABELS[p] ?? p}
+                        {p === "custom" ? tr("Custom", "自定义") : PROVIDER_LABELS[p] ?? p}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
               <div className="space-y-1.5">
-                <Label>Provider Name</Label>
+                <Label>{tr("Provider name", "服务商名称")}</Label>
                 <Input
                   value={formName}
                   onChange={(e) => setFormName(e.target.value)}
@@ -824,7 +821,7 @@ export default function AgentModelsPage() {
             </div>
 
             <div className="space-y-1.5">
-              <Label>API Base URL</Label>
+              <Label>{tr("API base URL", "API 基础地址")}</Label>
               <Input
                 value={formApiBase}
                 onChange={(e) => setFormApiBase(e.target.value)}
@@ -834,7 +831,7 @@ export default function AgentModelsPage() {
             </div>
 
             <div className="space-y-1.5">
-              <Label>API Key</Label>
+              <Label>{tr("API key", "API 密钥")}</Label>
               <Input
                 type={editingName && !formApiKey ? "text" : "password"}
                 value={formApiKey}
@@ -851,14 +848,14 @@ export default function AgentModelsPage() {
               />
               {editingName && (
                 <p className="text-[11px] text-muted-foreground/60">
-                  Leave empty to keep existing key. Test connection uses the saved key.
+                  {tr("Leave empty to keep the existing key. Connection tests use the saved key.", "留空可保留现有密钥；连接测试会使用已保存的密钥。")}
                 </p>
               )}
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">
-                <Label>API Type</Label>
+                <Label>{tr("API type", "API 类型")}</Label>
                 <Select value={formApiType} onValueChange={(v: string | null) => v && setFormApi(v)}>
                   <SelectTrigger className="w-full">
                     <SelectValue>
@@ -872,7 +869,7 @@ export default function AgentModelsPage() {
                 </Select>
               </div>
               <div className="space-y-1.5">
-                <Label>Auth Type</Label>
+                <Label>{tr("Auth type", "认证类型")}</Label>
                 <Select value={formAuthType} onValueChange={(v: string | null) => v && setFormAuthType(v)}>
                   <SelectTrigger className="w-full">
                     <SelectValue>
@@ -881,7 +878,7 @@ export default function AgentModelsPage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="bearer-token">Bearer Token</SelectItem>
-                    <SelectItem value="api-key">API Key Header</SelectItem>
+                    <SelectItem value="api-key">{tr("API Key Header", "API Key 请求头")}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -889,16 +886,16 @@ export default function AgentModelsPage() {
 
             <div className="space-y-3 pt-2 border-t border-border">
               <div className="flex items-center justify-between">
-                <Label className="text-base">Models</Label>
+                <Label className="text-base">{tr("Models", "模型")}</Label>
                 <Button variant="outline" size="sm" onClick={handleAddModel}>
                   <Plus className="h-3 w-3 mr-1.5" />
-                  Add Model
+                  {tr("Add model", "添加模型")}
                 </Button>
               </div>
 
               {formModels.length === 0 && (
                 <p className="text-sm text-muted-foreground/60 text-center py-4">
-                  No models configured. Add models to use with this provider.
+                  {tr("No models configured. Add models to use with this provider.", "尚未配置模型。请添加要通过此服务商使用的模型。")}
                 </p>
               )}
 
@@ -909,21 +906,21 @@ export default function AgentModelsPage() {
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2 min-w-0">
                       <span className="text-sm font-medium text-muted-foreground">
-                        Model {idx + 1}
+                        {tr("Model {{number}}", "模型 {{number}}", { number: idx + 1 })}
                       </span>
                       {t?.status === "testing" && (
                         <Badge variant="outline" className="text-[10px]">
-                          <Loader2 className="mr-1 size-3 animate-spin" /> testing
+                          <Loader2 className="mr-1 size-3 animate-spin" /> {tr("testing", "测试中")}
                         </Badge>
                       )}
                       {t?.status === "success" && (
                         <Badge className="bg-emerald-500/15 text-emerald-700 hover:bg-emerald-500/15 text-[10px]">
-                          <Check className="mr-1 size-3" /> connected
+                          <Check className="mr-1 size-3" /> {tr("connected", "已连接")}
                         </Badge>
                       )}
                       {t?.status === "error" && (
                         <Badge variant="outline" className="border-destructive/40 text-destructive text-[10px]" title={t.error}>
-                          failed
+                          {tr("failed", "失败")}
                         </Badge>
                       )}
                     </div>
@@ -934,25 +931,25 @@ export default function AgentModelsPage() {
                       onClick={() => handleRemoveModel(idx)}
                     >
                       <Trash2 className="h-3 w-3 mr-1" />
-                      Remove
+                      {tr("Remove", "移除")}
                     </Button>
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1">
-                      <Label className="text-xs">Model ID</Label>
+                      <Label className="text-xs">{tr("Model ID", "模型 ID")}</Label>
                       <Input
                         value={m.id}
                         onChange={(e) => handleUpdateModel(idx, "id", e.target.value)}
-                        placeholder="e.g. gpt-4o"
+                        placeholder={tr("e.g. gpt-4o", "例如 gpt-4o")}
                         className="font-mono text-xs h-8"
                       />
                     </div>
                     <div className="space-y-1">
-                      <Label className="text-xs">Display Name</Label>
+                      <Label className="text-xs">{tr("Display name", "显示名称")}</Label>
                       <Input
                         value={m.name}
                         onChange={(e) => handleUpdateModel(idx, "name", e.target.value)}
-                        placeholder="e.g. GPT-4o"
+                        placeholder={tr("e.g. GPT-4o", "例如 GPT-4o")}
                         className="text-xs h-8"
                       />
                     </div>
@@ -976,16 +973,16 @@ export default function AgentModelsPage() {
                   >
                     {batchTesting ? (
                       <>
-                        <Loader2 className="mr-1 size-4 animate-spin" /> Testing
+                        <Loader2 className="mr-1 size-4 animate-spin" /> {tr("Testing", "正在测试")}
                       </>
                     ) : (
-                      "Test connection"
+                      tr("Test connection", "测试连接")
                     )}
                   </Button>
                   <span className="text-xs text-muted-foreground">
                     {cleanModelRows.length === 0
-                      ? "Add at least one model with an id, then test."
-                      : "Pings every model above; results show next to each row."}
+                      ? tr("Add at least one model with an ID, then test.", "请至少添加一个带 ID 的模型，然后测试。")
+                      : tr("Tests every model above; results appear beside each row.", "测试上方所有模型，结果会显示在每一行旁边。")}
                   </span>
                 </div>
                 {Object.values(modelTests).some((t) => t.status === "error") && (
@@ -1007,17 +1004,17 @@ export default function AgentModelsPage() {
           <DialogFooter className="flex flex-col gap-2 sm:flex-row sm:items-center">
             {!allModelsPassed && (
               <span className="text-xs text-muted-foreground sm:mr-auto">
-                Test every model first — Add/Update unlocks once they all pass.
+                {tr("Test every model first — Add or Update unlocks after all tests pass.", "请先测试所有模型；全部通过后才能添加或更新。")}
               </span>
             )}
             <Button variant="outline" onClick={() => setDialogOpen(false)}>
-              Cancel
+              {tr("Cancel", "取消")}
             </Button>
             <Button
               onClick={handleSaveProvider}
               disabled={!formName.trim() || saving || !allModelsPassed}
             >
-              {editingName ? "Update" : "Add"}
+              {editingName ? tr("Update", "更新") : tr("Add", "添加")}
             </Button>
           </DialogFooter>
         </DialogContent>

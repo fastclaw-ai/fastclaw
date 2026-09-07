@@ -17,8 +17,10 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Save, Check, Clock, Container } from "lucide-react";
 import { getConfig, updateConfig, getMe, type ConfigResponse } from "@/lib/api";
+import { useLocale } from "@/components/locale-provider";
 
 export default function RuntimeSettingsPage() {
+  const { tr } = useLocale();
   const router = useRouter();
   const [config, setConfig] = useState<ConfigResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -107,11 +109,11 @@ export default function RuntimeSettingsPage() {
         },
       });
       if (result?.ok === false) {
-        setSaveError(result.error || "Save failed");
+        setSaveError(result.error || tr("Save failed", "保存失败"));
         return;
       }
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : "Save failed");
+      setSaveError(err instanceof Error ? err.message : tr("Save failed", "保存失败"));
       return;
     } finally {
       setSaving(false);
@@ -134,9 +136,9 @@ export default function RuntimeSettingsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-xl font-semibold tracking-tight">Runtime</h3>
+          <h3 className="text-xl font-semibold tracking-tight">{tr("Runtime", "运行环境")}</h3>
           <p className="text-sm text-muted-foreground mt-1">
-            Gateway and sandbox configuration.
+            {tr("Gateway and sandbox configuration.", "配置网关和沙箱运行环境。")}
           </p>
         </div>
         <Button
@@ -148,12 +150,12 @@ export default function RuntimeSettingsPage() {
           {saved ? (
             <>
               <Check className="h-4 w-4 mr-2" />
-              Saved
+              {tr("Saved", "已保存")}
             </>
           ) : (
             <>
               <Save className="h-4 w-4 mr-2" />
-              {saving ? "Saving..." : "Save"}
+              {saving ? tr("Saving…", "正在保存…") : tr("Save", "保存")}
             </>
           )}
         </Button>
@@ -170,14 +172,17 @@ export default function RuntimeSettingsPage() {
             <Clock className="mt-0.5 h-4 w-4 text-sky-500" />
             <div className="grid flex-1 gap-4 sm:grid-cols-[1fr_260px] sm:items-start">
               <div>
-                <h3 className="font-medium">Default timezone</h3>
+                <h3 className="font-medium">{tr("Default timezone", "默认时区")}</h3>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  System preference used before falling back to the deployment
-                  TZ. Current deployment fallback: {config.meta?.serverTimezone || "Local"}.
+                  {tr(
+                    "Used before falling back to the deployment timezone. Current deployment fallback: {{timezone}}.",
+                    "优先使用此系统设置；未设置时回退到部署环境时区。当前部署环境时区：{{timezone}}。",
+                    { timezone: config.meta?.serverTimezone || tr("Local", "本地时区") },
+                  )}
                 </p>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="default-timezone">IANA timezone</Label>
+                <Label htmlFor="default-timezone">{tr("IANA timezone", "IANA 时区")}</Label>
                 <Input
                   id="default-timezone"
                   value={defaultTimezone}
@@ -195,10 +200,10 @@ export default function RuntimeSettingsPage() {
             <div>
               <div className="flex items-center gap-2 mb-1">
                 <Container className="h-4 w-4 text-purple-500" />
-                <h3 className="font-medium">Sandbox</h3>
+                <h3 className="font-medium">{tr("Sandbox", "沙盒")}</h3>
               </div>
               <p className="text-sm text-muted-foreground">
-                Execute code in isolated sandbox environments
+                {tr("Execute code in isolated sandbox environments", "在隔离的沙箱环境中执行代码")}
               </p>
             </div>
             <Switch checked={sandboxEnabled} onCheckedChange={setSandboxEnabled} />
@@ -209,12 +214,12 @@ export default function RuntimeSettingsPage() {
             <Separator />
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Backend</Label>
+                <Label>{tr("Backend", "后端")}</Label>
                 <Select value={sandboxBackend} onValueChange={(v) => v && setSandboxBackend(v)}>
                   <SelectTrigger>
                     <SelectValue>
                       {(v: unknown) =>
-                        ({ docker: "Docker", e2b: "E2B (cloud)", boxlite: "BoxLite (cloud)" } as Record<string, string>)[
+                        ({ docker: "Docker", e2b: tr("E2B (cloud)", "E2B（云端）"), boxlite: tr("BoxLite (cloud)", "BoxLite（云端）") } as Record<string, string>)[
                           v as string
                         ] ?? (v as string) ?? ""
                       }
@@ -222,15 +227,15 @@ export default function RuntimeSettingsPage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="docker">Docker</SelectItem>
-                    <SelectItem value="e2b">E2B (cloud)</SelectItem>
-                    <SelectItem value="boxlite">BoxLite (cloud)</SelectItem>
+                    <SelectItem value="e2b">{tr("E2B (cloud)", "E2B（云端）")}</SelectItem>
+                    <SelectItem value="boxlite">{tr("BoxLite (cloud)", "BoxLite（云端）")}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
               {sandboxBackend === "e2b" ? (
                 <>
                   <div className="space-y-2">
-                    <Label>E2B API Key</Label>
+                    <Label>{tr("E2B API key", "E2B API 密钥")}</Label>
                     <Input
                       type="password"
                       value={sandboxE2BKey}
@@ -240,7 +245,7 @@ export default function RuntimeSettingsPage() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label>E2B Template</Label>
+                    <Label>{tr("E2B template", "E2B 模板")}</Label>
                     <Input
                       value={sandboxE2BTemplate}
                       onChange={(e) => setSandboxE2BTemplate(e.target.value)}
@@ -252,7 +257,7 @@ export default function RuntimeSettingsPage() {
               ) : sandboxBackend === "boxlite" ? (
                 <>
                   <div className="space-y-2">
-                    <Label>BoxLite API Key</Label>
+                    <Label>{tr("BoxLite API key", "BoxLite API 密钥")}</Label>
                     <Input
                       type="password"
                       value={sandboxBoxliteKey}
@@ -262,7 +267,7 @@ export default function RuntimeSettingsPage() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label>Snapshot</Label>
+                    <Label>{tr("Snapshot", "快照")}</Label>
                     <Input
                       value={sandboxBoxliteImage}
                       onChange={(e) => setSandboxBoxliteImage(e.target.value)}
@@ -270,12 +275,14 @@ export default function RuntimeSettingsPage() {
                       className="font-mono text-sm"
                     />
                     <p className="text-xs text-muted-foreground">
-                      BoxLite snapshot name (imported via the BoxLite Dashboard),
-                      not a Docker Hub image reference.
+                      {tr(
+                        "BoxLite snapshot name (imported through the BoxLite Dashboard), not a Docker Hub image reference.",
+                        "BoxLite 快照名称（通过 BoxLite 控制台导入），不是 Docker Hub 镜像地址。",
+                      )}
                     </p>
                   </div>
                   <div className="space-y-2 sm:col-span-2">
-                    <Label>API URL (optional)</Label>
+                    <Label>{tr("API URL (optional)", "API 地址（选填）")}</Label>
                     <Input
                       value={sandboxBoxliteURL}
                       onChange={(e) => setSandboxBoxliteURL(e.target.value)}
@@ -286,7 +293,7 @@ export default function RuntimeSettingsPage() {
                 </>
               ) : (
                 <div className="space-y-2">
-                  <Label>Docker Image</Label>
+                  <Label>{tr("Docker image", "Docker 镜像")}</Label>
                   <Input
                     value={sandboxDockerImage}
                     onChange={(e) => setSandboxDockerImage(e.target.value)}

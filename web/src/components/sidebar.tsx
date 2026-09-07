@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { AppSidebar } from "@/components/app-sidebar";
 import {
   SidebarInset,
@@ -37,6 +37,9 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
   // session, not the impersonated user — hiding it (and its collapse
   // toggle) keeps the surface focused on the conversation being inspected.
   const isActAsView = !!searchParams?.get("actAs");
+  const isConversationRoute = /^\/agents\/[^/]+\/(chat|project)(?:\/|$)/.test(
+    usePathname() || "",
+  );
 
   const headerCtx = React.useMemo<PageHeaderContextValue>(
     () => ({ setNode: setHeaderNode }),
@@ -47,7 +50,11 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
     return (
       <PageHeaderContext.Provider value={headerCtx}>
         <div className="flex min-h-svh flex-col">
-          <header className="sticky top-0 z-20 flex h-12 items-center gap-2 bg-background/80 px-3 backdrop-blur">
+          <header
+            className={`sticky top-0 z-20 flex items-center bg-background/90 backdrop-blur ${
+              isConversationRoute ? "h-14" : "h-12 gap-2 px-3"
+            }`}
+          >
             {headerNode}
           </header>
           <div className="flex-1">{children}</div>
@@ -58,11 +65,33 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <PageHeaderContext.Provider value={headerCtx}>
-      <SidebarProvider>
+      <SidebarProvider
+        key={isConversationRoute ? "conversation-sidebar" : "platform-sidebar"}
+        resizeDefaultWidth={isConversationRoute ? 320 : undefined}
+        resizeMinWidth={isConversationRoute ? 240 : undefined}
+        resizeMaxWidth={isConversationRoute ? 420 : undefined}
+        resizeStorageKey={isConversationRoute ? "fastclaw:bot-sidebar-width" : undefined}
+        resizeViewportReserve={isConversationRoute ? 480 : undefined}
+        style={
+          isConversationRoute
+            ? ({
+                "--sidebar-width-icon": "64px",
+              } as React.CSSProperties)
+            : undefined
+        }
+      >
         <AppSidebar />
-        <SidebarInset>
-          <header className="sticky top-0 z-20 flex h-12 items-center gap-2 bg-background/80 px-3 backdrop-blur">
-            <SidebarTrigger className="-ml-1" />
+        <SidebarInset className={isConversationRoute ? "min-w-0 overflow-hidden" : undefined}>
+          <header
+            className={`sticky top-0 z-20 flex items-center bg-background/90 backdrop-blur ${
+              isConversationRoute
+                ? "h-14"
+                : "h-12 gap-2 px-3"
+            }`}
+          >
+            <SidebarTrigger
+              className={isConversationRoute ? "ml-2 shrink-0 md:hidden" : "-ml-1"}
+            />
             {headerNode}
           </header>
           <div className="flex-1">{children}</div>

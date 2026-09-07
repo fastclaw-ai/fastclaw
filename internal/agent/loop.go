@@ -1526,43 +1526,43 @@ func renderChatbotPersistenceReminder(mode, displayName, userMD, memoryMD string
 }
 
 // renderChannelHints emits per-turn protocol notes that the LLM can
-// only honor if it knows about them. Today there's exactly one: IM
-// channels with a single-message-per-bubble UI accept the
-// channels.SplitMessageMarker token as "split this reply into multiple
-// bubbles." The marker constant is colocated with the splitter in
-// internal/channels/base.go so changing the wire token only touches
-// one place; the actual split happens in the channels manager's
-// dispatcher, uniformly across all IM adapters.
+// only honor if it knows about them. Web and IM chat surfaces accept
+// the channels.SplitMessageMarker token as "split this reply into
+// multiple bubbles." The marker constant is colocated with the splitter
+// in internal/channels/base.go so changing the wire token only touches
+// one place. IM adapters split during dispatch; the web client splits
+// the stored reply while rendering it.
 //
 // `splitEnabled` is the per-agent toggle. When false (the default) we
 // skip the hint so the LLM never learns the marker — and the dispatcher
 // collapses any stray marker back to a newline. The two branches must
 // stay in lockstep.
 //
-// Returns "" for non-IM channels (web, api) so they don't waste tokens
-// on a hint the chatter wouldn't perceive — web renders one bubble per
-// chat-message anyway.
+// Returns "" for non-chat transports such as API calls, where inserting
+// a UI control token into the response would be surprising.
 func renderChannelHints(msg bus.InboundMessage, splitEnabled bool) string {
-	if !splitEnabled || !isIMChannel(msg.Channel) {
+	if !splitEnabled || (msg.Channel != "web" && !isIMChannel(msg.Channel)) {
 		return ""
 	}
-	// Sample alone is enough — the LLM picks up the protocol from one
-	// well-formed example without us listing every rule.
 	return "## Reply Format\n\n" +
-		"This channel renders one chat bubble per message. To split your " +
-		"reply into separate bubbles, write `" + channels.SplitMessageMarker +
-		"` on its own line between the parts. Each part is sent as a " +
-		"distinct message in order.\n\n" +
-		"Use this when a short, conversational, multi-beat reply reads more " +
-		"naturally than one long block (e.g. \"好。\\n" + channels.SplitMessageMarker +
-		"\\n第一条先到了。\\n" + channels.SplitMessageMarker + "\\n第二条在这。\"). " +
-		"For a single coherent answer, just reply normally — no marker needed."
+		"Multi-bubble mode is ON. For conversational replies, default to 2–4 " +
+		"separate, concise chat bubbles instead of one long message. Put one " +
+		"natural thought in each bubble, usually no more than 1–2 short sentences.\n\n" +
+		"Write `" + channels.SplitMessageMarker + "` on its own line between " +
+		"bubbles. Each part is delivered as a distinct message in order, for " +
+		"example: \"有结果了。\\n" + channels.SplitMessageMarker +
+		"\\nidoubi 是一位独立开发者。\\n" + channels.SplitMessageMarker +
+		"\\n他主要在做 AI 应用。\"\n\n" +
+		"Do not add headings, lists, or repeated summaries just to create more " +
+		"bubbles. Keep code blocks, tables, long quotes, and tightly coupled " +
+		"structured content together; only split their conversational framing. " +
+		"A one-line acknowledgement may remain a single bubble."
 }
 
 // isIMChannel returns true for channels with single-message-per-bubble
 // UX where splitting one logical reply into multiple sequential
-// messages reads naturally. Web/API channels render long replies in
-// place — splitting there adds nothing.
+// messages reads naturally. Web is handled separately because its
+// React renderer understands the same marker; API responses do not.
 func isIMChannel(channel string) bool {
 	switch channel {
 	case "wechat", "telegram", "discord", "slack", "line", "feishu":

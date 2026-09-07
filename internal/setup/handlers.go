@@ -39,10 +39,17 @@ type agentChatEvent = agent.ChatEvent
 // produces — UI-only fields like Storage/Gateway are filled by env
 // overlay, not by the DB.
 func (s *Server) loadUserConfig(r *http.Request) (*config.Config, error) {
+	return s.loadConfigForUserID(r, config.UserIDFromContext(r.Context()))
+}
+
+// loadConfigForUserID builds the merged system → user view for an explicit
+// user. Passing an empty id returns the system-only view. The explicit form
+// lets a super_admin edit their own user overrides without those writes being
+// mistaken for deployment-wide configuration.
+func (s *Server) loadConfigForUserID(r *http.Request, uid string) (*config.Config, error) {
 	if s.dataStore == nil {
 		return &config.Config{}, nil
 	}
-	uid := config.UserIDFromContext(r.Context())
 	cfg := &config.Config{
 		Providers: map[string]config.ProviderConfig{},
 		Channels:  map[string]config.ChannelConfig{},
@@ -130,9 +137,6 @@ func saveAgentSkillEntries(ctx context.Context, st store.Store, agentID string, 
 // and are NOT touched here — the dedicated /api/providers and /api/channels
 // endpoints (and the onboard handler) write those.
 func (s *Server) saveUserConfig(r *http.Request, cfg *config.Config) error {
-	if s.dataStore == nil {
-		return errors.New("store not configured")
-	}
 	ident, ok := authIdentity(r)
 	// Decide who owns the rows we're about to save:
 	//   - super_admin without ?actAs=  → system rows (user_id='')
@@ -145,6 +149,16 @@ func (s *Server) saveUserConfig(r *http.Request, cfg *config.Config) error {
 		}
 	} else if ok {
 		uid = ident.UserID
+	}
+	return s.saveConfigForUserID(r, cfg, uid)
+}
+
+// saveConfigForUserID persists the namespaced settings at one explicit
+// owner. Empty uid means system scope; a non-empty uid means that user's
+// private override layer.
+func (s *Server) saveConfigForUserID(r *http.Request, cfg *config.Config, uid string) error {
+	if s.dataStore == nil {
+		return errors.New("store not configured")
 	}
 	for _, ns := range settingNamespaces {
 		data := ns.collect(cfg)
@@ -259,12 +273,6 @@ func authIdentity(r *http.Request) (auth.Identity, bool) {
 	return auth.FromContext(r.Context())
 }
 
-// resolveAgent returns the AgentHandle for the given agent within the
-// caller's user space. Apikey callers are additionally checked against
-// their access list before the handle is returned. super_admin without
-// an actAs override gets the foreign agent injected into their OWN
-// UserSpace — sessions, memory, and provider scope stay caller-keyed
-// (admin doesn't see the owner's chats), while the agent's persistent
 // resolveSessionProject reads sessions.project_id for the chat
 // the request is targeting so attachments and other workspace IO can
 // route to projects/<pid>/ when the chat belongs to a project. Returns
@@ -291,11 +299,22 @@ func (s *Server) resolveSessionProject(ctx context.Context, r *http.Request, age
 	return pid
 }
 
-// identity (system prompt, agent-scope config, skills, files — all
-// keyed by agent_id) is reused.
+// resolveAgent returns the AgentHandle for the given agent within the
+// caller's user space. The persistent agent record is checked before a
+// cached or lazily attached runtime handle is returned, so changing an
+// agent from public to private takes effect immediately. A private agent
+// may be read only by its owner, an explicitly scoped API key, or a
+// super_admin using the read-only ?actAs= audit flow.
 func (s *Server) resolveAgent(r *http.Request, agentID string) AgentHandle {
 	ident, ok := auth.FromContext(r.Context())
 	if !ok {
+		return nil
+	}
+	if s.dataStore == nil {
+		return nil
+	}
+	rec, err := s.dataStore.GetAgent(r.Context(), agentID)
+	if err != nil || !s.agentReadable(r, rec) {
 		return nil
 	}
 	if !ident.CanAccessAgent(agentID) {
@@ -313,7 +332,7 @@ func (s *Server) resolveAgent(r *http.Request, agentID string) AgentHandle {
 	// Lazy-attach when the agent isn't in the caller's UserSpace but
 	// the caller is otherwise authorized to use it. Concrete scenarios:
 	//
-	//   1. super_admin browsing another user's agent.
+	//   1. super_admin auditing another user's agent via ?actAs=.
 	//   2. api_key whose ACL grants this agent — typically the key
 	//      owner == agent owner, but this path also handles the
 	//      app_user case where SwitchToAppUser flipped the identity
@@ -323,27 +342,13 @@ func (s *Server) resolveAgent(r *http.Request, agentID string) AgentHandle {
 	//   3. session user accessing a public agent owned by someone else
 	//      (link-based sharing — gated on agents.is_public).
 	//
-	// For the public-agent path we DO need a DB hit to confirm
-	// is_public; everything else (super_admin, apikey ACL) is already
-	// answered by Identity. EnsureAgent is idempotent so the lookup
-	// only fires before the agent lands in the user's Manager — once
-	// attached, AgentByID succeeds on subsequent requests.
+	// The record-level read gate above has already verified each path.
+	// EnsureAgent is idempotent, so once the runtime is attached,
+	// subsequent requests reuse it while still rechecking privacy.
 	if ag == nil {
 		injector, hasInjector := s.userResolver.(api.AgentInjector)
-		// super_admin can lazy-attach foreign agents regardless of actAs
-		// mode. In actAs mode, EffectiveUserID() is the impersonated user
-		// — attaching the agent to THAT user's UserSpace is exactly what
-		// the admin Chats "Open" flow needs to read sessions written
-		// under user_id=impersonated. The previous `!ident.IsActingAs()`
-		// gate blocked this case and the chat panel rendered empty even
-		// though the session_messages rows existed in the DB.
 		canAttach := hasInjector &&
-			(ident.AuthMethod == "apikey" || ident.Role == users.RoleSuperAdmin)
-		if !canAttach && hasInjector && uid != "" && s.dataStore != nil {
-			if rec, err := s.dataStore.GetAgent(r.Context(), agentID); err == nil && rec != nil && rec.IsPublic {
-				canAttach = true
-			}
-		}
+			(ident.AuthMethod == "apikey" || ident.IsActingAs() || rec.UserID == uid || rec.IsPublic)
 		if canAttach {
 			if err := injector.EnsureAgent(r.Context(), uid, agentID); err == nil {
 				ag = space.Agents.AgentByID(agentID)
@@ -481,8 +486,58 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 // --- /api/config (GET / POST) ---
 
+// explicitConfigScope resolves the optional ?scope=user|system selector used
+// by the settings dialog. Without it, the legacy endpoint behavior remains
+// intact. User scope always means the authenticated caller's own account;
+// there is deliberately no scopeId query parameter here, so this cannot turn
+// into a shortcut for mutating another user's private configuration.
+func (s *Server) explicitConfigScope(
+	w http.ResponseWriter,
+	r *http.Request,
+	op scopeOp,
+) (targetScope, targetID string, explicit, ok bool) {
+	requested := strings.TrimSpace(r.URL.Query().Get("scope"))
+	if requested == "" {
+		return "", "", false, true
+	}
+	ident, found := auth.FromContext(r.Context())
+	if !found {
+		jsonResponse(w, http.StatusUnauthorized, map[string]any{"ok": false, "error": "unauthorized"})
+		return "", "", true, false
+	}
+	switch requested {
+	case scope.User:
+		targetScope = scope.User
+		targetID = ident.EffectiveUserID()
+	case scope.System:
+		targetScope = scope.System
+		targetID = ""
+	default:
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "scope must be user or system"})
+		return "", "", true, false
+	}
+	if !s.authorizeScope(w, r, targetScope, targetID, op) {
+		return "", "", true, false
+	}
+	return targetScope, targetID, true, true
+}
+
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
-	cfg, err := s.loadUserConfig(r)
+	targetScope, targetID, explicit, ok := s.explicitConfigScope(w, r, scopeRead)
+	if !ok {
+		return
+	}
+	var cfg *config.Config
+	var err error
+	if explicit {
+		uid := ""
+		if targetScope == scope.User {
+			uid = targetID
+		}
+		cfg, err = s.loadConfigForUserID(r, uid)
+	} else {
+		cfg, err = s.loadUserConfig(r)
+	}
 	if err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
@@ -540,6 +595,12 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, http.StatusForbidden, map[string]any{"ok": false, "error": "read-only"})
 		return
 	}
+	targetScope, targetID := s.scopeForSave(r)
+	if requestedScope, requestedID, explicit, allowed := s.explicitConfigScope(w, r, scopeWrite); !allowed {
+		return
+	} else if explicit {
+		targetScope, targetID = requestedScope, requestedID
+	}
 	// PATCH semantics: load existing cfg, then decode the request into
 	// it. Go's json.Unmarshal leaves struct fields and map entries that
 	// aren't present in the JSON untouched, so /settings POSTing just
@@ -568,7 +629,11 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	merged, err := s.loadUserConfig(r)
+	loadUID := ""
+	if targetScope == scope.User {
+		loadUID = targetID
+	}
+	merged, err := s.loadConfigForUserID(r, loadUID)
 	if err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
 		return
@@ -595,7 +660,7 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 			merged.Skills.Entries[name] = mergeSkillEntry(existingSkillEntries[name], in)
 		}
 	}
-	if err := s.saveUserConfig(r, merged); err != nil {
+	if err := s.saveConfigForUserID(r, merged, loadUID); err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
@@ -604,8 +669,7 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	// merged Config — so we only touch agents the caller actually
 	// patched, and don't echo every existing override back as a write.
 	if raw.Prefs != nil {
-		sc, scopeID := s.scopeForSave(r)
-		uid, aid := scope.OwnershipFromScope(sc, scopeID)
+		uid, aid := scope.OwnershipFromScope(targetScope, targetID)
 		data := map[string]interface{}{}
 		if raw.Prefs.Timezone != "" {
 			data["timezone"] = raw.Prefs.Timezone
@@ -642,14 +706,13 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	// agents.defaults.model and the provider chain). Without this, an
 	// agent loaded before the change keeps seeing the stale model and
 	// surfaces "no usable LLM provider" in chat.
-	sc, scopeID := s.scopeForSave(r)
-	if sc == scope.System && raw.Sandbox != nil {
+	if targetScope == scope.System && raw.Sandbox != nil {
 		if err := s.reloadSystemSandbox(); err != nil {
 			jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
 			return
 		}
 	}
-	s.invalidateScope(sc, scopeID)
+	s.invalidateScope(targetScope, targetID)
 	jsonResponse(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -1037,6 +1100,9 @@ func annotateMessageWithAttachments(message string, paths []string) string {
 }
 
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
+	if !s.requireWritable(w, r) {
+		return
+	}
 	var req chatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
@@ -1070,6 +1136,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 // {"buffered":false} when none is running, so the client falls back to
 // a normal /api/chat/stream send.
 func (s *Server) handleChatSteer(w http.ResponseWriter, r *http.Request) {
+	if !s.requireWritable(w, r) {
+		return
+	}
 	var req chatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
@@ -1106,6 +1175,9 @@ func (s *Server) handleChatSteer(w http.ResponseWriter, r *http.Request) {
 const agentTurnTimeout = 45 * time.Minute
 
 func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
+	if !s.requireWritable(w, r) {
+		return
+	}
 	var req chatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
@@ -1778,6 +1850,9 @@ func (s *Server) handleChats(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRenameSession(w http.ResponseWriter, r *http.Request) {
+	if !s.requireWritable(w, r) {
+		return
+	}
 	// Body-or-query for agentId — the frontend sends it in the JSON body
 	// (see renameChatSession in web/src/lib/api.ts), matching the
 	// handleMoveSessionProject convention. The earlier query-only path
@@ -1809,6 +1884,9 @@ func (s *Server) handleRenameSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
+	if !s.requireWritable(w, r) {
+		return
+	}
 	agentID := r.URL.Query().Get("agentId")
 	ag := s.resolveAgent(r, agentID)
 	if ag == nil {

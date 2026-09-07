@@ -38,10 +38,12 @@ import {
 } from "@/lib/api";
 import { useAgentIdFromURL } from "@/hooks/use-agent-id";
 import { useAgentName } from "@/hooks/use-agent-name";
+import { useLocale } from "@/components/locale-provider";
 
 type MCPEntry = { name: string } & MCPServerConfig;
 
 export default function AgentMCPPage() {
+  const { tr } = useLocale();
   const agentId = useAgentIdFromURL();
   const agentName = useAgentName(agentId);
   const [servers, setServers] = useState<Record<string, MCPServerConfig>>({});
@@ -115,18 +117,16 @@ export default function AgentMCPPage() {
         <div className="flex items-start gap-2 rounded-lg border border-yellow-500/30 bg-yellow-500/5 p-3 text-sm">
           <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0 text-yellow-500" />
           <div>
-            <span className="font-medium">stdio servers may not work in cloud deployments.</span>{" "}
-            stdio MCP servers run as local subprocesses and are not shared across instances.
-            Use <strong>http</strong> type for distributed environments.
+            <span className="font-medium">{tr("stdio servers may not work in cloud deployments.", "stdio 服务器可能无法在云部署中工作。")}</span>{" "}
+            {tr("stdio MCP servers run as local subprocesses and are not shared across instances. Use the", "stdio MCP 服务器作为本地子进程运行，无法跨实例共享。分布式环境请使用")} {" "}<strong>http</strong>{" "}{tr("type for distributed environments.", "类型。")}
           </div>
         </div>
       )}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-xl font-semibold">MCP Servers</h2>
+          <h2 className="text-xl font-semibold">{tr("MCP servers", "MCP 服务器")}</h2>
           <p className="text-sm text-muted-foreground mt-1">
-            Connect external tool servers via Model Context Protocol.
-            Tools from MCP servers are available to {agentName || "this agent"} in every conversation.
+            {tr("Connect external tool servers through Model Context Protocol. MCP tools are available to", "通过模型上下文协议连接外部工具服务器。MCP 工具会在每次对话中提供给")} {" "}{agentName || tr("this agent", "此 Agent")}.
           </p>
         </div>
         <Button
@@ -136,16 +136,16 @@ export default function AgentMCPPage() {
             setEditOpen(true);
           }}
         >
-          <Plus className="w-4 h-4 mr-1" /> Add Server
+          <Plus className="w-4 h-4 mr-1" /> {tr("Add server", "添加服务器")}
         </Button>
       </div>
 
       {entries.length === 0 ? (
         <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground">
           <Server className="w-10 h-10 mx-auto mb-3 opacity-40" />
-          <p>No MCP servers configured.</p>
+          <p>{tr("No MCP servers configured.", "尚未配置 MCP 服务器。")}</p>
           <p className="text-xs mt-1">
-            Add an MCP server to extend this agent with external tools.
+            {tr("Add an MCP server to give this agent external tools.", "添加 MCP 服务器，为此 Agent 扩展外部工具。")}
           </p>
         </div>
       ) : (
@@ -166,7 +166,7 @@ export default function AgentMCPPage() {
               </div>
               <div className="text-xs text-muted-foreground truncate">
                 {cfg.type === "http"
-                  ? cfg.url || "(no URL)"
+                  ? cfg.url || tr("(no URL)", "（无 URL）")
                   : [cfg.command, ...(cfg.args ?? [])].join(" ")}
               </div>
               {cfg.env && Object.keys(cfg.env).length > 0 && (
@@ -224,19 +224,19 @@ export default function AgentMCPPage() {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Remove MCP server</AlertDialogTitle>
+            <AlertDialogTitle>{tr("Remove MCP server", "移除 MCP 服务器")}</AlertDialogTitle>
             <AlertDialogDescription>
-              Remove <strong>{deleteTarget}</strong> from this agent?
-              The server&apos;s tools will no longer be available.
+              {tr("Remove", "从此 Agent 移除")} <strong>{deleteTarget}</strong>?
+              {tr(" The server tools will no longer be available.", " 该服务器提供的工具将不再可用。")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{tr("Cancel", "取消")}</AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground"
               onClick={() => deleteTarget && handleDelete(deleteTarget)}
             >
-              Remove
+              {tr("Remove", "移除")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -260,6 +260,7 @@ function MCPEditDialog({
   existingNames: string[];
   onSave: (entry: MCPEntry) => Promise<void>;
 }) {
+  const { tr } = useLocale();
   const [name, setName] = useState("");
   const [type, setType] = useState<"http" | "stdio">("stdio");
   const [url, setUrl] = useState("");
@@ -295,22 +296,22 @@ function MCPEditDialog({
   const handleSubmit = async () => {
     const trimName = name.trim();
     if (!trimName) {
-      setError("Name is required");
+      setError(tr("Name is required", "名称不能为空"));
       return;
     }
     if (!initial && existingNames.includes(trimName)) {
-      setError("A server with this name already exists");
+      setError(tr("A server with this name already exists", "已存在同名服务器"));
       return;
     }
     if (initial && initial.name !== trimName && existingNames.includes(trimName)) {
-      setError("A server with this name already exists");
+      setError(tr("A server with this name already exists", "已存在同名服务器"));
       return;
     }
 
     const entry: MCPEntry = { name: trimName, type };
     if (type === "http") {
       if (!url.trim()) {
-        setError("URL is required for HTTP type");
+        setError(tr("URL is required for HTTP type", "HTTP 类型必须填写 URL"));
         return;
       }
       entry.url = url.trim();
@@ -318,7 +319,7 @@ function MCPEditDialog({
       if (Object.keys(h).length > 0) entry.headers = h;
     } else {
       if (!command.trim()) {
-        setError("Command is required for stdio type");
+        setError(tr("Command is required for stdio type", "stdio 类型必须填写命令"));
         return;
       }
       entry.command = command.trim();
@@ -332,7 +333,7 @@ function MCPEditDialog({
     try {
       await onSave(entry);
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Save failed");
+      setError(e instanceof Error ? e.message : tr("Save failed", "保存失败"));
     } finally {
       setSaving(false);
     }
@@ -342,20 +343,20 @@ function MCPEditDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>{initial ? "Edit MCP Server" : "Add MCP Server"}</DialogTitle>
+          <DialogTitle>{initial ? tr("Edit MCP server", "编辑 MCP 服务器") : tr("Add MCP server", "添加 MCP 服务器")}</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
           <div className="space-y-1.5">
-            <Label>Name</Label>
+            <Label>{tr("Name", "名称")}</Label>
             <Input
-              placeholder="e.g. postgres, filesystem"
+              placeholder={tr("e.g. postgres, filesystem", "例如 postgres、filesystem")}
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
           </div>
 
           <div className="space-y-1.5">
-            <Label>Type</Label>
+            <Label>{tr("Type", "类型")}</Label>
             <Select value={type} onValueChange={(v) => setType(v as "http" | "stdio")}>
               <SelectTrigger>
                 <SelectValue />
@@ -378,7 +379,7 @@ function MCPEditDialog({
                 />
               </div>
               <div className="space-y-1.5">
-                <Label>Headers <span className="text-muted-foreground font-normal">(optional, KEY=VALUE per line)</span></Label>
+                <Label>{tr("Headers", "请求头")} <span className="text-muted-foreground font-normal">{tr("(optional, one KEY=VALUE per line)", "（选填，每行一个 KEY=VALUE）")}</span></Label>
                 <textarea
                   className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 min-h-[60px] resize-y"
                   placeholder={"Authorization=Bearer $TOKEN\nX-Custom=value"}
@@ -391,23 +392,23 @@ function MCPEditDialog({
           ) : (
             <>
               <div className="space-y-1.5">
-                <Label>Command</Label>
+                <Label>{tr("Command", "命令")}</Label>
                 <Input
-                  placeholder="e.g. npx, python, node"
+                  placeholder={tr("e.g. npx, python, node", "例如 npx、python、node")}
                   value={command}
                   onChange={(e) => setCommand(e.target.value)}
                 />
               </div>
               <div className="space-y-1.5">
-                <Label>Arguments <span className="text-muted-foreground font-normal">(space-separated)</span></Label>
+                <Label>{tr("Arguments", "参数")} <span className="text-muted-foreground font-normal">{tr("(space-separated)", "（空格分隔）")}</span></Label>
                 <Input
-                  placeholder="e.g. -y @anthropic/mcp-server-postgres postgresql://..."
+                  placeholder={tr("e.g. -y @anthropic/mcp-server-postgres postgresql://…", "例如 -y @anthropic/mcp-server-postgres postgresql://…")}
                   value={args}
                   onChange={(e) => setArgs(e.target.value)}
                 />
               </div>
               <div className="space-y-1.5">
-                <Label>Environment <span className="text-muted-foreground font-normal">(optional, KEY=VALUE per line)</span></Label>
+                <Label>{tr("Environment", "环境变量")} <span className="text-muted-foreground font-normal">{tr("(optional, one KEY=VALUE per line)", "（选填，每行一个 KEY=VALUE）")}</span></Label>
                 <textarea
                   className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 min-h-[60px] resize-y"
                   placeholder={"DATABASE_URL=postgresql://...\nAPI_KEY=$SECRET"}
@@ -423,10 +424,10 @@ function MCPEditDialog({
 
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="outline" onClick={() => onOpenChange(false)}>
-              Cancel
+              {tr("Cancel", "取消")}
             </Button>
             <Button onClick={handleSubmit} disabled={saving}>
-              {saving ? "Saving..." : initial ? "Save" : "Add"}
+              {saving ? tr("Saving…", "正在保存…") : initial ? tr("Save", "保存") : tr("Add", "添加")}
             </Button>
           </div>
         </div>

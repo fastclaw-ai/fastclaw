@@ -230,7 +230,6 @@ func TestUpdateSameToolFailStreak(t *testing.T) {
 	})
 }
 
-
 // The tool-call budget is the limit that actually fires in practice, yet
 // it warned nobody until now — only the wall-clock budget did. A turn
 // that plans five steps and gets cut off after four ends by reporting
@@ -374,5 +373,17 @@ func TestTodoReconcileNudgeAllowsHonestIncompleteness(t *testing.T) {
 	}
 	if !strings.Contains(msg.Content, "Do not claim the task is complete") {
 		t.Errorf("nudge must forbid the contradiction: %s", msg.Content)
+	}
+}
+
+func TestTodoInstructionsRequireImmediateIncrementalUpdates(t *testing.T) {
+	for _, want := range []string{
+		"immediately before starting the next",
+		"do not batch several completed steps",
+		"never use apply_patch for todo.md",
+	} {
+		if !strings.Contains(taskDelegationContent, want) {
+			t.Errorf("todo instructions missing %q", want)
+		}
 	}
 }

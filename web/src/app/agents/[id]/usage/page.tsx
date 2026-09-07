@@ -21,6 +21,7 @@ import {
   type TokenUsageRange,
 } from "@/lib/api";
 import { useAgentIdFromURL } from "@/hooks/use-agent-id";
+import { useLocale } from "@/components/locale-provider";
 
 const RANGES: { value: TokenUsageRange; label: string }[] = [
   { value: "24h", label: "24h" },
@@ -40,6 +41,7 @@ function fmt(n: number): string {
 }
 
 export default function AgentUsagePage() {
+  const { tr } = useLocale();
   const agentId = useAgentIdFromURL();
   const [range, setRange] = useState<TokenUsageRange>("7d");
   const [data, setData] = useState<AgentTokenUsage | null>(null);
@@ -84,7 +86,7 @@ export default function AgentUsagePage() {
       const d = await getAgentTokenUsage(agentId, r, 50);
       setData(d);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load usage");
+      setError(e instanceof Error ? e.message : tr("Failed to load usage", "加载用量数据失败"));
     } finally {
       setLoading(false);
     }
@@ -96,7 +98,7 @@ export default function AgentUsagePage() {
   }, [agentId, range]);
 
   function renderSessionLabel(key: string): string {
-    if (!key) return "(untracked)";
+    if (!key) return tr("(untracked)", "（未跟踪）");
     const t = sessionTitles[key];
     if (t) return t;
     // Keys are opaque hashes — truncate so the row stays readable.
@@ -109,9 +111,9 @@ export default function AgentUsagePage() {
     <div className="p-6 space-y-6 max-w-3xl">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-xl font-semibold tracking-tight">Token Usage</h2>
+          <h2 className="text-xl font-semibold tracking-tight">{tr("Token Usage", "Token 用量")}</h2>
           <p className="text-sm text-muted-foreground mt-1">
-            Token consumption per chat session for this agent.
+            {tr("Token consumption by chat session for this agent.", "此 Agent 各聊天会话的 Token 消耗。")}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -144,19 +146,19 @@ export default function AgentUsagePage() {
             <div className="flex flex-col items-center justify-center py-10 text-center">
               <Coins className="h-8 w-8 text-muted-foreground mb-3" />
               <p className="text-sm text-muted-foreground">
-                No token usage recorded in this window yet.
+                {tr("No token usage recorded in this period yet.", "此时间段内暂无 Token 用量记录。")}
               </p>
             </div>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Session</TableHead>
-                  <TableHead className="text-right">Input</TableHead>
-                  <TableHead className="text-right">Output</TableHead>
-                  <TableHead className="text-right">Cache</TableHead>
-                  <TableHead className="text-right">Total</TableHead>
-                  <TableHead className="text-right">Requests</TableHead>
+                  <TableHead>{tr("Session", "会话")}</TableHead>
+                  <TableHead className="text-right">{tr("Input", "输入")}</TableHead>
+                  <TableHead className="text-right">{tr("Output", "输出")}</TableHead>
+                  <TableHead className="text-right">{tr("Cache", "缓存")}</TableHead>
+                  <TableHead className="text-right">{tr("Total", "总计")}</TableHead>
+                  <TableHead className="text-right">{tr("Requests", "请求数")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>

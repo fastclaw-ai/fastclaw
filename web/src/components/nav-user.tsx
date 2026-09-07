@@ -19,23 +19,31 @@ import {
 import {
   ChevronsUpDownIcon,
   LogOutIcon,
-  MoonIcon,
-  SunIcon,
+  SettingsIcon,
 } from "lucide-react";
-import { useTheme } from "@/components/theme-provider";
+import { useLocale } from "@/components/locale-provider";
 import { logout as doLogout } from "@/lib/auth";
 
 export function NavUser({
-  name = "Admin",
+  name,
   subtitle = "Gateway running",
 }: {
   name?: string;
   subtitle?: string;
 }) {
   const { isMobile } = useSidebar();
-  const { resolvedTheme, toggleTheme } = useTheme();
+  const { t, tr } = useLocale();
 
-  const initials = name.slice(0, 2).toUpperCase();
+  // `name` comes from the current user's profile. Render it verbatim — a
+  // value such as "Admin" may be the user's chosen display name, not a role
+  // label that should be translated.
+  const displayName = name?.trim() || t("common.user");
+  const displaySubtitle =
+    subtitle === "Gateway running"
+      ? tr("Gateway running", "网关运行中")
+      : subtitle;
+
+  const initials = displayName.slice(0, 2).toUpperCase();
 
   return (
     <SidebarMenu>
@@ -53,9 +61,9 @@ export function NavUser({
               {initials}
             </div>
             <div className="grid flex-1 text-left text-sm leading-tight">
-              <span className="truncate font-medium">{name}</span>
+              <span className="truncate font-medium">{displayName}</span>
               <span className="truncate text-xs text-muted-foreground">
-                {subtitle}
+                {displaySubtitle}
               </span>
             </div>
             <ChevronsUpDownIcon className="ml-auto size-4" />
@@ -73,9 +81,9 @@ export function NavUser({
                     {initials}
                   </div>
                   <div className="grid flex-1 text-left text-sm leading-tight">
-                    <span className="truncate font-medium">{name}</span>
+                    <span className="truncate font-medium">{displayName}</span>
                     <span className="truncate text-xs text-muted-foreground">
-                      {subtitle}
+                      {displaySubtitle}
                     </span>
                   </div>
                 </div>
@@ -83,13 +91,12 @@ export function NavUser({
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
             <DropdownMenuItem
-              onClick={(e) => {
-                e.preventDefault();
-                toggleTheme();
+              onClick={() => {
+                window.dispatchEvent(new CustomEvent("fastclaw:open-user-settings"));
               }}
             >
-              {resolvedTheme === "dark" ? <SunIcon /> : <MoonIcon />}
-              <span>{resolvedTheme === "dark" ? "Light mode" : "Dark mode"}</span>
+              <SettingsIcon />
+              <span>{t("common.settings")}</span>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem
@@ -99,7 +106,7 @@ export function NavUser({
               }}
             >
               <LogOutIcon />
-              <span>Log out</span>
+              <span>{t("common.logOut")}</span>
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

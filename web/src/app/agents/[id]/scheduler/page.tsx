@@ -31,37 +31,38 @@ import {
 } from "@/lib/api";
 import { useAgentIdFromURL } from "@/hooks/use-agent-id";
 import { useAgentName } from "@/hooks/use-agent-name";
+import { useLocale, type Locale } from "@/components/locale-provider";
 
 // Scheduler page: lists every cron job the agent has on file. The
 // `create_cron_job` tool the agent itself uses writes here, so anything
 // you said in chat ("每分钟讲笑话", "5 分钟后提醒我睡觉") shows up as a
 // row. Disable to pause without losing the job; delete to remove it.
 
-function fmtSchedule(job: AgentCronJob): string {
+function fmtSchedule(job: AgentCronJob, locale: Locale): string {
   switch (job.type) {
     case "interval":
-      return `every ${job.schedule}`;
+      return locale === "zh-CN" ? `每 ${job.schedule}` : `every ${job.schedule}`;
     case "once":
-      return `at ${job.schedule}`;
+      return locale === "zh-CN" ? `于 ${job.schedule}` : `at ${job.schedule}`;
     case "cron":
     default:
       return job.schedule;
   }
 }
 
-function fmtRelative(iso?: string): string {
+function fmtRelative(iso: string | undefined, locale: Locale): string {
   if (!iso) return "—";
   const t = new Date(iso).getTime();
   if (Number.isNaN(t)) return iso;
   const diff = t - Date.now();
   const abs = Math.abs(diff);
   const mins = Math.round(abs / 60_000);
-  if (mins < 1) return diff > 0 ? "in <1m" : "just now";
-  if (mins < 60) return diff > 0 ? `in ${mins}m` : `${mins}m ago`;
+  if (mins < 1) return locale === "zh-CN" ? (diff > 0 ? "不到 1 分钟后" : "刚刚") : (diff > 0 ? "in <1m" : "just now");
+  if (mins < 60) return locale === "zh-CN" ? (diff > 0 ? `${mins} 分钟后` : `${mins} 分钟前`) : (diff > 0 ? `in ${mins}m` : `${mins}m ago`);
   const hours = Math.round(mins / 60);
-  if (hours < 48) return diff > 0 ? `in ${hours}h` : `${hours}h ago`;
+  if (hours < 48) return locale === "zh-CN" ? (diff > 0 ? `${hours} 小时后` : `${hours} 小时前`) : (diff > 0 ? `in ${hours}h` : `${hours}h ago`);
   const days = Math.round(hours / 24);
-  return diff > 0 ? `in ${days}d` : `${days}d ago`;
+  return locale === "zh-CN" ? (diff > 0 ? `${days} 天后` : `${days} 天前`) : (diff > 0 ? `in ${days}d` : `${days}d ago`);
 }
 
 function typeIcon(type: string) {
@@ -77,6 +78,7 @@ function typeIcon(type: string) {
 }
 
 export default function AgentSchedulerPage() {
+  const { tr } = useLocale();
   const agentId = useAgentIdFromURL();
   const agentName = useAgentName(agentId);
 
@@ -96,9 +98,9 @@ export default function AgentSchedulerPage() {
         setJobs(list);
         setError("");
       })
-      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load jobs"))
+      .catch((e) => setError(e instanceof Error ? e.message : tr("Failed to load jobs", "加载定时任务失败")))
       .finally(() => setLoading(false));
-  }, [agentId]);
+  }, [agentId, tr]);
 
   useEffect(() => {
     refresh();
@@ -119,7 +121,7 @@ export default function AgentSchedulerPage() {
       return rest;
     });
     if (res.error || !res.ok) {
-      setError(res.error || "Failed to update job");
+      setError(res.error || tr("Failed to update job", "更新定时任务失败"));
       // Revert by refetching the canonical state.
       refresh();
     }
@@ -140,10 +142,10 @@ export default function AgentSchedulerPage() {
         <div>
           <div className="flex items-center gap-2">
             <Clock className="size-5 text-muted-foreground" />
-            <h2 className="text-2xl font-semibold tracking-tight">Scheduler</h2>
+            <h2 className="text-2xl font-semibold tracking-tight">{tr("Scheduler", "定时任务")}</h2>
           </div>
           <p className="text-sm text-muted-foreground mt-1">
-            Scheduled tasks for <strong>{agentName || "this agent"}</strong>.
+            {tr("Scheduled tasks for", "管理")} <strong>{agentName || tr("this agent", "此 Agent")}</strong>{tr(".", " 的定时任务。")}
           </p>
         </div>
       </div>
@@ -164,7 +166,7 @@ export default function AgentSchedulerPage() {
         <div className="rounded-lg border border-dashed border-border bg-card/50 p-10 text-center">
           <Clock className="mx-auto size-8 text-muted-foreground/50 mb-3" />
           <p className="text-sm text-muted-foreground">
-            No scheduled tasks yet.
+            {tr("No scheduled tasks yet.", "还没有定时任务。")}
           </p>
         </div>
       ) : (
@@ -187,20 +189,19 @@ export default function AgentSchedulerPage() {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete scheduled task</AlertDialogTitle>
+            <AlertDialogTitle>{tr("Delete scheduled task", "删除定时任务")}</AlertDialogTitle>
             <AlertDialogDescription>
-              Remove <strong>{deleteTarget?.name || deleteTarget?.id}</strong>?
-              This stops future runs and can&apos;t be undone. Existing chat
-              history is preserved.
+              {tr("Remove", "删除")} <strong>{deleteTarget?.name || deleteTarget?.id}</strong>?
+              {tr(" This stops future runs and cannot be undone. Existing chat history is preserved.", " 之后将不再执行，且无法撤销。已有聊天记录会被保留。")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{tr("Cancel", "取消")}</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleDelete}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              Delete
+              {tr("Delete", "删除")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -220,6 +221,7 @@ function JobRow({
   onToggle: (enabled: boolean) => void;
   onDelete: () => void;
 }) {
+  const { locale, tr } = useLocale();
   return (
     <div className="rounded-lg border border-border bg-card p-4">
       <div className="flex items-start justify-between gap-3">
@@ -234,19 +236,19 @@ function JobRow({
               {job.type}
             </Badge>
             <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">
-              {fmtSchedule(job)}
+              {fmtSchedule(job, locale)}
             </code>
             {job.channel && (
               <span className="text-[11px] text-muted-foreground">
-                via {job.channel}
+                {tr("via {{channel}}", "通过 {{channel}}", { channel: job.channel })}
               </span>
             )}
             {job.chatterId && (
               <span
                 className="text-[11px] text-muted-foreground"
-                title="Per-sender user that created this job"
+                title={tr("User who created this task", "创建此任务的用户")}
               >
-                by {job.chatterId}
+                {tr("by {{user}}", "由 {{user}} 创建", { user: job.chatterId })}
               </span>
             )}
           </div>
@@ -256,12 +258,12 @@ function JobRow({
           </div>
           <div className="flex gap-4 text-[11px] text-muted-foreground/80">
             <span>
-              Last run:{" "}
-              <span className="font-mono">{fmtRelative(job.lastRun)}</span>
+              {tr("Last run:", "上次执行：")} {" "}
+              <span className="font-mono">{fmtRelative(job.lastRun, locale)}</span>
             </span>
             <span>
-              Next run:{" "}
-              <span className="font-mono">{fmtRelative(job.nextRun)}</span>
+              {tr("Next run:", "下次执行：")} {" "}
+              <span className="font-mono">{fmtRelative(job.nextRun, locale)}</span>
             </span>
           </div>
         </div>
@@ -270,14 +272,14 @@ function JobRow({
             checked={job.enabled}
             disabled={busy}
             onCheckedChange={(v) => onToggle(v)}
-            aria-label={job.enabled ? "Disable" : "Enable"}
+            aria-label={job.enabled ? tr("Disable", "停用") : tr("Enable", "启用")}
           />
           <Button
             size="icon"
             variant="ghost"
             className="text-destructive hover:text-destructive"
             onClick={onDelete}
-            title="Delete"
+            title={tr("Delete", "删除")}
           >
             <Trash2 className="size-4" />
           </Button>

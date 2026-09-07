@@ -10,10 +10,12 @@ import {
   type ScopeName,
 } from "@/lib/api";
 import { ScopePicker } from "@/components/scope-picker";
+import { useLocale } from "@/components/locale-provider";
 
 const CHANNEL_TYPES = ["telegram", "discord", "slack"];
 
 export default function ChannelsConfigPage() {
+  const { tr } = useLocale();
   const [scope, setScope] = useState<ScopeName>("system");
   const [scopeId, setScopeId] = useState<string>("");
   const [rows, setRows] = useState<ChannelRow[]>([]);
@@ -56,7 +58,10 @@ export default function ChannelsConfigPage() {
   }
 
   async function handleDelete(row: ChannelRow) {
-    if (!confirm(`Delete ${row.type} at ${row.scope}/${row.scopeId || "(global)"}?`)) return;
+    if (!confirm(tr("Delete {{type}} at {{scope}}?", "确定删除 {{scope}} 中的 {{type}} 吗？", {
+      type: row.type,
+      scope: `${row.scope}/${row.scopeId || tr("global", "全局")}`,
+    }))) return;
     const res = await deleteScopedChannel(row.id);
     if (res.error) setError(res.error);
     refresh();
@@ -71,9 +76,9 @@ export default function ChannelsConfigPage() {
 
   return (
     <div className="p-8 text-zinc-100">
-      <h1 className="mb-2 text-2xl font-bold">Channels</h1>
+      <h1 className="mb-2 text-2xl font-bold">{tr("Channels", "渠道")}</h1>
       <p className="mb-6 text-sm text-zinc-500">
-        Add a Telegram / Discord / Slack bot at any scope. An inner-scope row with <code>enabled=false</code> hides the outer-scope channel for that user/agent.
+        {tr("Add a Telegram, Discord, or Slack bot at any scope. An inner-scope row with", "可在任意作用域添加 Telegram、Discord 或 Slack 机器人。内层作用域中的")} <code>enabled=false</code> {tr("hides the outer-scope channel for that user or agent.", "配置会对相应用户或 Agent 隐藏外层渠道。")}
       </p>
 
       <div className="mb-6">
@@ -81,21 +86,21 @@ export default function ChannelsConfigPage() {
       </div>
 
       <form onSubmit={handleCreate} className="mb-6 space-y-3 rounded-lg border border-zinc-800 bg-zinc-900 p-4">
-        <h2 className="font-semibold">Add channel</h2>
+        <h2 className="font-semibold">{tr("Add channel", "添加渠道")}</h2>
         <div className="grid grid-cols-2 gap-3">
           <select value={draft.type} onChange={(e) => setDraft({ ...draft, type: e.target.value })} className="rounded border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm">
             {CHANNEL_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
           </select>
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={draft.enabled} onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })} />
-            enabled
+            {tr("enabled", "启用")}
           </label>
         </div>
-        <input type="password" value={draft.botToken} onChange={(e) => setDraft({ ...draft, botToken: e.target.value })} placeholder="Bot token" className="w-full rounded border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm" />
+        <input type="password" value={draft.botToken} onChange={(e) => setDraft({ ...draft, botToken: e.target.value })} placeholder={tr("Bot token", "机器人 Token")} className="w-full rounded border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm" />
         {draft.type === "slack" && (
-          <input type="password" value={draft.appToken} onChange={(e) => setDraft({ ...draft, appToken: e.target.value })} placeholder="App token (Slack Socket Mode)" className="w-full rounded border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm" />
+          <input type="password" value={draft.appToken} onChange={(e) => setDraft({ ...draft, appToken: e.target.value })} placeholder={tr("App token (Slack Socket Mode)", "App Token（Slack Socket Mode）")} className="w-full rounded border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm" />
         )}
-        <button type="submit" className="rounded bg-violet-600 px-4 py-2 text-sm">Save</button>
+        <button type="submit" className="rounded bg-violet-600 px-4 py-2 text-sm">{tr("Save", "保存")}</button>
       </form>
 
       {error && <p className="mb-4 text-sm text-red-400">{error}</p>}
@@ -103,10 +108,10 @@ export default function ChannelsConfigPage() {
       <table className="w-full text-sm">
         <thead className="text-left text-zinc-400">
           <tr>
-            <th className="py-2">Type</th>
-            <th>Bot token</th>
-            <th>Enabled</th>
-            <th>Cred key</th>
+            <th className="py-2">{tr("Type", "类型")}</th>
+            <th>{tr("Bot token", "机器人 Token")}</th>
+            <th>{tr("Enabled", "已启用")}</th>
+            <th>{tr("Credential key", "凭证键")}</th>
             <th></th>
           </tr>
         </thead>
@@ -127,7 +132,7 @@ export default function ChannelsConfigPage() {
               </td>
               <td className="font-mono text-xs text-zinc-500">{row.credentialKey}</td>
               <td className="text-right">
-                <button onClick={() => handleDelete(row)} className="text-xs text-red-400 hover:underline">delete</button>
+                <button onClick={() => handleDelete(row)} className="text-xs text-red-400 hover:underline">{tr("delete", "删除")}</button>
               </td>
             </tr>
           ))}

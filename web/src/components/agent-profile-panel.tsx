@@ -10,6 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch, getAgent, updateAgent, type AgentDetail } from "@/lib/api";
 import { useAgentIdFromURL } from "@/hooks/use-agent-id";
+import { useLocale } from "@/components/locale-provider";
 
 // AgentProfilePanel is the "Profile" tab inside the Settings dialog —
 // the same fields the admin Edit Agent dialog at /agents/page.tsx
@@ -20,6 +21,7 @@ import { useAgentIdFromURL } from "@/hooks/use-agent-id";
 // it through.
 
 export default function AgentProfilePanel() {
+  const { tr } = useLocale();
   const agentId = useAgentIdFromURL();
   const [agent, setAgent] = React.useState<AgentDetail | null>(null);
   const [loading, setLoading] = React.useState(true);
@@ -94,7 +96,7 @@ export default function AgentProfilePanel() {
   const onSave = async () => {
     if (!agentId || !agent || !isOwner) return;
     if (!name.trim()) {
-      setError("Name is required");
+      setError(tr("Name is required", "名称不能为空"));
       return;
     }
     setSaving(true);
@@ -106,7 +108,7 @@ export default function AgentProfilePanel() {
         isPublic,
       });
       if (resp && (resp.ok === false || resp.error)) {
-        setError(resp.error || "Failed to update agent");
+        setError(resp.error || tr("Failed to update agent", "更新 Agent 失败"));
         return;
       }
       if (avatar) {
@@ -144,7 +146,9 @@ export default function AgentProfilePanel() {
   if (!agent) {
     return (
       <div className="p-6 max-w-3xl">
-        <p className="text-sm text-muted-foreground">Agent not found.</p>
+        <p className="text-sm text-muted-foreground">
+          {tr("Agent not found.", "未找到该 Agent。")}
+        </p>
       </div>
     );
   }
@@ -160,11 +164,13 @@ export default function AgentProfilePanel() {
     <div className="p-6 max-w-3xl space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight">Profile</h2>
+          <h2 className="text-2xl font-semibold tracking-tight">
+            {tr("Profile", "资料")}
+          </h2>
           <p className="text-sm text-muted-foreground mt-1">
             {isOwner
-              ? "Update your agent's name, description, and avatar."
-              : "Read-only — only the agent owner can edit these fields."}
+              ? tr("Update your agent's name, description, and avatar.", "更新 Agent 的名称、描述和头像。")
+              : tr("Read-only — only the agent owner can edit these fields.", "只读模式 — 只有 Agent 所有者可以编辑这些字段。")}
           </p>
         </div>
         {isOwner && (
@@ -175,11 +181,11 @@ export default function AgentProfilePanel() {
             className={saved ? "border-emerald-500/30 text-emerald-600" : ""}
           >
             {saved ? (
-              <><Check className="h-4 w-4 mr-2" /> Saved</>
+              <><Check className="h-4 w-4 mr-2" /> {tr("Saved", "已保存")}</>
             ) : saving ? (
-              <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Saving...</>
+              <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> {tr("Saving…", "正在保存…")}</>
             ) : (
-              <><Save className="h-4 w-4 mr-2" /> Save</>
+              <><Save className="h-4 w-4 mr-2" /> {tr("Save", "保存")}</>
             )}
           </Button>
         )}
@@ -199,7 +205,7 @@ export default function AgentProfilePanel() {
             onClick={() => isOwner && fileInputRef.current?.click()}
             disabled={!isOwner}
             className="group relative flex size-20 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-dashed bg-muted/40 transition hover:bg-muted disabled:cursor-not-allowed"
-            aria-label="Upload avatar"
+            aria-label={tr("Upload avatar", "上传头像")}
           >
             <AgentAvatarImg src={avatarSrc} />
             <input
@@ -212,7 +218,7 @@ export default function AgentProfilePanel() {
             />
           </button>
           <div className="flex-1 space-y-2">
-            <Label htmlFor="agent-profile-name">Name</Label>
+            <Label htmlFor="agent-profile-name">{tr("Name", "名称")}</Label>
             <Input
               id="agent-profile-name"
               value={name}
@@ -220,7 +226,7 @@ export default function AgentProfilePanel() {
                 setName(e.target.value);
                 setError(null);
               }}
-              placeholder="My Helper"
+              placeholder={tr("My helper", "我的助手")}
               disabled={!isOwner}
             />
             <p className="text-xs text-muted-foreground">
@@ -233,12 +239,12 @@ export default function AgentProfilePanel() {
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="agent-profile-desc">Description</Label>
+          <Label htmlFor="agent-profile-desc">{tr("Description", "描述")}</Label>
           <Textarea
             id="agent-profile-desc"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            placeholder="What's this agent for?"
+            placeholder={tr("What is this agent for?", "这个 Agent 有什么用途？")}
             rows={3}
             disabled={!isOwner}
           />
@@ -249,12 +255,12 @@ export default function AgentProfilePanel() {
         <div className="flex items-start justify-between gap-4">
           <div className="space-y-1">
             <Label htmlFor="agent-profile-public" className="text-sm font-medium">
-              Public access
+              {tr("Public access", "公开访问")}
             </Label>
             <p className="text-xs text-muted-foreground">
               {isPublic
-                ? "Anyone with the link can chat. Their history stays private to them."
-                : "Only you can use this agent."}
+                ? tr("Anyone with the link can chat. Their history stays private to them.", "任何获得链接的人都可以聊天，聊天记录仅对其本人可见。")
+                : tr("Only you can use this agent.", "只有你可以使用这个 Agent。")}
             </p>
           </div>
           <Switch
@@ -297,12 +303,12 @@ export default function AgentProfilePanel() {
               {linkCopied ? (
                 <>
                   <Check className="h-4 w-4 mr-1.5" />
-                  Copied
+                  {tr("Copied", "已复制")}
                 </>
               ) : (
                 <>
                   <Copy className="h-4 w-4 mr-1.5" />
-                  Copy
+                  {tr("Copy", "复制")}
                 </>
               )}
             </Button>

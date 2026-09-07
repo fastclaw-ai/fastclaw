@@ -60,6 +60,7 @@ backend, or `SetRuntimeManager` never called), every endpoint returns
 | `POST /api/agents/{id}/projects/{pid}/runtime/up` | provision + boot (idempotent) | `{"templateRef":"shipany-tanstack"}` (required on first boot, ignored after) | runtime record (`status:running`) |
 | `POST /api/agents/{id}/projects/{pid}/runtime/sleep` | stop container, keep files | — | `{"ok":true,"status":"sleeping"}` |
 | `POST /api/agents/{id}/projects/{pid}/runtime/wake` | re-boot a sleeping runtime | — | runtime record |
+| `POST /api/agents/{id}/projects/{pid}/runtime/exec` | run one coding-tool command in the live project sandbox | `{"command":"pnpm build","timeoutSeconds":120}` | `{"output":"…","truncated":false}` |
 | `DELETE /api/agents/{id}/projects/{pid}/runtime` | tear down container + forget runtime (files kept) | — | `{"ok":true}` |
 | `GET /api/agents/{id}/projects/{pid}/preview` | preview URL + status only | — | `{"previewUrl":…,"status":…}` |
 | `GET /api/agents/{id}/projects/{pid}/runtime/logs?tail=200` | dev-server log tail | — | `{"logs":"…"}` |
@@ -68,6 +69,11 @@ backend, or `SetRuntimeManager` never called), every endpoint returns
 allows a 10-minute deadline. The SaaS should show a "building…" state and
 poll `GET …/runtime` (or `…/preview`) until `status` is `running` or
 `crashed`.
+
+`exec` requires the same write access and effective-user project ownership as
+the other mutating endpoints. It never falls back to host execution, caps a
+request and response at 1 MiB, and clamps `timeoutSeconds` to 120. A non-zero
+command returns `409` with both `error` and any captured `output`.
 
 ### Typical SaaS flow ("make me an X")
 

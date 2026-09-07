@@ -13,6 +13,7 @@ import {
 } from "@/lib/api";
 import { useAgentIdFromURL } from "@/hooks/use-agent-id";
 import { useAgentName } from "@/hooks/use-agent-name";
+import { useLocale } from "@/components/locale-provider";
 
 // Per-agent plugin enable tab. Mirrors the Skills page layout (cards
 // grid with header). Off by default — plugins listed here come from
@@ -20,6 +21,7 @@ import { useAgentName } from "@/hooks/use-agent-name";
 // to THIS agent only. See registerHookPluginsForAgent in
 // internal/gateway/userspace.go for the opt-in semantics.
 export default function AgentPluginsPage() {
+  const { tr } = useLocale();
   const agentId = useAgentIdFromURL();
   const agentName = useAgentName(agentId);
   const [hookPlugins, setHookPlugins] = useState<HookPlugin[]>([]);
@@ -81,13 +83,11 @@ export default function AgentPluginsPage() {
   return (
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
       <div>
-        <h2 className="text-2xl font-semibold tracking-tight">Plugins</h2>
+        <h2 className="text-2xl font-semibold tracking-tight">{tr("Plugins", "插件")}</h2>
         <p className="text-sm text-muted-foreground mt-1">
-          Hook plugins discovered on this install — enable per-agent for{" "}
-          <strong>{agentName}</strong>. Off by default; plugins only
-          fire on agents you explicitly turn on. Follow-up messages flow
-          back through <code className="text-[10px]">chat.send</code> —
-          they don&apos;t trigger another agent turn.
+          {tr("Enable installed hook plugins for", "为")} {" "}<strong>{agentName}</strong>
+          {tr(". Plugins are disabled by default and run only for agents where you enable them. Follow-up messages sent through", " 启用已安装的 Hook 插件。插件默认关闭，仅对明确启用的 Agent 运行。通过")} {" "}<code className="text-[10px]">chat.send</code>{" "}
+          {tr("do not trigger another agent turn.", "发送的后续消息不会再次触发 Agent 回合。")}
         </p>
       </div>
 
@@ -98,14 +98,13 @@ export default function AgentPluginsPage() {
               <Plug className="h-7 w-7 text-primary" />
             </div>
             <p className="text-sm text-muted-foreground mb-1">
-              No hook plugins installed
+              {tr("No hook plugins installed", "尚未安装 Hook 插件")}
             </p>
             <p className="text-xs text-muted-foreground/60 max-w-sm text-center">
-              Drop a plugin directory into{" "}
+              {tr("Place a plugin directory in", "将插件目录放入")} {" "}
               <code className="text-[10px]">~/.fastclaw/plugins/</code>{" "}
-              with <code className="text-[10px]">type: &quot;hook&quot;</code> in
-              its <code className="text-[10px]">plugin.json</code>, then
-              restart the daemon.
+              {tr("with", "，并在")} <code className="text-[10px]">plugin.json</code> {tr("containing", "中设置")} {" "}
+              <code className="text-[10px]">type: &quot;hook&quot;</code>{tr(", then restart the daemon.", "，然后重启守护进程。")}
             </p>
           </div>
         </div>
@@ -139,7 +138,7 @@ export default function AgentPluginsPage() {
                     checked={enabled}
                     onCheckedChange={(v) => handleToggle(p.id, v)}
                     disabled={saving}
-                    aria-label={`Enable plugin ${p.id}`}
+                    aria-label={tr("Enable plugin {{id}}", "启用插件 {{id}}", { id: p.id })}
                   />
                 </div>
                 {p.description && (

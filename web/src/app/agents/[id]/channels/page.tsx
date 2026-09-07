@@ -49,6 +49,7 @@ import {
 } from "@/lib/api";
 import { useAgentIdFromURL } from "@/hooks/use-agent-id";
 import { useAgentName } from "@/hooks/use-agent-name";
+import { useLocale } from "@/components/locale-provider";
 
 // Channels page: per-agent IM bot bindings. One card per channel type
 // in the catalog — connected types show bot info + Disconnect, others
@@ -97,6 +98,7 @@ const CATALOG: { type: string; label: string; description: string; available: bo
 ];
 
 export default function AgentChannelsPage() {
+  const { tr } = useLocale();
   const agentId = useAgentIdFromURL();
   const agentName = useAgentName(agentId);
 
@@ -117,9 +119,9 @@ export default function AgentChannelsPage() {
     setLoading(true);
     listAgentChannels(agentId)
       .then((list) => setChannels(list))
-      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load channels"))
+      .catch((e) => setError(e instanceof Error ? e.message : tr("Failed to load channels", "加载渠道失败")))
       .finally(() => setLoading(false));
-  }, [agentId]);
+  }, [agentId, tr]);
 
   useEffect(() => {
     refresh();
@@ -151,11 +153,14 @@ export default function AgentChannelsPage() {
         <div>
           <div className="flex items-center gap-2">
             <Radio className="size-5 text-muted-foreground" />
-            <h2 className="text-2xl font-semibold tracking-tight">Channels</h2>
+            <h2 className="text-2xl font-semibold tracking-tight">{tr("Channels", "渠道")}</h2>
           </div>
           <p className="text-sm text-muted-foreground mt-1">
-            Connect IM platforms to <strong>{agentName || "this agent"}</strong>{" "}
-            so people can chat with it on Telegram, Discord, and more.
+            {tr(
+              "Connect messaging platforms to {{agent}} so people can chat with it through Telegram, Discord, and more.",
+              "为 {{agent}} 连接即时通讯平台，让用户可以通过 Telegram、Discord 等渠道与其聊天。",
+              { agent: agentName || tr("this agent", "此 Agent") },
+            )}
           </p>
         </div>
       </div>
@@ -249,23 +254,22 @@ export default function AgentChannelsPage() {
       <AlertDialog open={!!deleteTarget} onOpenChange={(v) => !v && setDeleteTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Disconnect channel</AlertDialogTitle>
+            <AlertDialogTitle>{tr("Disconnect channel", "断开渠道连接")}</AlertDialogTitle>
             <AlertDialogDescription>
-              Disconnect{" "}
-              <strong>
-                {deleteTarget?.botUsername || deleteTarget?.accountId || deleteTarget?.type}
-              </strong>
-              ? Existing chat history is preserved, but the bot will stop
-              forwarding new messages to this agent.
+              {tr(
+                "Disconnect {{channel}}? Existing chat history is preserved, but new messages will no longer be forwarded to this agent.",
+                "要断开 {{channel}} 吗？已有聊天记录会被保留，但新消息将不再转发给此 Agent。",
+                { channel: deleteTarget?.botUsername || deleteTarget?.accountId || deleteTarget?.type || "" },
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{tr("Cancel", "取消")}</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleDelete}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              Disconnect
+              {tr("Disconnect", "断开连接")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -287,13 +291,23 @@ function CatalogCard({
   available: boolean;
   onConnect: () => void;
 }) {
+  const { tr } = useLocale();
+  const localizedDescription =
+    ({
+      telegram: "连接 Telegram 机器人，将消息转发给此 Agent。",
+      discord: "连接 Discord 机器人，支持私信和已邀请的服务器。",
+      slack: "通过 Socket Mode 连接 Slack 应用。",
+      line: "通过 Webhook 连接 LINE Messaging API 渠道。",
+      wechat: "使用微信手机客户端扫码，将消息转发给此 Agent。",
+      feishu: "通过长连接或 Webhook 连接飞书自建应用机器人。",
+    } as Record<string, string>)[type] || description;
   return (
     <div className="rounded-lg border border-border bg-card p-4 flex flex-col gap-3">
       <div className="flex items-center gap-2">
         <ChannelIcon type={type} />
         <span className="font-medium">{label}</span>
       </div>
-      <p className="text-xs text-muted-foreground flex-1">{description}</p>
+      <p className="text-xs text-muted-foreground flex-1">{tr(description, localizedDescription)}</p>
       <Button
         size="sm"
         variant={available ? "outline" : "ghost"}
@@ -302,7 +316,7 @@ function CatalogCard({
         className="w-full"
       >
         <Plus className="h-3.5 w-3.5 mr-1.5" />
-        {available ? "Connect" : "Coming soon"}
+        {available ? tr("Connect", "连接") : tr("Coming soon", "即将推出")}
       </Button>
     </div>
   );
@@ -317,6 +331,7 @@ function ConnectedCard({
   channel: AgentChannel;
   onDelete: () => void;
 }) {
+  const { tr } = useLocale();
   // Telegram is the only provider with a public profile URL pattern
   // (t.me/<username>); Discord/Slack don't expose one from a bot
   // username alone, so we render plain text for those.
@@ -335,7 +350,7 @@ function ConnectedCard({
         {channel.enabled && (
           <span className="inline-flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400">
             <CheckCircle2 className="h-3 w-3" />
-            Connected
+            {tr("Connected", "已连接")}
           </span>
         )}
       </div>
@@ -370,7 +385,7 @@ function ConnectedCard({
         className="w-full text-destructive hover:text-destructive hover:bg-destructive/5"
       >
         <Trash2 className="h-3.5 w-3.5 mr-1.5" />
-        Disconnect
+        {tr("Disconnect", "断开连接")}
       </Button>
     </div>
   );
@@ -418,6 +433,7 @@ function ConnectTelegramDialog({
   agentId: string;
   onConnected: () => void;
 }) {
+  const { tr } = useLocale();
   const [token, setToken] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -439,7 +455,7 @@ function ConnectTelegramDialog({
     const res = await connectAgentTelegram(agentId, token.trim());
     setSubmitting(false);
     if (res.error || !res.ok) {
-      setError(res.error || "Failed to connect");
+      setError(res.error || tr("Failed to connect", "连接失败"));
       return;
     }
     setConnected({ botUsername: res.botUsername || "" });
@@ -452,10 +468,10 @@ function ConnectTelegramDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <img src="/channels/telegram.svg" alt="Telegram" className="h-5 w-5 object-contain" />
-            Connect Telegram bot
+            {tr("Connect Telegram bot", "连接 Telegram 机器人")}
           </DialogTitle>
           <DialogDescription>
-            Talk to{" "}
+            {tr("Open", "打开")} {" "}
             <a
               href="https://t.me/BotFather"
               target="_blank"
@@ -464,9 +480,8 @@ function ConnectTelegramDialog({
             >
               @BotFather
             </a>{" "}
-            on Telegram, run <code>/newbot</code>, and paste the HTTP API token
-            it returns. The token is verified via <code>getMe</code> before
-            anything is saved.
+            {tr("in Telegram, run", "，在 Telegram 中运行")} <code>/newbot</code>
+            {tr(", then paste the HTTP API token it returns. The token is verified before it is saved.", "，然后粘贴返回的 HTTP API Token。保存前会先验证 Token。")}
           </DialogDescription>
         </DialogHeader>
 
@@ -474,10 +489,10 @@ function ConnectTelegramDialog({
           <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-4 space-y-2">
             <div className="flex items-center gap-2">
               <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-              <span className="text-sm font-medium">Connected</span>
+              <span className="text-sm font-medium">{tr("Connected", "已连接")}</span>
             </div>
             <p className="text-sm">
-              Bot is live as{" "}
+              {tr("Bot is live as", "机器人账号为")} {" "}
               <a
                 href={`https://t.me/${connected.botUsername}`}
                 target="_blank"
@@ -487,13 +502,13 @@ function ConnectTelegramDialog({
                 @{connected.botUsername}
                 <ExternalLink className="h-3 w-3" />
               </a>
-              . Send it a message on Telegram to test the integration.
+              {tr(". Send it a Telegram message to test the integration.", "。在 Telegram 中向它发送消息即可测试连接。")}
             </p>
           </div>
         ) : (
           <div className="space-y-3 py-2">
             <div className="space-y-1.5">
-              <Label htmlFor="bot-token">Bot token</Label>
+              <Label htmlFor="bot-token">{tr("Bot token", "机器人 Token")}</Label>
               <Input
                 id="bot-token"
                 value={token}
@@ -511,7 +526,7 @@ function ConnectTelegramDialog({
 
         <DialogFooter>
           {connected ? (
-            <Button onClick={() => onOpenChange(false)}>Done</Button>
+            <Button onClick={() => onOpenChange(false)}>{tr("Done", "完成")}</Button>
           ) : (
             <>
               <Button
@@ -519,10 +534,10 @@ function ConnectTelegramDialog({
                 onClick={() => onOpenChange(false)}
                 disabled={submitting}
               >
-                Cancel
+                {tr("Cancel", "取消")}
               </Button>
               <Button onClick={submit} disabled={submitting || !token.trim()}>
-                {submitting ? "Connecting…" : "Connect"}
+                {submitting ? tr("Connecting…", "正在连接…") : tr("Connect", "连接")}
               </Button>
             </>
           )}
@@ -543,6 +558,7 @@ function ConnectDiscordDialog({
   agentId: string;
   onConnected: () => void;
 }) {
+  const { tr } = useLocale();
   const [token, setToken] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -564,7 +580,7 @@ function ConnectDiscordDialog({
     const res = await connectAgentDiscord(agentId, token.trim());
     setSubmitting(false);
     if (res.error || !res.ok) {
-      setError(res.error || "Failed to connect");
+      setError(res.error || tr("Failed to connect", "连接失败"));
       return;
     }
     setConnected({ botUsername: res.botUsername || "" });
@@ -577,10 +593,10 @@ function ConnectDiscordDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <img src="/channels/discord.svg" alt="Discord" className="h-5 w-5 object-contain" />
-            Connect Discord bot
+            {tr("Connect Discord bot", "连接 Discord 机器人")}
           </DialogTitle>
           <DialogDescription>
-            Open the{" "}
+            {tr("Open the", "打开")} {" "}
             <a
               href="https://discord.com/developers/applications"
               target="_blank"
@@ -589,10 +605,8 @@ function ConnectDiscordDialog({
             >
               Discord Developer Portal
             </a>
-            , create an application, add a Bot, and copy the Bot Token. Make
-            sure <strong>MESSAGE CONTENT INTENT</strong> is enabled under
-            Bot → Privileged Gateway Intents. The token is verified via{" "}
-            <code>/users/@me</code> before anything is saved.
+            {tr(", create an application, add a bot, and copy its token. Enable", "，创建应用并添加机器人，然后复制 Bot Token。在 Bot → Privileged Gateway Intents 中启用")} {" "}
+            <strong>MESSAGE CONTENT INTENT</strong>{tr(". The token is verified before it is saved.", "。保存前会先验证 Token。")}
           </DialogDescription>
         </DialogHeader>
 
@@ -600,19 +614,18 @@ function ConnectDiscordDialog({
           <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-4 space-y-2">
             <div className="flex items-center gap-2">
               <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-              <span className="text-sm font-medium">Connected</span>
+              <span className="text-sm font-medium">{tr("Connected", "已连接")}</span>
             </div>
             <p className="text-sm">
-              Bot is live as{" "}
+              {tr("Bot is live as", "机器人账号为")} {" "}
               <span className="font-mono">{connected.botUsername}</span>.
-              Invite it to a server (OAuth2 → URL Generator → Bot scope) or
-              DM it on Discord to test.
+              {tr(" Invite it to a server through OAuth2 → URL Generator → Bot scope, or send it a direct message to test.", "。通过 OAuth2 → URL Generator → Bot scope 将其邀请到服务器，或发送私信进行测试。")}
             </p>
           </div>
         ) : (
           <div className="space-y-3 py-2">
             <div className="space-y-1.5">
-              <Label htmlFor="discord-bot-token">Bot Token</Label>
+              <Label htmlFor="discord-bot-token">{tr("Bot token", "机器人 Token")}</Label>
               <Input
                 id="discord-bot-token"
                 value={token}
@@ -628,7 +641,7 @@ function ConnectDiscordDialog({
 
         <DialogFooter>
           {connected ? (
-            <Button onClick={() => onOpenChange(false)}>Done</Button>
+            <Button onClick={() => onOpenChange(false)}>{tr("Done", "完成")}</Button>
           ) : (
             <>
               <Button
@@ -636,10 +649,10 @@ function ConnectDiscordDialog({
                 onClick={() => onOpenChange(false)}
                 disabled={submitting}
               >
-                Cancel
+                {tr("Cancel", "取消")}
               </Button>
               <Button onClick={submit} disabled={submitting || !token.trim()}>
-                {submitting ? "Connecting…" : "Connect"}
+                {submitting ? tr("Connecting…", "正在连接…") : tr("Connect", "连接")}
               </Button>
             </>
           )}
@@ -660,6 +673,7 @@ function ConnectSlackDialog({
   agentId: string;
   onConnected: () => void;
 }) {
+  const { tr } = useLocale();
   const [botToken, setBotToken] = useState("");
   const [appToken, setAppToken] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -683,7 +697,7 @@ function ConnectSlackDialog({
     const res = await connectAgentSlack(agentId, botToken.trim(), appToken.trim());
     setSubmitting(false);
     if (res.error || !res.ok) {
-      setError(res.error || "Failed to connect");
+      setError(res.error || tr("Failed to connect", "连接失败"));
       return;
     }
     setConnected({ teamName: res.teamName || "" });
@@ -696,10 +710,10 @@ function ConnectSlackDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <img src="/channels/slack.svg" alt="Slack" className="h-5 w-5 object-contain" />
-            Connect Slack app
+            {tr("Connect Slack app", "连接 Slack 应用")}
           </DialogTitle>
           <DialogDescription>
-            Create a Slack app at{" "}
+            {tr("Create a Slack app at", "在以下地址创建 Slack 应用：")} {" "}
             <a
               href="https://api.slack.com/apps"
               target="_blank"
@@ -708,16 +722,7 @@ function ConnectSlackDialog({
             >
               api.slack.com/apps
             </a>
-            . Enable <strong>Socket Mode</strong>, generate an{" "}
-            <strong>app-level token</strong> (xapp-…) with{" "}
-            <code>connections:write</code>, then under{" "}
-            <strong>OAuth & Permissions</strong> copy the{" "}
-            <strong>Bot User OAuth Token</strong> (xoxb-…). Then go to{" "}
-            <strong>Event Subscriptions → Subscribe to bot events</strong> and
-            add <code>message.channels</code>, <code>message.im</code>, and{" "}
-            <code>app_mention</code> (Slack will prompt for the matching scopes
-            — <code>channels:history</code>, <code>im:history</code>,{" "}
-            <code>app_mentions:read</code> — and ask you to reinstall).
+            {tr(". Enable Socket Mode, create an app-level token with connections:write, and copy the Bot User OAuth Token under OAuth & Permissions. Under Event Subscriptions, subscribe to message.channels, message.im, and app_mention, then reinstall the app if prompted.", "。启用 Socket Mode，创建包含 connections:write 权限的 App-Level Token，并在 OAuth & Permissions 中复制 Bot User OAuth Token。在 Event Subscriptions 中订阅 message.channels、message.im 和 app_mention；如有提示，请重新安装应用。")}
           </DialogDescription>
         </DialogHeader>
 
@@ -725,12 +730,13 @@ function ConnectSlackDialog({
           <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-4 space-y-2">
             <div className="flex items-center gap-2">
               <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-              <span className="text-sm font-medium">Connected</span>
+              <span className="text-sm font-medium">{tr("Connected", "已连接")}</span>
             </div>
             <p className="text-sm">
-              Bot is live in workspace{" "}
-              <strong>{connected.teamName}</strong>. Invite it to a channel
-              with <code>/invite @bot</code> and message it to test.
+              {tr("Bot is live in workspace", "机器人已连接到工作区")} {" "}
+              <strong>{connected.teamName}</strong>
+              {tr(". Invite it to a channel with", "。使用")} <code>/invite @bot</code>{" "}
+              {tr("and send it a message to test.", "将其邀请到频道，然后发送消息进行测试。")}
             </p>
           </div>
         ) : (
@@ -762,7 +768,7 @@ function ConnectSlackDialog({
 
         <DialogFooter>
           {connected ? (
-            <Button onClick={() => onOpenChange(false)}>Done</Button>
+            <Button onClick={() => onOpenChange(false)}>{tr("Done", "完成")}</Button>
           ) : (
             <>
               <Button
@@ -770,13 +776,13 @@ function ConnectSlackDialog({
                 onClick={() => onOpenChange(false)}
                 disabled={submitting}
               >
-                Cancel
+                {tr("Cancel", "取消")}
               </Button>
               <Button
                 onClick={submit}
                 disabled={submitting || !botToken.trim() || !appToken.trim()}
               >
-                {submitting ? "Connecting…" : "Connect"}
+                {submitting ? tr("Connecting…", "正在连接…") : tr("Connect", "连接")}
               </Button>
             </>
           )}
@@ -803,6 +809,7 @@ function ConnectLINEDialog({
   agentId: string;
   onConnected: () => void;
 }) {
+  const { tr } = useLocale();
   const [channelToken, setChannelToken] = useState("");
   const [channelSecret, setChannelSecret] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -830,7 +837,7 @@ function ConnectLINEDialog({
     );
     setSubmitting(false);
     if (res.error || !res.ok) {
-      setError(res.error || "Failed to connect");
+      setError(res.error || tr("Failed to connect", "连接失败"));
       return;
     }
     setConnected({
@@ -847,10 +854,10 @@ function ConnectLINEDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <img src="/channels/line.png" alt="LINE" className="h-5 w-5 object-contain" />
-            Connect LINE channel
+            {tr("Connect LINE channel", "连接 LINE 渠道")}
           </DialogTitle>
           <DialogDescription>
-            Create a Messaging API channel at{" "}
+            {tr("Create a Messaging API channel at", "在以下地址创建 Messaging API 渠道：")} {" "}
             <a
               href="https://developers.line.biz"
               target="_blank"
@@ -859,10 +866,7 @@ function ConnectLINEDialog({
             >
               developers.line.biz
             </a>
-            . Under <strong>Messaging API</strong> issue a long-lived{" "}
-            <strong>Channel access token</strong>, and copy the{" "}
-            <strong>Channel secret</strong> from the Basic settings tab. Toggle
-            on <em>Use webhook</em> after saving the URL we&apos;ll generate.
+            {tr(". Under Messaging API, issue a long-lived Channel access token and copy the Channel secret from the Basic settings tab. After saving the URL we generate, enable Use webhook.", "。在 Messaging API 中签发长期有效的 Channel access token，并从 Basic settings 标签页复制 Channel secret。保存我们生成的 URL 后，请启用 Use webhook。")}
           </DialogDescription>
         </DialogHeader>
 
@@ -871,23 +875,20 @@ function ConnectLINEDialog({
             <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-4 space-y-2">
               <div className="flex items-center gap-2">
                 <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                <span className="text-sm font-medium">Credentials valid</span>
+                <span className="text-sm font-medium">{tr("Credentials valid", "凭证有效")}</span>
               </div>
               <p className="text-sm">
-                Bot identified as{" "}
-                <strong>{connected.botName || "(unnamed)"}</strong>{" "}
+                {tr("Bot identified as", "已识别机器人：")} {" "}
+                <strong>{connected.botName || tr("(unnamed)", "（未命名）")}</strong>{" "}
                 {connected.basicId && (
                   <code className="font-mono text-xs">{connected.basicId}</code>
                 )}.
               </p>
             </div>
             <div className="rounded-lg border bg-muted/30 p-4 space-y-2">
-              <p className="text-sm font-medium">One last step</p>
+              <p className="text-sm font-medium">{tr("One last step", "最后一步")}</p>
               <p className="text-xs text-muted-foreground">
-                Paste this into LINE Developers Console →{" "}
-                <strong>Messaging API → Webhook URL</strong>, click{" "}
-                <em>Verify</em>, then toggle{" "}
-                <strong>Use webhook</strong> on.
+                {tr("Paste this URL into LINE Developers Console → Messaging API → Webhook URL, click Verify, then enable Use webhook.", "将此 URL 粘贴到 LINE Developers Console → Messaging API → Webhook URL，点击 Verify，然后启用 Use webhook。")}
               </p>
               <Input
                 readOnly
@@ -896,20 +897,19 @@ function ConnectLINEDialog({
                 onFocus={(e) => e.currentTarget.select()}
               />
               <p className="text-xs text-muted-foreground">
-                Add the bot as a friend (search the basic ID), or invite it to
-                a group, then send a message to test.
+                {tr("Add the bot as a friend by searching its basic ID, or invite it to a group, then send a message to test.", "通过搜索 Basic ID 将机器人添加为好友，或将其邀请进群，然后发送消息进行测试。")}
               </p>
             </div>
           </div>
         ) : (
           <div className="space-y-3 py-2">
             <div className="space-y-1.5">
-              <Label htmlFor="line-channel-token">Channel access token</Label>
+              <Label htmlFor="line-channel-token">{tr("Channel access token", "Channel access token")}</Label>
               <Input
                 id="line-channel-token"
                 value={channelToken}
                 onChange={(e) => setChannelToken(e.target.value)}
-                placeholder="long-lived token"
+                placeholder={tr("long-lived token", "长期有效 Token")}
                 type="password"
                 className="font-mono text-sm"
                 autoFocus
@@ -921,12 +921,11 @@ function ConnectLINEDialog({
                 id="line-channel-secret"
                 value={channelSecret}
                 onChange={(e) => setChannelSecret(e.target.value)}
-                placeholder="from Basic settings"
+                placeholder={tr("from Basic settings", "来自 Basic settings")}
                 className="font-mono text-sm"
               />
               <p className="text-xs text-muted-foreground">
-                Optional but strongly recommended — fastclaw verifies inbound
-                webhook payloads via HMAC-SHA256 against this secret.
+                {tr("Optional but strongly recommended — fastclaw uses this secret to verify inbound webhook payloads with HMAC-SHA256.", "可选但强烈建议填写——fastclaw 会使用此密钥通过 HMAC-SHA256 验证传入的 Webhook 请求。")}
               </p>
             </div>
             {error && <p className="text-xs text-destructive">{error}</p>}
@@ -935,7 +934,7 @@ function ConnectLINEDialog({
 
         <DialogFooter>
           {connected ? (
-            <Button onClick={() => onOpenChange(false)}>Done</Button>
+            <Button onClick={() => onOpenChange(false)}>{tr("Done", "完成")}</Button>
           ) : (
             <>
               <Button
@@ -943,13 +942,13 @@ function ConnectLINEDialog({
                 onClick={() => onOpenChange(false)}
                 disabled={submitting}
               >
-                Cancel
+                {tr("Cancel", "取消")}
               </Button>
               <Button
                 onClick={submit}
                 disabled={submitting || !channelToken.trim()}
               >
-                {submitting ? "Validating…" : "Connect"}
+                {submitting ? tr("Validating…", "正在验证…") : tr("Connect", "连接")}
               </Button>
             </>
           )}
@@ -975,6 +974,7 @@ function ConnectWeChatDialog({
   agentId: string;
   onConnected: () => void;
 }) {
+  const { tr } = useLocale();
   type WechatStatus = "wait" | "scaned" | "confirmed" | "expired" | "";
   const [qrPayload, setQrPayload] = useState("");
   const [sessionId, setSessionId] = useState("");
@@ -1016,7 +1016,7 @@ function ConnectWeChatDialog({
     const res = await startAgentWeChatLogin(agentId);
     setLoading(false);
     if (res.error || !res.sessionId || !res.qrCodeImg) {
-      setError(res.error || "Failed to fetch QR code");
+      setError(res.error || tr("Failed to fetch QR code", "获取二维码失败"));
       return;
     }
     setSessionId(res.sessionId);
@@ -1042,7 +1042,7 @@ function ConnectWeChatDialog({
         stopPolling();
       }
     }, 3000);
-  }, [agentId, onConnected, stopPolling]);
+  }, [agentId, onConnected, stopPolling, tr]);
 
   // Auto-fetch a QR as soon as the dialog opens (no separate "name"
   // step — fastclaw doesn't surface per-account names, accountID is
@@ -1061,13 +1061,10 @@ function ConnectWeChatDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <img src="/channels/wechat.svg" alt="WeChat" className="h-5 w-5 object-contain scale-150" />
-            Connect WeChat
+            {tr("Connect WeChat", "连接微信")}
           </DialogTitle>
           <DialogDescription>
-            Scan the QR code with the WeChat phone app to bind a personal
-            WeChat account as the bot for this agent. Inbound DMs will be
-            relayed to the agent; the agent's replies are sent back as
-            plain text.
+            {tr("Scan the QR code with the WeChat mobile app to bind a personal WeChat account as this agent's bot. Incoming direct messages are relayed to the agent, and its replies are sent back as plain text.", "使用微信手机客户端扫描二维码，将个人微信账号绑定为此 Agent 的机器人。收到的私信会转发给 Agent，其回复将以纯文本发回微信。")}
           </DialogDescription>
         </DialogHeader>
 
@@ -1075,11 +1072,11 @@ function ConnectWeChatDialog({
           <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-4 space-y-2">
             <div className="flex items-center gap-2">
               <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-              <span className="text-sm font-medium">Connected</span>
+              <span className="text-sm font-medium">{tr("Connected", "已连接")}</span>
             </div>
             <p className="text-sm">
-              Bot is live as <code className="font-mono text-xs">{accountId}</code>.
-              Send it a WeChat message to test.
+              {tr("Bot is live as", "机器人账号为")} <code className="font-mono text-xs">{accountId}</code>.
+              {" "}{tr("Send it a WeChat message to test.", "向该账号发送微信消息即可测试连接。")}
             </p>
           </div>
         ) : (
@@ -1099,21 +1096,21 @@ function ConnectWeChatDialog({
             )}
 
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              {status === "wait" && <>Waiting for scan…</>}
+              {status === "wait" && <>{tr("Waiting for scan…", "等待扫码…")}</>}
               {status === "scaned" && (
                 <>
                   <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                  Scanned — confirm on your phone.
+                  {tr("Scanned — confirm on your phone.", "已扫码——请在手机上确认。")}
                 </>
               )}
               {status === "confirmed" && (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Connecting…
+                  {tr("Connecting…", "正在连接…")}
                 </>
               )}
               {status === "expired" && (
-                <span className="text-destructive">QR code expired.</span>
+                <span className="text-destructive">{tr("QR code expired.", "二维码已过期。")}</span>
               )}
             </div>
 
@@ -1123,16 +1120,16 @@ function ConnectWeChatDialog({
 
         <DialogFooter>
           {connected ? (
-            <Button onClick={() => onOpenChange(false)}>Done</Button>
+            <Button onClick={() => onOpenChange(false)}>{tr("Done", "完成")}</Button>
           ) : (
             <>
               {status === "expired" && (
                 <Button onClick={startLogin} disabled={loading}>
-                  {loading ? "Refreshing…" : "Refresh QR"}
+                  {loading ? tr("Refreshing…", "正在刷新…") : tr("Refresh QR", "刷新二维码")}
                 </Button>
               )}
               <Button variant="outline" onClick={() => onOpenChange(false)}>
-                Cancel
+                {tr("Cancel", "取消")}
               </Button>
             </>
           )}
@@ -1160,6 +1157,7 @@ function ConnectFeishuDialog({
   agentId: string;
   onConnected: () => void;
 }) {
+  const { tr } = useLocale();
   const [appId, setAppId] = useState("");
   const [appSecret, setAppSecret] = useState("");
   const [verificationToken, setVerificationToken] = useState("");
@@ -1200,7 +1198,7 @@ function ConnectFeishuDialog({
     );
     setSubmitting(false);
     if (res.error || !res.ok) {
-      setError(res.error || "Failed to connect");
+      setError(res.error || tr("Failed to connect", "连接失败"));
       return;
     }
     setConnected({
@@ -1217,10 +1215,10 @@ function ConnectFeishuDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <img src="/channels/feishu.png" alt="Feishu" className="h-5 w-5 object-contain" />
-            Connect Feishu app
+            {tr("Connect Feishu app", "连接飞书应用")}
           </DialogTitle>
           <DialogDescription>
-            Create a custom app at{" "}
+            {tr("Create a custom app at", "在以下地址创建自建应用：")} {" "}
             <a
               href="https://open.feishu.cn"
               target="_blank"
@@ -1229,13 +1227,9 @@ function ConnectFeishuDialog({
             >
               open.feishu.cn
             </a>
-            . Enable the bot capability, request{" "}
+            {tr(". Enable the bot capability, request the", "。启用机器人能力，申请")} {" "}
             <code>im:message</code> + <code>im:message:send_as_bot</code>{" "}
-            scopes, then copy the App ID + App Secret from{" "}
-            <strong>Credentials & Basic Info</strong>. Long-connection mode
-            (recommended) needs nothing else; webhook mode also needs the
-            Verification Token / Encrypt Key from{" "}
-            <strong>Event Subscriptions</strong>.
+            {tr("scopes, then copy the App ID and App Secret from Credentials & Basic Info. Long-connection mode (recommended) needs nothing else; webhook mode also needs the Verification Token and Encrypt Key from Event Subscriptions.", "权限，然后从「凭证与基础信息」复制 App ID 和 App Secret。长连接模式（推荐）无需其他配置；Webhook 模式还需填写「事件订阅」中的 Verification Token 和 Encrypt Key。")}
           </DialogDescription>
         </DialogHeader>
 
@@ -1244,34 +1238,25 @@ function ConnectFeishuDialog({
             <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-4 space-y-2">
               <div className="flex items-center gap-2">
                 <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                <span className="text-sm font-medium">Credentials valid</span>
+                <span className="text-sm font-medium">{tr("Credentials valid", "凭证有效")}</span>
               </div>
               <p className="text-sm">
-                Bot identified as{" "}
-                <strong>{connected.botName || "(unnamed)"}</strong>.
+                {tr("Bot identified as", "已识别机器人：")} {" "}
+                <strong>{connected.botName || tr("(unnamed)", "（未命名）")}</strong>.
               </p>
             </div>
             {connected.useLongConn ? (
               <div className="rounded-lg border bg-muted/30 p-4 space-y-2">
-                <p className="text-sm font-medium">Long-connection mode</p>
+                <p className="text-sm font-medium">{tr("Long-connection mode", "长连接模式")}</p>
                 <p className="text-xs text-muted-foreground">
-                  fastclaw is now opening a WebSocket to Feishu — no public
-                  URL setup needed. In the Feishu Developer Console under{" "}
-                  <strong>事件与回调 → 事件配置 → 订阅方式</strong>, pick{" "}
-                  <strong>使用长连接接收事件</strong>, then under{" "}
-                  <strong>Subscribe to bot events</strong> add{" "}
-                  <code>im.message.receive_v1</code>.
+                  {tr("fastclaw is now opening a WebSocket to Feishu, so no public URL is needed. In the Feishu Developer Console, choose 事件与回调 → 事件配置 → 订阅方式 → 使用长连接接收事件, then add im.message.receive_v1 under Subscribe to bot events.", "fastclaw 正在与飞书建立 WebSocket，无需配置公网 URL。在飞书开发者后台选择「事件与回调 → 事件配置 → 订阅方式 → 使用长连接接收事件」，然后在「添加事件」中添加 im.message.receive_v1。")}
                 </p>
               </div>
             ) : (
               <div className="rounded-lg border bg-muted/30 p-4 space-y-2">
-                <p className="text-sm font-medium">One last step</p>
+                <p className="text-sm font-medium">{tr("One last step", "最后一步")}</p>
                 <p className="text-xs text-muted-foreground">
-                  Paste this into Feishu Developer Console →{" "}
-                  <strong>Event Subscriptions → Request URL</strong>, then
-                  click <em>Save</em>. Feishu will POST a verification
-                  challenge here and this fastclaw instance will echo it
-                  automatically.
+                  {tr("Paste this URL into Feishu Developer Console → Event Subscriptions → Request URL, then click Save. Feishu will send a verification request here, and this fastclaw instance will respond automatically.", "将此 URL 粘贴到飞书开发者后台的「事件订阅 → 请求地址」，然后点击保存。飞书会向此地址发送验证请求，fastclaw 将自动响应。")}
                 </p>
                 <Input
                   readOnly
@@ -1280,8 +1265,7 @@ function ConnectFeishuDialog({
                   onFocus={(e) => e.currentTarget.select()}
                 />
                 <p className="text-xs text-muted-foreground">
-                  Subscribe to <code>im.message.receive_v1</code> to receive
-                  messages.
+                  {tr("Subscribe to", "订阅")} <code>im.message.receive_v1</code> {tr("to receive messages.", "以接收消息。")}
                 </p>
               </div>
             )}
@@ -1291,11 +1275,10 @@ function ConnectFeishuDialog({
             <div className="flex items-start justify-between gap-3 rounded-lg border bg-muted/30 p-3">
               <div className="space-y-0.5">
                 <Label htmlFor="feishu-long-conn" className="text-sm">
-                  Long-connection mode
+                  {tr("Long-connection mode", "长连接模式")}
                 </Label>
                 <p className="text-xs text-muted-foreground">
-                  fastclaw opens a WebSocket to Feishu — no public URL
-                  required. Turn off to use the classic webhook flow.
+                  {tr("fastclaw opens a WebSocket to Feishu, so no public URL is required. Turn this off to use the classic webhook flow.", "fastclaw 会通过 WebSocket 连接飞书，无需公网 URL。关闭此选项可改用传统 Webhook 流程。")}
                 </p>
               </div>
               <Switch
@@ -1334,12 +1317,11 @@ function ConnectFeishuDialog({
                 id="feishu-verification-token"
                 value={verificationToken}
                 onChange={(e) => setVerificationToken(e.target.value)}
-                placeholder="from Event Subscriptions tab"
+                placeholder={tr("from Event Subscriptions", "来自事件订阅")}
                 className="font-mono text-sm"
               />
               <p className="text-xs text-muted-foreground">
-                Optional but recommended — fastclaw rejects webhook payloads
-                whose <code>header.token</code> doesn&apos;t match.
+                {tr("Optional but recommended — fastclaw rejects webhook payloads whose", "可选但建议填写——如果 Webhook 请求中的")} <code>header.token</code> {tr("does not match.", "不匹配，fastclaw 将拒绝该请求。")}
               </p>
             </div>
             <div className="space-y-1.5">
@@ -1348,14 +1330,12 @@ function ConnectFeishuDialog({
                 id="feishu-encrypt-key"
                 value={encryptKey}
                 onChange={(e) => setEncryptKey(e.target.value)}
-                placeholder="leave empty if 加密策略 is not configured"
+                placeholder={tr("leave empty if encryption is not configured", "未配置加密策略时留空")}
                 type="password"
                 className="font-mono text-sm"
               />
               <p className="text-xs text-muted-foreground">
-                Only required if you set an Encrypt Key under{" "}
-                <strong>加密策略</strong> in the Feishu console. Empty = expect
-                plaintext webhook bodies.
+                {tr("Only required if an Encrypt Key is configured under 加密策略 in the Feishu console. Leave it empty to accept plaintext webhook bodies.", "仅当飞书后台的「加密策略」配置了 Encrypt Key 时才需要填写；留空表示接收明文 Webhook 请求。")}
               </p>
             </div>
               </>
@@ -1366,7 +1346,7 @@ function ConnectFeishuDialog({
 
         <DialogFooter>
           {connected ? (
-            <Button onClick={() => onOpenChange(false)}>Done</Button>
+            <Button onClick={() => onOpenChange(false)}>{tr("Done", "完成")}</Button>
           ) : (
             <>
               <Button
@@ -1374,13 +1354,13 @@ function ConnectFeishuDialog({
                 onClick={() => onOpenChange(false)}
                 disabled={submitting}
               >
-                Cancel
+                {tr("Cancel", "取消")}
               </Button>
               <Button
                 onClick={submit}
                 disabled={submitting || !appId.trim() || !appSecret.trim()}
               >
-                {submitting ? "Validating…" : "Connect"}
+                {submitting ? tr("Validating…", "正在验证…") : tr("Connect", "连接")}
               </Button>
             </>
           )}

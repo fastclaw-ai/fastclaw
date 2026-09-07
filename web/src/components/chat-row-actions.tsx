@@ -32,6 +32,7 @@ import { Input } from "@/components/ui/input";
 import { useSidebar } from "@/components/ui/sidebar";
 import { MoreHorizontalIcon, PencilIcon, Trash2Icon } from "lucide-react";
 import { deleteChatSession, renameChatSession } from "@/lib/api";
+import { useLocale } from "@/components/locale-provider";
 
 // ChatRowActions is the shared "..." dropdown attached to every chat
 // row in the sidebar — both the flat "Chats" list and the chats nested
@@ -61,6 +62,7 @@ export function ChatRowActions({
   onChanged: () => void;
   variant?: "menu-item" | "menu-sub-item";
 }) {
+  const { tr } = useLocale();
   const router = useRouter();
   const { isMobile } = useSidebar();
   const [editOpen, setEditOpen] = React.useState(false);
@@ -107,7 +109,7 @@ export function ChatRowActions({
           render={
             <button type="button" className={triggerClass}>
               <MoreHorizontalIcon />
-              <span className="sr-only">Chat actions</span>
+              <span className="sr-only">{tr("Chat actions", "对话操作")}</span>
             </button>
           }
         />
@@ -118,7 +120,7 @@ export function ChatRowActions({
         >
           <DropdownMenuItem onClick={() => setEditOpen(true)}>
             <PencilIcon className="text-muted-foreground" />
-            <span>Edit</span>
+            <span>{tr("Edit", "编辑")}</span>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem
@@ -126,7 +128,7 @@ export function ChatRowActions({
             className="text-destructive focus:text-destructive"
           >
             <Trash2Icon className="text-destructive" />
-            <span>Delete</span>
+            <span>{tr("Delete", "删除")}</span>
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -142,20 +144,22 @@ export function ChatRowActions({
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete chat</AlertDialogTitle>
+            <AlertDialogTitle>{tr("Delete chat", "删除对话")}</AlertDialogTitle>
             <AlertDialogDescription>
-              Delete <strong>{session.title || session.id}</strong>? The full
-              message history for this chat will be removed and cannot be
-              recovered.
+              {tr(
+                "Delete {{chat}}? The full message history for this chat will be removed and cannot be recovered.",
+                "确定删除 {{chat}} 吗？此对话的全部消息记录会被移除且无法恢复。",
+                { chat: session.title || session.id },
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{tr("Cancel", "取消")}</AlertDialogCancel>
             <AlertDialogAction
               onClick={onConfirmDelete}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              Delete
+              {tr("Delete", "删除")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -177,6 +181,7 @@ function EditTitleDialog({
   session: ChatRowSession;
   onSaved: () => void;
 }) {
+  const { tr } = useLocale();
   const [draft, setDraft] = React.useState("");
   const [saving, setSaving] = React.useState(false);
 
@@ -206,9 +211,9 @@ function EditTitleDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Edit chat title</DialogTitle>
+          <DialogTitle>{tr("Edit chat title", "编辑对话标题")}</DialogTitle>
           <DialogDescription>
-            Rename this chat so it&apos;s easier to find in the sidebar.
+            {tr("Rename this chat so it is easier to find in the sidebar.", "为对话设置更易查找的标题。")}
           </DialogDescription>
         </DialogHeader>
         <Input
@@ -225,7 +230,7 @@ function EditTitleDialog({
               save();
             }
           }}
-          placeholder="Chat title"
+          placeholder={tr("Chat title", "对话标题")}
         />
         <DialogFooter>
           <Button
@@ -233,10 +238,10 @@ function EditTitleDialog({
             onClick={() => onOpenChange(false)}
             disabled={saving}
           >
-            Cancel
+            {tr("Cancel", "取消")}
           </Button>
           <Button onClick={save} disabled={saving || !draft.trim()}>
-            {saving ? "Saving…" : "Save"}
+            {saving ? tr("Saving…", "正在保存…") : tr("Save", "保存")}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -20,6 +20,7 @@ import {
   type TokenUsageRange,
   type TokenUsageReport,
 } from "@/lib/api";
+import { useLocale } from "@/components/locale-provider";
 
 const RANGES: { value: TokenUsageRange; label: string }[] = [
   { value: "24h", label: "Last 24 hours" },
@@ -39,6 +40,7 @@ function fmt(n: number): string {
 }
 
 export default function AdminUsagePage() {
+  const { tr } = useLocale();
   const [range, setRange] = useState<TokenUsageRange>("7d");
   const [report, setReport] = useState<TokenUsageReport | null>(null);
   const [agentNames, setAgentNames] = useState<Record<string, string>>({});
@@ -81,7 +83,7 @@ export default function AdminUsagePage() {
       const data = await adminGetTokenUsage(r, 10);
       setReport(data);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load usage");
+      setError(e instanceof Error ? e.message : tr("Failed to load usage", "加载用量数据失败"));
     } finally {
       setLoading(false);
     }
@@ -103,7 +105,7 @@ export default function AdminUsagePage() {
   }, [totals]);
 
   function renderKey(rawKey: string, names: Record<string, string>): string {
-    if (rawKey === "") return "system";
+    if (rawKey === "") return tr("system", "系统");
     return names[rawKey] ?? rawKey;
   }
 
@@ -111,14 +113,19 @@ export default function AdminUsagePage() {
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight">Token Usage</h2>
+          <h2 className="text-2xl font-semibold tracking-tight">
+            {tr("Token Usage", "Token 用量")}
+          </h2>
           <p className="text-sm text-muted-foreground mt-1">
-            Aggregate LLM token consumption across the platform.
+            {tr(
+              "Aggregate LLM token consumption across the platform.",
+              "汇总平台中的大模型 Token 消耗。",
+            )}
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={() => load(range)} disabled={loading}>
           <RefreshCcw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
-          Refresh
+          {tr("Refresh", "刷新")}
         </Button>
       </div>
 
@@ -126,7 +133,10 @@ export default function AdminUsagePage() {
         <TabsList>
           {RANGES.map((r) => (
             <TabsTrigger key={r.value} value={r.value}>
-              {r.label}
+              {tr(
+                r.label,
+                r.value === "24h" ? "最近 24 小时" : r.value === "7d" ? "最近 7 天" : "最近 30 天",
+              )}
             </TabsTrigger>
           ))}
         </TabsList>
@@ -141,24 +151,24 @@ export default function AdminUsagePage() {
       )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <SummaryCard label="Total tokens" value={fmt(totalTokens)} hint={`${totals?.requestCount ?? 0} requests`} />
-        <SummaryCard label="Input" value={fmt(totals?.inputTokens ?? 0)} />
-        <SummaryCard label="Output" value={fmt(totals?.outputTokens ?? 0)} />
+        <SummaryCard label={tr("Total tokens", "Token 总量")} value={fmt(totalTokens)} hint={tr("{{count}} requests", "{{count}} 次请求", { count: totals?.requestCount ?? 0 })} />
+        <SummaryCard label={tr("Input", "输入")} value={fmt(totals?.inputTokens ?? 0)} />
+        <SummaryCard label={tr("Output", "输出")} value={fmt(totals?.outputTokens ?? 0)} />
         <SummaryCard
-          label="Cache (read / write)"
+          label={tr("Cache (read / write)", "缓存（读取 / 写入）")}
           value={`${fmt(totals?.cacheReadTokens ?? 0)} / ${fmt(totals?.cacheCreationTokens ?? 0)}`}
         />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <RankCard
-          title="Top agents"
+          title={tr("Top agents", "Agent 排名")}
           rows={report?.topAgents ?? []}
           resolve={(k) => renderKey(k, agentNames)}
           icon="agent"
         />
         <RankCard
-          title="Top users"
+          title={tr("Top users", "用户排名")}
           rows={report?.topUsers ?? []}
           resolve={(k) => renderKey(k, userNames)}
           icon="user"
@@ -191,19 +201,22 @@ interface RankCardProps {
 }
 
 function RankCard({ title, rows, resolve }: RankCardProps) {
+  const { tr } = useLocale();
   return (
     <Card>
       <CardContent>
         <h3 className="text-sm font-medium mb-3">{title}</h3>
         {rows.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No usage recorded yet.</p>
+          <p className="text-sm text-muted-foreground">
+            {tr("No usage recorded yet.", "暂无用量记录。")}
+          </p>
         ) : (
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead className="text-right">Tokens</TableHead>
-                <TableHead className="text-right">Requests</TableHead>
+                <TableHead>{tr("Name", "名称")}</TableHead>
+                <TableHead className="text-right">{tr("Tokens", "Token")}</TableHead>
+                <TableHead className="text-right">{tr("Requests", "请求数")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>

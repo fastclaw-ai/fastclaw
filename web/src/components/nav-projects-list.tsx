@@ -65,6 +65,7 @@ import {
   type SessionItem,
 } from "@/components/nav-projects";
 import { ChatRowActions } from "@/components/chat-row-actions";
+import { useLocale } from "@/components/locale-provider";
 
 // NavProjectsList is the "Projects" section of the agent sidebar. Each
 // project expands inline to show its child chats; clicking "+ New chat"
@@ -95,6 +96,7 @@ export function NavProjectsList({
   // Project state lives one level up in AppSidebar.
   onChanged: () => void;
 }) {
+  const { tr } = useLocale();
   const router = useRouter();
   const pathname = usePathname();
   const [createOpen, setCreateOpen] = React.useState(false);
@@ -251,10 +253,10 @@ export function NavProjectsList({
               (sectionCollapsed ? "rotate-0" : "rotate-90")
             }
           />
-          Projects
+          {tr("Projects", "项目")}
         </SidebarGroupLabel>
         <SidebarGroupAction
-          aria-label="New project"
+          aria-label={tr("New project", "新建项目")}
           onClick={() => setCreateOpen(true)}
           render={
             <button>
@@ -267,7 +269,7 @@ export function NavProjectsList({
           {projects.length === 0 && (
             <SidebarMenuItem>
               <div className="px-2 py-1.5 text-xs text-muted-foreground">
-                No projects yet
+                {tr("No projects yet", "还没有项目")}
               </div>
             </SidebarMenuItem>
           )}
@@ -374,6 +376,7 @@ function ProjectRow({
   agentId: string;
   onMoved: () => void;
 }) {
+  const { tr } = useLocale();
   const { isMobile } = useSidebar();
   const [dropActive, setDropActive] = React.useState(false);
   const onDragOver = (e: React.DragEvent) => {
@@ -398,7 +401,7 @@ function ProjectRow({
     const res = await moveChatSessionToProject(agentId, sid, project.id);
     if (res?.error) {
       console.error("move chat to project failed:", res.error);
-      window.alert(`Failed to move chat: ${res.error}`);
+      window.alert(tr("Failed to move chat: {{error}}", "移动对话失败：{{error}}", { error: res.error }));
       return;
     }
     onMoved();
@@ -441,7 +444,7 @@ function ProjectRow({
           render={
             <SidebarMenuAction showOnHover>
               <MoreHorizontalIcon />
-              <span className="sr-only">Project actions</span>
+              <span className="sr-only">{tr("Project actions", "项目操作")}</span>
             </SidebarMenuAction>
           }
         />
@@ -452,19 +455,19 @@ function ProjectRow({
         >
           <DropdownMenuItem onClick={onNewChat}>
             <PlusIcon className="text-muted-foreground" />
-            <span>New chat in project</span>
+            <span>{tr("New chat in project", "在项目中新建对话")}</span>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={onEdit}>
             <PencilIcon className="text-muted-foreground" />
-            <span>Edit</span>
+            <span>{tr("Edit", "编辑")}</span>
           </DropdownMenuItem>
           <DropdownMenuItem
             onClick={onDelete}
             className="text-destructive focus:text-destructive"
           >
             <Trash2Icon className="text-destructive" />
-            <span>Delete</span>
+            <span>{tr("Delete", "删除")}</span>
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -520,6 +523,7 @@ function CreateProjectDialog({
   onOpenChange: (v: boolean) => void;
   onCreated: () => void;
 }) {
+  const { tr } = useLocale();
   const [name, setName] = React.useState("");
   const [description, setDescription] = React.useState("");
   const [saving, setSaving] = React.useState(false);
@@ -552,30 +556,29 @@ function CreateProjectDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>New project</DialogTitle>
+          <DialogTitle>{tr("New project", "新建项目")}</DialogTitle>
           <DialogDescription>
-            Group chats that share research, files, or context. Every chat
-            in a project sees the same workspace folder.
+            {tr("Group chats that share research, files, or context. Every chat in a project sees the same workspace folder.", "将共享研究资料、文件或上下文的对话整理到一起。项目中的每个对话都使用同一个工作区文件夹。")}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           <div>
-            <label className="mb-1 block text-xs font-medium">Name</label>
+            <label className="mb-1 block text-xs font-medium">{tr("Name", "名称")}</label>
             <Input
               autoFocus
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. NLP survey"
+              placeholder={tr("e.g. NLP survey", "例如：NLP 调研")}
             />
           </div>
           <div>
             <label className="mb-1 block text-xs font-medium">
-              Description (optional)
+              {tr("Description (optional)", "说明（可选）")}
             </label>
             <Textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="What this project is for…"
+              placeholder={tr("What this project is for…", "这个项目用于什么…")}
               rows={3}
             />
           </div>
@@ -586,10 +589,10 @@ function CreateProjectDialog({
             onClick={() => onOpenChange(false)}
             disabled={saving}
           >
-            Cancel
+            {tr("Cancel", "取消")}
           </Button>
           <Button onClick={save} disabled={saving || !name.trim()}>
-            {saving ? "Creating…" : "Create"}
+            {saving ? tr("Creating…", "正在创建…") : tr("Create", "创建")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -608,6 +611,7 @@ function EditProjectDialog({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const { tr } = useLocale();
   const [name, setName] = React.useState("");
   const [description, setDescription] = React.useState("");
   const [saving, setSaving] = React.useState(false);
@@ -640,15 +644,14 @@ function EditProjectDialog({
     <Dialog open={!!target} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Edit project</DialogTitle>
+          <DialogTitle>{tr("Edit project", "编辑项目")}</DialogTitle>
           <DialogDescription>
-            Rename or update the description. The workspace folder stays
-            the same — files aren&apos;t moved.
+            {tr("Rename the project or update its description. The workspace folder stays the same and files are not moved.", "修改项目名称或说明。工作区文件夹保持不变，文件不会移动。")}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           <div>
-            <label className="mb-1 block text-xs font-medium">Name</label>
+            <label className="mb-1 block text-xs font-medium">{tr("Name", "名称")}</label>
             <Input
               autoFocus
               value={name}
@@ -657,7 +660,7 @@ function EditProjectDialog({
           </div>
           <div>
             <label className="mb-1 block text-xs font-medium">
-              Description
+              {tr("Description", "说明")}
             </label>
             <Textarea
               value={description}
@@ -668,10 +671,10 @@ function EditProjectDialog({
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={saving}>
-            Cancel
+            {tr("Cancel", "取消")}
           </Button>
           <Button onClick={save} disabled={saving || !name.trim()}>
-            {saving ? "Saving…" : "Save"}
+            {saving ? tr("Saving…", "正在保存…") : tr("Save", "保存")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -690,6 +693,7 @@ function DeleteProjectDialog({
   onClose: () => void;
   onDeleted: () => void;
 }) {
+  const { tr } = useLocale();
   const [error, setError] = React.useState<string>("");
   const [busy, setBusy] = React.useState(false);
 
@@ -707,7 +711,11 @@ function DeleteProjectDialog({
         // owns chats — surface a hint instead of just "delete failed".
         if (res.sessionCount && res.sessionCount > 0) {
           setError(
-            `This project still has ${res.sessionCount} chat${res.sessionCount === 1 ? "" : "s"}. Delete or move them first.`,
+            tr(
+              "This project still has {{count}} chat(s). Delete or move them first.",
+              "此项目中仍有 {{count}} 个对话，请先删除或移动它们。",
+              { count: res.sessionCount },
+            ),
           );
         } else {
           setError(res.error);
@@ -725,11 +733,13 @@ function DeleteProjectDialog({
     <AlertDialog open={!!target} onOpenChange={(v) => !v && onClose()}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Delete project</AlertDialogTitle>
+          <AlertDialogTitle>{tr("Delete project", "删除项目")}</AlertDialogTitle>
           <AlertDialogDescription>
-            Delete <strong>{target?.name}</strong>? Chats inside the project
-            must be removed first — this won&apos;t cascade. The workspace
-            folder on disk is left in place.
+            {tr(
+              "Delete {{project}}? Chats inside the project must be removed first; they will not be deleted automatically. The workspace folder on disk will remain.",
+              "确定删除 {{project}} 吗？必须先移除项目中的对话，系统不会级联删除；磁盘上的工作区文件夹会保留。",
+              { project: target?.name || "" },
+            )}
           </AlertDialogDescription>
         </AlertDialogHeader>
         {error && (
@@ -738,13 +748,13 @@ function DeleteProjectDialog({
           </div>
         )}
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+          <AlertDialogCancel disabled={busy}>{tr("Cancel", "取消")}</AlertDialogCancel>
           <AlertDialogAction
             onClick={onConfirm}
             disabled={busy}
             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
           >
-            {busy ? "Deleting…" : "Delete"}
+            {busy ? tr("Deleting…", "正在删除…") : tr("Delete", "删除")}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

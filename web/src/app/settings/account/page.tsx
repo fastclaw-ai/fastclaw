@@ -8,10 +8,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Save, Check, Upload, X } from "lucide-react";
 import { getMe, updateMe, changeMyPassword } from "@/lib/api";
 import { logout as doLogout } from "@/lib/auth";
+import { useLocale } from "@/components/locale-provider";
 
 const AVATAR_MAX_BYTES = 256 * 1024;
 
 export default function AccountSettingsPage() {
+  const { tr } = useLocale();
   const [loading, setLoading] = useState(true);
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
@@ -53,20 +55,20 @@ export default function AccountSettingsPage() {
     const file = e.target.files?.[0];
     if (!file) return;
     if (!file.type.startsWith("image/")) {
-      setProfileError("Avatar must be an image");
+      setProfileError(tr("Avatar must be an image", "头像必须是图片文件"));
       return;
     }
     // Rough pre-check on raw bytes; the encoded data URL will be ~33%
     // larger, so reject anything that won't fit comfortably.
     if (file.size > Math.floor(AVATAR_MAX_BYTES * 0.7)) {
-      setProfileError("Image too large (max ~180KB before encoding)");
+      setProfileError(tr("Image too large (max ~180KB before encoding)", "图片过大（编码前最大约 180KB）"));
       return;
     }
     const reader = new FileReader();
     reader.onload = () => {
       const result = String(reader.result || "");
       if (result.length > AVATAR_MAX_BYTES) {
-        setProfileError("Encoded image exceeds 256KB");
+        setProfileError(tr("Encoded image exceeds 256KB", "编码后的图片超过 256KB"));
         return;
       }
       setAvatarUrl(result);
@@ -85,6 +87,7 @@ export default function AccountSettingsPage() {
       setProfileError(res.error);
       return;
     }
+    window.dispatchEvent(new CustomEvent("fastclaw:user-profile-changed"));
     setProfileSaved(true);
     setTimeout(() => setProfileSaved(false), 2000);
   }
@@ -93,11 +96,11 @@ export default function AccountSettingsPage() {
     e.preventDefault();
     setPwError("");
     if (!oldPassword || !newPassword) {
-      setPwError("Both fields required");
+      setPwError(tr("Both password fields are required", "当前密码和新密码均为必填项"));
       return;
     }
     if (newPassword !== confirmPassword) {
-      setPwError("New password and confirmation don't match");
+      setPwError(tr("New password and confirmation do not match", "两次输入的新密码不一致"));
       return;
     }
     setPwSaving(true);
@@ -131,9 +134,11 @@ export default function AccountSettingsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h3 className="text-xl font-semibold tracking-tight">Account</h3>
+        <h3 className="text-xl font-semibold tracking-tight">
+          {tr("Account", "账户")}
+        </h3>
         <p className="text-sm text-muted-foreground mt-1">
-          Profile, password, and session.
+          {tr("Profile, password, and session.", "管理个人资料、密码和登录会话。")}
         </p>
       </div>
 
@@ -144,7 +149,7 @@ export default function AccountSettingsPage() {
             <div className="size-16 rounded-full bg-muted overflow-hidden flex items-center justify-center text-lg font-bold text-muted-foreground">
               {avatarUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={avatarUrl} alt="avatar" className="size-full object-cover" />
+                <img src={avatarUrl} alt={tr("Avatar", "头像")} className="size-full object-cover" />
               ) : (
                 initials
               )}
@@ -153,8 +158,8 @@ export default function AccountSettingsPage() {
               <button
                 type="button"
                 onClick={() => setAvatarUrl("")}
-                aria-label="Remove avatar"
-                title="Remove avatar"
+                aria-label={tr("Remove avatar", "移除头像")}
+                title={tr("Remove avatar", "移除头像")}
                 className="absolute -top-1 -right-1 hidden group-hover:flex items-center justify-center size-5 rounded-full bg-background border border-border text-muted-foreground hover:text-destructive hover:border-destructive transition shadow-sm"
               >
                 <X className="size-3" />
@@ -163,7 +168,7 @@ export default function AccountSettingsPage() {
           </div>
           <Button variant="outline" size="sm" onClick={pickAvatar}>
             <Upload className="size-4 mr-2" />
-            Upload
+            {tr("Upload", "上传")}
           </Button>
           <input
             ref={fileRef}
@@ -176,20 +181,20 @@ export default function AccountSettingsPage() {
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-1.5">
-            <Label>Username</Label>
+            <Label>{tr("Username", "用户名")}</Label>
             <Input value={username} disabled />
           </div>
           <div className="space-y-1.5">
-            <Label>Email</Label>
+            <Label>{tr("Email", "邮箱")}</Label>
             <Input value={email} disabled />
           </div>
           <div className="space-y-1.5 sm:col-span-2">
-            <Label htmlFor="display-name">Display name</Label>
+            <Label htmlFor="display-name">{tr("Display name", "显示名称")}</Label>
             <Input
               id="display-name"
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
-              placeholder="How your name appears in the dashboard"
+              placeholder={tr("How your name appears in the dashboard", "此名称将显示在控制台中")}
             />
           </div>
         </div>
@@ -211,12 +216,12 @@ export default function AccountSettingsPage() {
             {profileSaved ? (
               <>
                 <Check className="h-4 w-4 mr-2" />
-                Saved
+                {tr("Saved", "已保存")}
               </>
             ) : (
               <>
                 <Save className="h-4 w-4 mr-2" />
-                {profileSaving ? "Saving..." : "Save profile"}
+                {profileSaving ? tr("Saving…", "正在保存…") : tr("Save profile", "保存资料")}
               </>
             )}
           </Button>
@@ -226,14 +231,17 @@ export default function AccountSettingsPage() {
       {/* Password */}
       <form onSubmit={savePassword} className="rounded-lg border border-border bg-card p-5 space-y-4">
         <div>
-          <h4 className="font-medium">Change password</h4>
+          <h4 className="font-medium">{tr("Change password", "修改密码")}</h4>
           <p className="text-sm text-muted-foreground">
-            You&apos;ll need your current password. You&apos;ll be signed out and asked to sign back in.
+            {tr(
+              "You will need your current password. After updating, you will be signed out and asked to sign in again.",
+              "需要先输入当前密码。更新后系统会退出登录，并要求你重新登录。",
+            )}
           </p>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div className="space-y-1.5">
-            <Label htmlFor="old-pw">Current</Label>
+            <Label htmlFor="old-pw">{tr("Current password", "当前密码")}</Label>
             <Input
               id="old-pw"
               type="password"
@@ -243,7 +251,7 @@ export default function AccountSettingsPage() {
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="new-pw">New</Label>
+            <Label htmlFor="new-pw">{tr("New password", "新密码")}</Label>
             <Input
               id="new-pw"
               type="password"
@@ -253,7 +261,7 @@ export default function AccountSettingsPage() {
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="confirm-pw">Confirm</Label>
+            <Label htmlFor="confirm-pw">{tr("Confirm password", "确认密码")}</Label>
             <Input
               id="confirm-pw"
               type="password"
@@ -278,10 +286,10 @@ export default function AccountSettingsPage() {
             {pwSaved ? (
               <>
                 <Check className="h-4 w-4 mr-2" />
-                Updated
+                {tr("Updated", "已更新")}
               </>
             ) : (
-              pwSaving ? "Updating..." : "Update password"
+              pwSaving ? tr("Updating…", "正在更新…") : tr("Update password", "更新密码")
             )}
           </Button>
         </div>

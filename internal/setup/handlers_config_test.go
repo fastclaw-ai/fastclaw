@@ -189,6 +189,84 @@ func TestMergeSkillEntry(t *testing.T) {
 	}
 }
 
+func TestAdminConfigExplicitUserAndSystemScopesStaySeparate(t *testing.T) {
+	ctx := context.Background()
+	s, resolver, adminUser, _ := newAuthTestServer(t, ctx)
+
+	post := func(path, model string) {
+		t.Helper()
+		body := map[string]any{
+			"agents": map[string]any{
+				"defaults": map[string]any{"model": model},
+			},
+		}
+		rr := httptest.NewRecorder()
+		s.authMiddleware(s.handleUpdateConfig)(
+			rr,
+			configTestRequest(t, ctx, resolver, http.MethodPost, path, adminUser.ID, body),
+		)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("POST %s status = %d, body = %s", path, rr.Code, rr.Body.String())
+		}
+	}
+
+	post("/api/config?scope=system", "system/provider")
+	post("/api/config?scope=user", "personal/provider")
+
+	readModel := func(userID string) string {
+		t.Helper()
+		rec, err := s.dataStore.GetConfigByName(
+			ctx,
+			store.KindSetting,
+			userID,
+			"",
+			"agents.defaults",
+		)
+		if err != nil || rec == nil {
+			t.Fatalf("GetConfigByName user=%q: rec=%v err=%v", userID, rec, err)
+		}
+		blob, _ := json.Marshal(rec.Data)
+		var defaults config.AgentDefaults
+		if err := json.Unmarshal(blob, &defaults); err != nil {
+			t.Fatalf("decode defaults user=%q: %v", userID, err)
+		}
+		return defaults.Model
+	}
+
+	if got := readModel(""); got != "system/provider" {
+		t.Fatalf("system model = %q, want %q", got, "system/provider")
+	}
+	if got := readModel(adminUser.ID); got != "personal/provider" {
+		t.Fatalf("admin personal model = %q, want %q", got, "personal/provider")
+	}
+
+	getModel := func(path string) string {
+		t.Helper()
+		rr := httptest.NewRecorder()
+		s.authMiddleware(s.handleGetConfig)(
+			rr,
+			configTestRequest(t, ctx, resolver, http.MethodGet, path, adminUser.ID, nil),
+		)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("GET %s status = %d, body = %s", path, rr.Code, rr.Body.String())
+		}
+		var view struct {
+			Agents config.AgentsConfig `json:"agents"`
+		}
+		if err := json.Unmarshal(rr.Body.Bytes(), &view); err != nil {
+			t.Fatalf("decode GET %s: %v", path, err)
+		}
+		return view.Agents.Defaults.Model
+	}
+
+	if got := getModel("/api/config?scope=system"); got != "system/provider" {
+		t.Fatalf("system view model = %q", got)
+	}
+	if got := getModel("/api/config?scope=user"); got != "personal/provider" {
+		t.Fatalf("user view model = %q", got)
+	}
+}
+
 func configTestRequest(t *testing.T, ctx context.Context, resolver *auth.Resolver, method, path, userID string, body map[string]any) *http.Request {
 	t.Helper()
 

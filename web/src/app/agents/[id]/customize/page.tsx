@@ -8,6 +8,7 @@ import { apiFetch } from "@/lib/api";
 
 import { useAgentIdFromURL } from "@/hooks/use-agent-id";
 import { useAgentName } from "@/hooks/use-agent-name";
+import { useLocale } from "@/components/locale-provider";
 
 const CUSTOMIZE_FILES = [
   { name: "SOUL.md", label: "Soul" },
@@ -36,6 +37,7 @@ type FileSource = "db" | "owner" | "fs" | "default";
 type FileState = { content: string; source: FileSource; baseContent?: string };
 
 export default function AgentCustomizePage() {
+  const { tr } = useLocale();
   const agentId = useAgentIdFromURL();
   const agentName = useAgentName(agentId);
   const [activeTab, setActiveTab] = useState("SOUL.md");
@@ -95,7 +97,7 @@ export default function AgentCustomizePage() {
   // AND a baseContent exists (otherwise the tab just becomes empty).
   const handleRevert = async () => {
     if (!active || active.source !== "db") return;
-    if (!confirm(`Revert ${activeTab} to the repo base? Your edits will be discarded.`)) return;
+    if (!confirm(tr("Revert {{file}} to the repository version? Your edits will be discarded.", "将 {{file}} 恢复为仓库版本？你的修改将被丢弃。", { file: activeTab }))) return;
     setSaving(true);
     try {
       await apiFetch(`/api/agents/${agentId}/system-files/${activeTab}`, {
@@ -119,14 +121,14 @@ export default function AgentCustomizePage() {
     if (source === "db") {
       return (
         <span className="text-xs px-2 py-0.5 rounded-md border border-amber-500/30 text-amber-600">
-          Edited
+          {tr("Edited", "已编辑")}
         </span>
       );
     }
     if (source === "fs") {
       return (
         <span className="text-xs px-2 py-0.5 rounded-md border border-emerald-500/30 text-emerald-600">
-          From repo
+          {tr("From repository", "来自仓库")}
         </span>
       );
     }
@@ -137,9 +139,10 @@ export default function AgentCustomizePage() {
     <div className="p-6 max-w-4xl mx-auto">
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight">Customize</h2>
+          <h2 className="text-2xl font-semibold tracking-tight">{tr("Customize", "自定义")}</h2>
           <p className="text-sm text-muted-foreground mt-1">
-            Personality, memory, and behavior files for <strong>{agentName}</strong>
+            {tr("Personality, memory, and behavior files for", "管理")} <strong>{agentName}</strong>
+            {tr(".", " 的人格、记忆和行为文件。")}
           </p>
         </div>
         <div className="flex gap-2">
@@ -150,11 +153,11 @@ export default function AgentCustomizePage() {
               variant="outline"
               title={
                 active.baseContent
-                  ? "Discard your edits and revert to the file shipped in the repo"
-                  : "Discard your edits (no repo base for this file — tab will become empty)"
+                  ? tr("Discard your edits and restore the repository version", "丢弃修改并恢复仓库版本")
+                  : tr("Discard your edits. This file has no repository version, so the editor will become empty.", "丢弃修改。此文件没有仓库版本，编辑器将变为空白。")
               }
             >
-              <RotateCcw className="h-4 w-4 mr-2" /> Revert
+              <RotateCcw className="h-4 w-4 mr-2" /> {tr("Revert", "恢复")}
             </Button>
           )}
           <Button
@@ -164,11 +167,11 @@ export default function AgentCustomizePage() {
             className={saved ? "border-emerald-500/30 text-emerald-600" : ""}
           >
             {saved ? (
-              <><Check className="h-4 w-4 mr-2" /> Saved</>
+              <><Check className="h-4 w-4 mr-2" /> {tr("Saved", "已保存")}</>
             ) : saving ? (
-              <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Saving...</>
+              <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> {tr("Saving…", "正在保存…")}</>
             ) : (
-              <><Save className="h-4 w-4 mr-2" /> Save</>
+              <><Save className="h-4 w-4 mr-2" /> {tr("Save", "保存")}</>
             )}
           </Button>
         </div>
@@ -186,7 +189,7 @@ export default function AgentCustomizePage() {
                 : "border-transparent text-muted-foreground hover:text-foreground"
             }`}
           >
-            {f.label}
+            {tr(f.label, ({ "SOUL.md": "灵魂", "IDENTITY.md": "身份", "USER.md": "用户", "TOOLS.md": "工具", "BOOTSTRAP.md": "引导", "HEARTBEAT.md": "心跳", "MEMORY.md": "记忆", "AGENTS.md": "Agent" } as Record<string, string>)[f.name] || f.label)}
             {files[f.name]?.source === "db" && (
               <span className="size-1.5 rounded-full bg-amber-500" />
             )}
@@ -201,10 +204,10 @@ export default function AgentCustomizePage() {
         <div className="flex items-center gap-2 mb-2 text-xs text-muted-foreground">
           {sourceBadge(active?.source)}
           {active?.source === "db" && active.baseContent && (
-            <span>Override active — repo base is {active.baseContent.length} chars.</span>
+            <span>{tr("Override active — repository version has {{count}} characters.", "覆盖已生效 — 仓库版本包含 {{count}} 个字符。", { count: active.baseContent.length })}</span>
           )}
           {active?.source === "fs" && (
-            <span>Loaded from <code>{`<agent home>/${activeTab}`}</code>. Editing creates a per-agent override.</span>
+            <span>{tr("Loaded from", "加载自")} <code>{`<agent home>/${activeTab}`}</code>. {tr("Editing creates an agent-specific override.", "编辑后会创建 Agent 专属覆盖。")}</span>
           )}
         </div>
       )}
@@ -227,7 +230,7 @@ export default function AgentCustomizePage() {
         // page usable too: still grows on tall screens, but stops
         // short of "fills the viewport".
         style={{ height: "min(55vh, 480px)", minHeight: 280 }}
-        placeholder={`# ${activeTab}\n\nWrite your content here...`}
+        placeholder={tr("# {{file}}\n\nWrite your content here…", "# {{file}}\n\n在此编写内容…", { file: activeTab })}
       />
     </div>
   );

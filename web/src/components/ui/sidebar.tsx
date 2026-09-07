@@ -24,10 +24,10 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { PanelLeftIcon } from "lucide-react"
+import { useLocale } from "@/components/locale-provider"
 
 const SIDEBAR_COOKIE_NAME = "sidebar_state"
 const SIDEBAR_COOKIE_MAX_AGE = 60 * 60 * 24 * 7
-const SIDEBAR_WIDTH = "16rem"
 const SIDEBAR_WIDTH_MOBILE = "18rem"
 const SIDEBAR_WIDTH_ICON = "3rem"
 const SIDEBAR_KEYBOARD_SHORTCUT = "b"
@@ -49,6 +49,7 @@ type SidebarContextProps = {
   // Expanded sidebar width in px + setter (clamped) for the drag rail.
   width: number
   setWidth: (w: number) => void
+  resetWidth: () => void
 }
 
 const SidebarContext = React.createContext<SidebarContextProps | null>(null)
@@ -74,6 +75,11 @@ function SidebarProvider({
   defaultOpen = true,
   open: openProp,
   onOpenChange: setOpenProp,
+  resizeDefaultWidth = SIDEBAR_WIDTH_PX,
+  resizeMinWidth = SIDEBAR_MIN_PX,
+  resizeMaxWidth = SIDEBAR_MAX_PX,
+  resizeStorageKey = SIDEBAR_WIDTH_KEY,
+  resizeViewportReserve = 0,
   className,
   style,
   children,
@@ -82,6 +88,11 @@ function SidebarProvider({
   defaultOpen?: boolean
   open?: boolean
   onOpenChange?: (open: boolean) => void
+  resizeDefaultWidth?: number
+  resizeMinWidth?: number
+  resizeMaxWidth?: number
+  resizeStorageKey?: string
+  resizeViewportReserve?: number
 }) {
   const isMobile = useIsMobile()
   const [openMobile, setOpenMobile] = React.useState(false)
@@ -107,21 +118,24 @@ function SidebarProvider({
 
   // Free-resizable expanded width (px), persisted across navigation.
   const [width, _setWidth] = React.useState<number>(() => {
-    if (typeof window === "undefined") return SIDEBAR_WIDTH_PX
-    const stored = Number(window.localStorage.getItem(SIDEBAR_WIDTH_KEY))
-    return Number.isFinite(stored) && stored >= SIDEBAR_MIN_PX && stored <= SIDEBAR_MAX_PX
+    if (typeof window === "undefined") return resizeDefaultWidth
+    const stored = Number(window.localStorage.getItem(resizeStorageKey))
+    return Number.isFinite(stored) && stored >= resizeMinWidth && stored <= resizeMaxWidth
       ? stored
-      : SIDEBAR_WIDTH_PX
+      : resizeDefaultWidth
   })
   const setWidth = React.useCallback((w: number) => {
-    const clamped = Math.max(SIDEBAR_MIN_PX, Math.min(SIDEBAR_MAX_PX, Math.round(w)))
+    const clamped = Math.max(resizeMinWidth, Math.min(resizeMaxWidth, Math.round(w)))
     _setWidth(clamped)
     try {
-      window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(clamped))
+      window.localStorage.setItem(resizeStorageKey, String(clamped))
     } catch {
       // ignore (private mode etc.)
     }
-  }, [])
+  }, [resizeMaxWidth, resizeMinWidth, resizeStorageKey])
+  const resetWidth = React.useCallback(() => {
+    setWidth(resizeDefaultWidth)
+  }, [resizeDefaultWidth, setWidth])
 
   // Helper to toggle the sidebar.
   const toggleSidebar = React.useCallback(() => {
@@ -159,8 +173,9 @@ function SidebarProvider({
       toggleSidebar,
       width,
       setWidth,
+      resetWidth,
     }),
-    [state, open, setOpen, isMobile, openMobile, setOpenMobile, toggleSidebar, width, setWidth]
+    [state, open, setOpen, isMobile, openMobile, setOpenMobile, toggleSidebar, width, setWidth, resetWidth]
   )
 
   return (
@@ -170,7 +185,9 @@ function SidebarProvider({
         style={
           {
             // Dynamic expanded width (drag rail); icon width stays constant.
-            "--sidebar-width": `${width}px`,
+            "--sidebar-width": resizeViewportReserve > 0
+              ? `min(${width}px, max(${resizeMinWidth}px, calc(100vw - ${resizeViewportReserve}px)))`
+              : `${width}px`,
             "--sidebar-width-icon": SIDEBAR_WIDTH_ICON,
             ...style,
           } as React.CSSProperties
@@ -201,6 +218,7 @@ function Sidebar({
   collapsible?: "offcanvas" | "icon" | "none"
 }) {
   const { isMobile, state, openMobile, setOpenMobile } = useSidebar()
+  const { tr } = useLocale()
 
   if (collapsible === "none") {
     return (
@@ -234,8 +252,8 @@ function Sidebar({
           side={side}
         >
           <SheetHeader className="sr-only">
-            <SheetTitle>Sidebar</SheetTitle>
-            <SheetDescription>Displays the mobile sidebar.</SheetDescription>
+            <SheetTitle>{tr("Sidebar", "侧边栏")}</SheetTitle>
+            <SheetDescription>{tr("Displays the mobile sidebar.", "显示移动端侧边栏。")}</SheetDescription>
           </SheetHeader>
           <div className="flex h-full w-full flex-col">{children}</div>
         </SheetContent>
@@ -256,7 +274,7 @@ function Sidebar({
       <div
         data-slot="sidebar-gap"
         className={cn(
-          "relative w-(--sidebar-width) bg-transparent transition-[width] duration-200 ease-linear",
+          "relative w-(--sidebar-width) bg-transparent transition-[width] duration-200 ease-linear in-data-[resizing=true]:transition-none",
           "group-data-[collapsible=offcanvas]:w-0",
           "group-data-[side=right]:rotate-180",
           variant === "floating" || variant === "inset"
@@ -268,7 +286,7 @@ function Sidebar({
         data-slot="sidebar-container"
         data-side={side}
         className={cn(
-          "fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) transition-[left,right,width] duration-200 ease-linear data-[side=left]:left-0 data-[side=left]:group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)] data-[side=right]:right-0 data-[side=right]:group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)] md:flex",
+          "fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) transition-[left,right,width] duration-200 ease-linear in-data-[resizing=true]:transition-none data-[side=left]:left-0 data-[side=left]:group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)] data-[side=right]:right-0 data-[side=right]:group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)] md:flex",
           // Adjust the padding for floating and inset variants.
           variant === "floating" || variant === "inset"
             ? "p-2 group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4))+2px)]"
@@ -295,6 +313,7 @@ function SidebarTrigger({
   ...props
 }: React.ComponentProps<typeof Button>) {
   const { toggleSidebar } = useSidebar()
+  const { tr } = useLocale()
 
   return (
     <Button
@@ -310,13 +329,18 @@ function SidebarTrigger({
       {...props}
     >
       <PanelLeftIcon />
-      <span className="sr-only">Toggle Sidebar</span>
+      <span className="sr-only">{tr("Toggle Sidebar", "切换侧边栏")}</span>
     </Button>
   )
 }
 
-function SidebarRail({ className, ...props }: React.ComponentProps<"button">) {
-  const { toggleSidebar, setWidth, state } = useSidebar()
+function SidebarRail({
+  className,
+  toggleOnClick = true,
+  ...props
+}: React.ComponentProps<"button"> & { toggleOnClick?: boolean }) {
+  const { toggleSidebar, setWidth, resetWidth, state } = useSidebar()
+  const { tr } = useLocale()
   // Distinguish a drag (resize) from a click (toggle): the rail straddles the
   // sidebar's right edge, so the new width is simply the pointer's X. Only an
   // actual move counts as a resize; a clean click still toggles.
@@ -326,6 +350,8 @@ function SidebarRail({ className, ...props }: React.ComponentProps<"button">) {
     if (state === "collapsed") return // collapsed → click expands; no resize
     e.preventDefault()
     movedRef.current = false
+    const wrapper = e.currentTarget.closest<HTMLElement>('[data-slot="sidebar-wrapper"]')
+    wrapper?.setAttribute("data-resizing", "true")
     const startX = e.clientX
     const onMove = (ev: MouseEvent) => {
       if (Math.abs(ev.clientX - startX) > 3) movedRef.current = true
@@ -336,6 +362,7 @@ function SidebarRail({ className, ...props }: React.ComponentProps<"button">) {
       document.removeEventListener("mouseup", onUp)
       document.body.style.userSelect = ""
       document.body.style.cursor = ""
+      wrapper?.removeAttribute("data-resizing")
     }
     document.body.style.userSelect = "none"
     document.body.style.cursor = "col-resize"
@@ -347,20 +374,23 @@ function SidebarRail({ className, ...props }: React.ComponentProps<"button">) {
     <button
       data-sidebar="rail"
       data-slot="sidebar-rail"
-      aria-label="Resize or toggle sidebar"
+      aria-label={tr("Resize or toggle sidebar", "调整大小或切换侧边栏")}
       tabIndex={-1}
       onMouseDown={onMouseDown}
+      onDoubleClick={resetWidth}
       onClick={() => {
         // A drag just ended — swallow the click so it doesn't also toggle.
         if (movedRef.current) {
           movedRef.current = false
           return
         }
-        toggleSidebar()
+        if (toggleOnClick) toggleSidebar()
       }}
-      title="Drag to resize · click to toggle"
+      title={toggleOnClick
+        ? tr("Drag to resize · double-click to reset · click to toggle", "拖动调整大小 · 双击重置 · 点击切换")
+        : tr("Drag to resize · double-click to reset", "拖动调整大小 · 双击重置")}
       className={cn(
-        "absolute inset-y-0 z-20 hidden w-4 transition-all ease-linear group-data-[side=left]:-right-4 group-data-[side=right]:left-0 after:absolute after:inset-y-0 after:start-1/2 after:w-[2px] hover:after:bg-sidebar-border sm:flex ltr:-translate-x-1/2 rtl:-translate-x-1/2",
+        "absolute inset-y-0 z-20 hidden w-4 transition-all ease-linear group-data-[side=left]:-right-4 group-data-[side=right]:left-0 after:absolute after:inset-y-0 after:start-1/2 after:w-[2px] hover:after:bg-sidebar-border in-data-[resizing=true]:after:bg-ring sm:flex ltr:-translate-x-1/2 rtl:-translate-x-1/2",
         "in-data-[side=left]:cursor-w-resize in-data-[side=right]:cursor-e-resize",
         "[[data-side=left][data-state=collapsed]_&]:cursor-e-resize [[data-side=right][data-state=collapsed]_&]:cursor-w-resize",
         "group-data-[collapsible=offcanvas]:translate-x-0 group-data-[collapsible=offcanvas]:after:left-full hover:group-data-[collapsible=offcanvas]:bg-sidebar",

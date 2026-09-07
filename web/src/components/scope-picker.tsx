@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { apiFetch, getMe, type ScopeName } from "@/lib/api";
+import { useLocale } from "@/components/locale-provider";
 
 interface AgentRef {
   id: string;
@@ -26,6 +27,7 @@ interface ScopePickerProps {
 //   super_admin: all three (system, every user, every agent)
 //   user:        only their own user-scope and the agents they own
 export function ScopePicker({ scope, scopeId, onChange }: ScopePickerProps) {
+  const { tr } = useLocale();
   const [role, setRole] = useState<string>("");
   const [meId, setMeId] = useState<string>("");
   const [users, setUsers] = useState<UserRef[]>([]);
@@ -66,15 +68,15 @@ export function ScopePicker({ scope, scopeId, onChange }: ScopePickerProps) {
 
   return (
     <div className="flex flex-wrap items-center gap-2 text-sm">
-      <span className="text-zinc-400">Scope:</span>
+      <span className="text-zinc-400">{tr("Scope:", "作用域：")}</span>
       <select
         value={scope}
         onChange={(e) => handleScopeChange(e.target.value as ScopeName)}
         className="rounded border border-zinc-700 bg-zinc-950 px-2 py-1"
       >
-        {isAdmin && <option value="system">system</option>}
-        <option value="user">user</option>
-        <option value="agent">agent</option>
+        {isAdmin && <option value="system">{tr("system", "系统")}</option>}
+        <option value="user">{tr("user", "用户")}</option>
+        <option value="agent">Agent</option>
       </select>
       {scope === "user" && isAdmin && (
         <select
@@ -90,7 +92,7 @@ export function ScopePicker({ scope, scopeId, onChange }: ScopePickerProps) {
         </select>
       )}
       {scope === "user" && !isAdmin && (
-        <span className="rounded bg-zinc-800 px-2 py-1 text-xs text-zinc-300">you</span>
+        <span className="rounded bg-zinc-800 px-2 py-1 text-xs text-zinc-300">{tr("you", "你")}</span>
       )}
       {scope === "agent" && (
         <select

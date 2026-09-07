@@ -408,16 +408,33 @@ func (s *Server) requireAgentOwner(w http.ResponseWriter, r *http.Request, agent
 	return rec
 }
 
-// requireAgentReadable allows access when the caller is the owner, a
-// super_admin, holds an apikey-ACL grant (CanAccessAgent), OR the
-// agent is marked public and the caller is at least an authenticated
-// session. Public agents are link-shared: any signed-in user who hits
-// the URL can chat under their own user_id namespace, while the
-// agent's identity (SOUL/IDENTITY/skills) is reused from the owner's
-// row. This is the same gate /api/chat/history uses, so app_user
-// requests proxied through an integration with X-Fastclaw-End-User
-// can read artifacts for sessions they own without 403'ing on the
-// strict ownership check.
+// agentReadable reports whether the current request may read an agent.
+// A super_admin session is deliberately NOT a blanket bypass: opening a
+// private agent's normal chat URL must obey the same privacy boundary as
+// every other user. Admin audit remains available through ?actAs=, which is
+// read-only and explicitly identifies the user whose session is inspected.
+// Admin API keys retain their platform ACL semantics.
+func (s *Server) agentReadable(r *http.Request, rec *store.AgentRecord) bool {
+	if rec == nil {
+		return false
+	}
+	ident, ok := auth.FromContext(r.Context())
+	if !ok {
+		return false
+	}
+	uid := ident.EffectiveUserID()
+	if rec.UserID == uid {
+		return true
+	}
+	if ident.AuthMethod == "apikey" && ident.CanAccessAgent(rec.ID) {
+		return true
+	}
+	if ident.IsActingAs() {
+		return true
+	}
+	return rec.IsPublic && uid != ""
+}
+
 // callerOwnsAgent returns true when the caller is the agent's owner, a
 // super_admin, or an apikey explicitly scoped to the agent. Unlike
 // requireAgentReadable this does NOT grant public-agent readers — used
@@ -440,27 +457,16 @@ func (s *Server) callerOwnsAgent(r *http.Request, agentID string) bool {
 	return false
 }
 
+// requireAgentReadable allows owners, explicit apikey grantees, read-only
+// admin audit requests, and authenticated users of public agents. Public
+// agents are link-shared: each chatter still gets an isolated user scope.
 func (s *Server) requireAgentReadable(w http.ResponseWriter, r *http.Request, agentID string) bool {
 	rec, err := s.dataStore.GetAgent(r.Context(), agentID)
 	if err != nil || rec == nil {
 		jsonResponse(w, http.StatusNotFound, map[string]any{"error": "not found"})
 		return false
 	}
-	uid := s.effectiveUserID(r)
-	ident, _ := auth.FromContext(r.Context())
-	if rec.UserID == uid || ident.Role == users.RoleSuperAdmin {
-		return true
-	}
-	// CanAccessAgent is a hard check for apikeys (ACL) but a deferred
-	// "true" for session callers — the comment on Identity.CanAccessAgent
-	// spells this out. Only honor it for the apikey path; for session
-	// users we must do the explicit owner / public check ourselves,
-	// otherwise any signed-in user could GET another user's private
-	// agent via /api/agents/{id} and friends.
-	if ident.AuthMethod == "apikey" && ident.CanAccessAgent(agentID) {
-		return true
-	}
-	if rec.IsPublic && uid != "" {
+	if s.agentReadable(r, rec) {
 		return true
 	}
 	jsonResponse(w, http.StatusForbidden, map[string]any{"error": "not your agent"})
@@ -667,8 +673,8 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 
 // handleGetAgent returns the basic AgentRecord (id, name, description,
 // userId) for one agent. Used by the chat header / sidebar switcher to
-// resolve a display name. Permission is read-level — owner, super_admin,
-// or any grantee of a sharing record.
+// resolve a display name. Permission is read-level — owner, public-link
+// viewer, explicit API-key grantee, or super_admin using ?actAs= audit.
 func (s *Server) handleGetAgent(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if !s.requireAgentReadable(w, r, id) {
@@ -683,7 +689,8 @@ func (s *Server) handleGetAgent(w http.ResponseWriter, r *http.Request) {
 	share := agentShareModelConfig(rec)
 	uid := s.effectiveUserID(r)
 	role := "owner"
-	if rec.UserID != uid {
+	ident, _ := auth.FromContext(r.Context())
+	if rec.UserID != uid || ident.IsActingAs() {
 		role = "viewer"
 	}
 	jsonResponse(w, http.StatusOK, map[string]any{

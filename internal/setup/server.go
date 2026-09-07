@@ -320,6 +320,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("POST /api/agents/{id}/projects/{pid}/runtime/up", auth(s.handleRuntimeUp))
 	mux.HandleFunc("POST /api/agents/{id}/projects/{pid}/runtime/sleep", auth(s.handleRuntimeSleep))
 	mux.HandleFunc("POST /api/agents/{id}/projects/{pid}/runtime/wake", auth(s.handleRuntimeWake))
+	mux.HandleFunc("POST /api/agents/{id}/projects/{pid}/runtime/exec", auth(s.handleRuntimeExec))
 	mux.HandleFunc("DELETE /api/agents/{id}/projects/{pid}/runtime", auth(s.handleRuntimeStop))
 	mux.HandleFunc("GET /api/agents/{id}/projects/{pid}/preview", auth(s.handleRuntimePreview))
 	// Scope-flexible preview lookup (sessionId or projectId query param) —

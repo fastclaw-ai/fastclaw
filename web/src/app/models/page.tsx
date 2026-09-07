@@ -45,6 +45,7 @@ import {
   type ProviderRow,
 } from "@/lib/api";
 import { useAgentIdFromURL } from "@/hooks/use-agent-id";
+import { useLocale } from "@/components/locale-provider";
 
 // Keep these maps in sync with onboard's ProviderStep so the two flows
 // look and behave identically — same preset set, same labels, same
@@ -122,7 +123,8 @@ function presetModelRows(preset: string): ModelEntry[] {
   return ids.map((id) => ({ ...emptyModel(), id, name: id }));
 }
 
-export default function ModelsPage() {
+export default function ModelsPage({ scope = "auto" }: { scope?: "auto" | "user" | "system" }) {
+  const { tr } = useLocale();
   // Agent context is auto-detected from the URL. The standalone /models
   // page lives outside any /agents/<id>/ path, so the hook returns
   // "default" and we render the plain user-scope view. When this same
@@ -147,16 +149,14 @@ export default function ModelsPage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
-  // Caller identity drives which scope this page reads/writes:
-  //   - super_admin → system scope (shared across all users)
-  //   - regular user → user scope (private to themselves)
-  // No UI toggle — admins who want a private provider should configure it
-  // outside the admin role; users can't see system providers from here
-  // because the backend rejects the read for non-admins anyway.
+  // The settings dialog supplies an explicit scope so a super_admin can
+  // manage both a personal override and the system default. Standalone uses
+  // "auto" for backwards compatibility: admin → system, everyone else → user.
   const [me, setMe] = useState<{ id: string; role: string } | null>(null);
   const isSuperAdmin = me?.role === "super_admin";
-  const writeScope: "system" | "user" = isSuperAdmin ? "system" : "user";
-  const writeScopeId = isSuperAdmin ? "" : (me?.id || "");
+  const isSystemScope = scope === "system" || (scope === "auto" && isSuperAdmin);
+  const writeScope: "system" | "user" = isSystemScope ? "system" : "user";
+  const writeScopeId = isSystemScope ? "" : (me?.id || "");
 
   // Dialog state
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -224,6 +224,8 @@ export default function ModelsPage() {
   ) => {
     setLoading(true);
     try {
+      const systemScope = scope === "system" || (scope === "auto" && asAdmin);
+      const configScope: "system" | "user" = systemScope ? "system" : "user";
       // Admin: system is the source of truth.
       // Regular user: system (inherited) + own user-scope rows.
       // Agent context (chatter on a shared agent): also pull the agent
@@ -231,9 +233,9 @@ export default function ModelsPage() {
       //   shareModelConfig=true server-side; a 403 just means sharing is
       //   off and we render the plain user-scope view.
       const [cfg, sysRes, userRes, agentRec, agentRes] = await Promise.all([
-        getConfig().catch(() => null),
+        getConfig(configScope).catch(() => null),
         listProviders("system", "").catch(() => null),
-        asAdmin ? Promise.resolve(null) : listProviders("user", userId).catch(() => null),
+        systemScope ? Promise.resolve(null) : listProviders("user", userId).catch(() => null),
         inAgentContext ? getAgent(urlAgentId).catch(() => null) : Promise.resolve(null),
         inAgentContext ? listProviders("agent", urlAgentId).catch(() => null) : Promise.resolve(null),
       ]);
@@ -262,7 +264,7 @@ export default function ModelsPage() {
       // owner sees the dedicated AgentModelsPage that owns agent-scope
       // editing); we still skip them for admins because admin's
       // standalone /models page is system-scope only.
-      const entries: ProviderEntry[] = asAdmin
+      const entries: ProviderEntry[] = systemScope
         ? sysRows.map((r) => toEntry(r, "system"))
         : [
             ...agentRows.map((r) => toEntry(r, "agent")),
@@ -290,7 +292,7 @@ export default function ModelsPage() {
       setMe(meRec);
       fetchConfig(meRec.role === "super_admin", meRec.id);
     });
-  }, []);
+  }, [scope]);
 
   const openAddDialog = () => {
     setEditingName(null);
@@ -411,12 +413,12 @@ export default function ModelsPage() {
             ...prev,
             [idx]: result.ok
               ? { status: "success" }
-              : { status: "error", error: result.error || "Connection failed" },
+              : { status: "error", error: result.error || tr("Connection failed", "连接失败") },
           }));
         } catch {
           setModelTests((prev) => ({
             ...prev,
-            [idx]: { status: "error", error: "Connection failed" },
+            [idx]: { status: "error", error: tr("Connection failed", "连接失败") },
           }));
         }
       }),
@@ -530,7 +532,10 @@ export default function ModelsPage() {
   const handleSaveAll = async () => {
     setSaving(true);
     try {
-      await updateConfig({ agents: { defaults: { model: model.trim() } } });
+      await updateConfig(
+        { agents: { defaults: { model: model.trim() } } },
+        isSystemScope ? "system" : "user",
+      );
       flashSaved();
       await fetchConfig(isSuperAdmin, me?.id || "");
     } finally {
@@ -543,7 +548,10 @@ export default function ModelsPage() {
     if (!value.trim()) return;
     setSaving(true);
     try {
-      await updateConfig({ agents: { defaults: { model: value.trim() } } });
+      await updateConfig(
+        { agents: { defaults: { model: value.trim() } } },
+        isSystemScope ? "system" : "user",
+      );
       flashSaved();
       // Refresh so Inheriting/Override badge reflects the new state.
       await fetchConfig(isSuperAdmin, me?.id || "");
@@ -559,7 +567,10 @@ export default function ModelsPage() {
   const handleClearOverride = async () => {
     setSaving(true);
     try {
-      await updateConfig({ agents: { defaults: { model: "" } } });
+      await updateConfig(
+        { agents: { defaults: { model: "" } } },
+        isSystemScope ? "system" : "user",
+      );
       flashSaved();
       await fetchConfig(isSuperAdmin, me?.id || "");
     } finally {
@@ -584,23 +595,23 @@ export default function ModelsPage() {
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight">Models</h2>
+          <h2 className="text-2xl font-semibold tracking-tight">{tr("Models", "模型")}</h2>
           <p className="text-sm text-muted-foreground mt-1">
             {inAgentContext ? (
               <>
-                Your model + providers for{" "}
-                <strong>{agentName || "this agent"}</strong>. Your override wins
-                over the agent&apos;s default.
+                {tr("Your model and providers for", "你为")} {" "}
+                <strong>{agentName || tr("this agent", "此 Agent")}</strong>
+                {tr(". Your override takes priority over the agent default.", " 配置的模型和服务商。你的配置优先于 Agent 默认值。")}
               </>
             ) : (
-              <>Manage LLM providers and default model</>
+              <>{tr("Manage LLM providers and the default model", "管理大模型服务商和默认模型")}</>
             )}
           </p>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" onClick={openAddDialog}>
             <Plus className="h-4 w-4 mr-2" />
-            Add Provider
+            {tr("Add provider", "添加服务商")}
           </Button>
           <Button
             onClick={handleSaveAll}
@@ -611,10 +622,10 @@ export default function ModelsPage() {
             {saved ? (
               <>
                 <Check className="h-4 w-4 mr-2" />
-                Saved
+                {tr("Saved", "已保存")}
               </>
             ) : (
-              saving ? "Saving..." : "Save"
+              saving ? tr("Saving…", "正在保存…") : tr("Save", "保存")
             )}
           </Button>
         </div>
@@ -628,8 +639,8 @@ export default function ModelsPage() {
           chatter-user → agent-scope → system, so we show the agent's
           model in the placeholder and caption when sharing is on. */}
       {(() => {
-        const inheriting = !isSuperAdmin && !model.trim();
-        const overridden = !isSuperAdmin && !inheriting;
+        const inheriting = !isSystemScope && !model.trim();
+        const overridden = !isSystemScope && !inheriting;
         // What the runtime will actually use when the chatter has no
         // override. EnsureAgent picks agent-scope first (only when the
         // owner enabled sharing); otherwise it falls through to system.
@@ -645,12 +656,12 @@ export default function ModelsPage() {
           <div className="flex items-center gap-2">
             <Cpu className="h-4 w-4 text-primary" />
             <h3 className="font-medium">
-              {inAgentContext ? "Active Model" : "Default Model"}
+              {inAgentContext ? tr("Active model", "当前模型") : tr("Default model", "默认模型")}
             </h3>
-            {!isSuperAdmin && (inheriting ? (
-              <Badge variant="outline" className="text-[10px]">Inheriting</Badge>
+            {!isSystemScope && (inheriting ? (
+              <Badge variant="outline" className="text-[10px]">{tr("Inheriting", "继承中")}</Badge>
             ) : (
-              <Badge className="bg-primary/10 text-primary hover:bg-primary/10 text-[10px]">Override</Badge>
+              <Badge className="bg-primary/10 text-primary hover:bg-primary/10 text-[10px]">{tr("Override", "已覆盖")}</Badge>
             ))}
           </div>
           {overridden && (
@@ -661,14 +672,14 @@ export default function ModelsPage() {
               onClick={handleClearOverride}
               disabled={saving}
             >
-              Clear override
+              {tr("Clear override", "清除覆盖")}
             </Button>
           )}
         </div>
         {allModelOptions.length > 0 ? (
           <Select value={inheriting ? "" : model} onValueChange={(v: string | null) => v && handleDefaultModelChange(v)}>
             <SelectTrigger className="font-mono text-sm max-w-md">
-              <SelectValue placeholder={inheriting ? `Inherit (${effectiveFallback || "no default"})` : "Select a model"} />
+              <SelectValue placeholder={inheriting ? tr("Inherit ({{model}})", "继承（{{model}}）", { model: effectiveFallback || tr("no default", "无默认值") }) : tr("Select a model", "选择模型")} />
             </SelectTrigger>
             {/* Default `w-(--anchor-width)` locks the popup to the
                 trigger's max-w-md. Long ids like
@@ -687,38 +698,38 @@ export default function ModelsPage() {
           <Input
             value={inheriting ? "" : model}
             onChange={(e) => setModel(e.target.value)}
-            placeholder={inheriting ? (effectiveFallback ? `Inherit (${effectiveFallback})` : "e.g. openai/gpt-4o") : "e.g. openai/gpt-4o"}
+            placeholder={inheriting && effectiveFallback ? tr("Inherit ({{model}})", "继承（{{model}}）", { model: effectiveFallback }) : tr("e.g. openai/gpt-4o", "例如 openai/gpt-4o")}
             className="font-mono text-sm max-w-md"
           />
         )}
         <p className="text-xs text-muted-foreground mt-2">
-          {isSuperAdmin ? (
-            <>Used by agents unless overridden in agent config.</>
+          {isSystemScope ? (
+            <>{tr("Used by agents unless overridden in agent configuration.", "供 Agent 默认使用，除非在 Agent 配置中覆盖。")}</>
           ) : inheriting ? (
             <>
               {fallbackSource === "agent" ? (
                 <>
-                  <strong>{agentName || "This agent"}</strong> uses{" "}
-                  <code className="text-[11px]">{effectiveFallback}</code> (inherited
-                  from the agent). Pick a model above to override it just for you.
+                  <strong>{agentName || tr("This agent", "此 Agent")}</strong>
+                  {tr(" uses ", "使用 ")}<code className="text-[11px]">{effectiveFallback}</code>
+                  {tr(" inherited from the agent. Pick a model above to override it just for you.", "（继承自 Agent）。选择上方模型可仅为自己覆盖该配置。")}
                 </>
               ) : (
                 <>
-                  Using system default
+                  {tr("Using system default", "正在使用系统默认值")}
                   {effectiveFallback ? (
                     <>: <code className="text-[11px]">{effectiveFallback}</code></>
                   ) : (
-                    <> (none configured)</>
+                    <> {tr("(none configured)", "（尚未配置）")}</>
                   )}
-                  . Pick a model above to override
-                  {inAgentContext ? <> for this agent.</> : <> for your agents only.</>}
+                  {tr(". Pick a model above to override it", "。选择上方模型可覆盖该配置")}
+                  {inAgentContext ? <>{tr(" for this agent.", "，仅用于此 Agent。")}</> : <>{tr(" for your agents only.", "，仅用于你的 Agent。")}</>}
                 </>
               )}
             </>
           ) : (
             <>
-              Override applies to {inAgentContext ? <strong>you</strong> : <>your agents</>}.
-              Format <code className="text-[11px]">provider/modelId</code>.
+              {tr("Override applies to", "覆盖配置适用于")}{" "}{inAgentContext ? <strong>{tr("you", "你")}</strong> : <>{tr("your agents", "你的 Agent")}</>}.
+              {tr(" Format: ", " 格式：")}<code className="text-[11px]">provider/modelId</code>.
             </>
           )}
         </p>
@@ -733,13 +744,13 @@ export default function ModelsPage() {
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-500/10 mb-4">
               <Brain className="h-7 w-7 text-amber-500" />
             </div>
-            <p className="text-sm text-muted-foreground mb-1">No providers configured</p>
+            <p className="text-sm text-muted-foreground mb-1">{tr("No providers configured", "尚未配置服务商")}</p>
             <p className="text-xs text-muted-foreground/60 mb-4">
-              Add an LLM provider to get started
+              {tr("Add an LLM provider to get started", "添加大模型服务商以开始使用")}
             </p>
             <Button variant="outline" size="sm" onClick={openAddDialog}>
               <Plus className="h-4 w-4 mr-2" />
-              Add Provider
+              {tr("Add provider", "添加服务商")}
             </Button>
           </div>
         </div>
@@ -748,12 +759,12 @@ export default function ModelsPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>API Base</TableHead>
-                <TableHead>API Key</TableHead>
-                <TableHead>Models</TableHead>
-                <TableHead>Source</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
+                <TableHead>{tr("Name", "名称")}</TableHead>
+                <TableHead>{tr("API base", "API 地址")}</TableHead>
+                <TableHead>{tr("API key", "API 密钥")}</TableHead>
+                <TableHead>{tr("Models", "模型")}</TableHead>
+                <TableHead>{tr("Source", "来源")}</TableHead>
+                <TableHead className="text-right">{tr("Actions", "操作")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -762,21 +773,21 @@ export default function ModelsPage() {
                 // For super_admin that's "system"; for everyone else
                 // it's "user". "agent" rows surfaced for a chatter on
                 // a shared agent are always read-only (owner owns them).
-                const editable = isSuperAdmin
+                const editable = isSystemScope
                   ? provider.scope === "system"
                   : provider.scope === "user";
                 const sourceLabel =
                   provider.scope === "agent"
-                    ? "Inherited from agent"
+                    ? tr("Inherited from agent", "继承自 Agent")
                     : editable
-                      ? "Mine"
-                      : "Inherited";
+                      ? tr("Mine", "我的配置")
+                      : tr("Inherited", "已继承");
                 const sourceTitle =
                   provider.scope === "agent"
-                    ? "Configured on this agent by its owner — shared with chatters."
+                    ? tr("Configured by the agent owner and shared with chatters.", "由 Agent 所有者配置并共享给聊天用户。")
                     : editable
                       ? ""
-                      : "Configured by an admin and shared with all users.";
+                      : tr("Configured by an admin and shared with all users.", "由管理员配置并共享给所有用户。");
                 return (
                 <TableRow key={`${provider.scope}:${provider.id}`}>
                   <TableCell className="font-medium">{provider.name}</TableCell>
@@ -813,7 +824,7 @@ export default function ModelsPage() {
                         size="icon"
                         variant="ghost"
                         onClick={() => openEditDialog(provider)}
-                        title={editable ? "Edit" : "Read-only — inherited row"}
+                        title={editable ? tr("Edit", "编辑") : tr("Read-only — inherited row", "只读 — 继承的配置")}
                         disabled={!editable}
                       >
                         <Pencil className="size-4" />
@@ -823,7 +834,7 @@ export default function ModelsPage() {
                         variant="ghost"
                         className="text-destructive hover:text-destructive"
                         onClick={() => handleDeleteProvider(provider)}
-                        title={editable ? "Remove" : "Read-only — inherited row"}
+                        title={editable ? tr("Remove", "移除") : tr("Read-only — inherited row", "只读 — 继承的配置")}
                         disabled={!editable}
                       >
                         <Trash2 className="size-4" />
@@ -842,17 +853,17 @@ export default function ModelsPage() {
         <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
-              {editingName ? "Edit Provider" : "Add Provider"}
+              {editingName ? tr("Edit provider", "编辑服务商") : tr("Add provider", "添加服务商")}
             </DialogTitle>
             <DialogDescription>
-              Configure LLM provider connection and models
+              {tr("Configure the LLM provider connection and models", "配置大模型服务商连接和模型")}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
             {/* Provider + Provider Name (mirrors onboard's 2-col grid). */}
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">
-                <Label>Provider</Label>
+                <Label>{tr("Provider", "服务商")}</Label>
                 <Select
                   value={formPreset}
                   onValueChange={(v: string | null) => v && handlePresetChange(v)}
@@ -866,14 +877,14 @@ export default function ModelsPage() {
                   <SelectContent>
                     {Object.keys(PROVIDER_PRESETS).map((p) => (
                       <SelectItem key={p} value={p}>
-                        {PROVIDER_LABELS[p] ?? p}
+                        {p === "custom" ? tr("Custom", "自定义") : PROVIDER_LABELS[p] ?? p}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
               <div className="space-y-1.5">
-                <Label>Provider Name</Label>
+                <Label>{tr("Provider name", "服务商名称")}</Label>
                 <Input
                   value={formName}
                   onChange={(e) => setFormName(e.target.value)}
@@ -886,7 +897,7 @@ export default function ModelsPage() {
 
             {/* API Base URL */}
             <div className="space-y-1.5">
-              <Label>API Base URL</Label>
+              <Label>{tr("API base URL", "API 基础地址")}</Label>
               <Input
                 value={formApiBase}
                 onChange={(e) => setFormApiBase(e.target.value)}
@@ -901,7 +912,7 @@ export default function ModelsPage() {
                 empty so they can type a replacement; Test connection
                 falls back to the stored key when the field is blank. */}
             <div className="space-y-1.5">
-              <Label>API Key</Label>
+              <Label>{tr("API key", "API 密钥")}</Label>
               <Input
                 type={editingName && !formApiKey ? "text" : "password"}
                 value={formApiKey}
@@ -918,7 +929,7 @@ export default function ModelsPage() {
               />
               {editingName && (
                 <p className="text-[11px] text-muted-foreground/60">
-                  Leave empty to keep existing key. Test connection uses the saved key.
+                  {tr("Leave empty to keep the existing key. Connection tests use the saved key.", "留空可保留现有密钥；连接测试会使用已保存的密钥。")}
                 </p>
               )}
             </div>
@@ -926,7 +937,7 @@ export default function ModelsPage() {
             {/* API Type & Auth Type */}
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">
-                <Label>API Type</Label>
+                <Label>{tr("API type", "API 类型")}</Label>
                 <Select value={formApiType} onValueChange={(v: string | null) => v && setFormApi(v)}>
                   <SelectTrigger className="w-full">
                     <SelectValue>
@@ -940,7 +951,7 @@ export default function ModelsPage() {
                 </Select>
               </div>
               <div className="space-y-1.5">
-                <Label>Auth Type</Label>
+                <Label>{tr("Auth type", "认证类型")}</Label>
                 <Select value={formAuthType} onValueChange={(v: string | null) => v && setFormAuthType(v)}>
                   <SelectTrigger className="w-full">
                     <SelectValue>
@@ -949,7 +960,7 @@ export default function ModelsPage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="bearer-token">Bearer Token</SelectItem>
-                    <SelectItem value="api-key">API Key Header</SelectItem>
+                    <SelectItem value="api-key">{tr("API Key Header", "API Key 请求头")}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -958,16 +969,16 @@ export default function ModelsPage() {
             {/* Models Section */}
             <div className="space-y-3 pt-2 border-t border-border">
               <div className="flex items-center justify-between">
-                <Label className="text-base">Models</Label>
+                <Label className="text-base">{tr("Models", "模型")}</Label>
                 <Button variant="outline" size="sm" onClick={handleAddModel}>
                   <Plus className="h-3 w-3 mr-1.5" />
-                  Add Model
+                  {tr("Add model", "添加模型")}
                 </Button>
               </div>
 
               {formModels.length === 0 && (
                 <p className="text-sm text-muted-foreground/60 text-center py-4">
-                  No models configured. Add models to use with this provider.
+                  {tr("No models configured. Add models to use with this provider.", "尚未配置模型。请添加要通过此服务商使用的模型。")}
                 </p>
               )}
 
@@ -978,21 +989,21 @@ export default function ModelsPage() {
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2 min-w-0">
                       <span className="text-sm font-medium text-muted-foreground">
-                        Model {idx + 1}
+                        {tr("Model {{number}}", "模型 {{number}}", { number: idx + 1 })}
                       </span>
                       {t?.status === "testing" && (
                         <Badge variant="outline" className="text-[10px]">
-                          <Loader2 className="mr-1 size-3 animate-spin" /> testing
+                          <Loader2 className="mr-1 size-3 animate-spin" /> {tr("testing", "测试中")}
                         </Badge>
                       )}
                       {t?.status === "success" && (
                         <Badge className="bg-emerald-500/15 text-emerald-700 hover:bg-emerald-500/15 text-[10px]">
-                          <Check className="mr-1 size-3" /> connected
+                          <Check className="mr-1 size-3" /> {tr("connected", "已连接")}
                         </Badge>
                       )}
                       {t?.status === "error" && (
                         <Badge variant="outline" className="border-destructive/40 text-destructive text-[10px]" title={t.error}>
-                          failed
+                          {tr("failed", "失败")}
                         </Badge>
                       )}
                     </div>
@@ -1003,25 +1014,25 @@ export default function ModelsPage() {
                       onClick={() => handleRemoveModel(idx)}
                     >
                       <Trash2 className="h-3 w-3 mr-1" />
-                      Remove
+                      {tr("Remove", "移除")}
                     </Button>
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1">
-                      <Label className="text-xs">Model ID</Label>
+                      <Label className="text-xs">{tr("Model ID", "模型 ID")}</Label>
                       <Input
                         value={m.id}
                         onChange={(e) => handleUpdateModel(idx, "id", e.target.value)}
-                        placeholder="e.g. gpt-4o"
+                        placeholder={tr("e.g. gpt-4o", "例如 gpt-4o")}
                         className="font-mono text-xs h-8"
                       />
                     </div>
                     <div className="space-y-1">
-                      <Label className="text-xs">Display Name</Label>
+                      <Label className="text-xs">{tr("Display name", "显示名称")}</Label>
                       <Input
                         value={m.name}
                         onChange={(e) => handleUpdateModel(idx, "name", e.target.value)}
-                        placeholder="e.g. GPT-4o"
+                        placeholder={tr("e.g. GPT-4o", "例如 GPT-4o")}
                         className="text-xs h-8"
                       />
                     </div>
@@ -1049,16 +1060,16 @@ export default function ModelsPage() {
                   >
                     {batchTesting ? (
                       <>
-                        <Loader2 className="mr-1 size-4 animate-spin" /> Testing
+                        <Loader2 className="mr-1 size-4 animate-spin" /> {tr("Testing", "正在测试")}
                       </>
                     ) : (
-                      "Test connection"
+                      tr("Test connection", "测试连接")
                     )}
                   </Button>
                   <span className="text-xs text-muted-foreground">
                     {cleanModelRows.length === 0
-                      ? "Add at least one model with an id, then test."
-                      : "Pings every model above; results show next to each row."}
+                      ? tr("Add at least one model with an ID, then test.", "请至少添加一个带 ID 的模型，然后测试。")
+                      : tr("Tests every model above; results appear beside each row.", "测试上方所有模型，结果会显示在每一行旁边。")}
                   </span>
                 </div>
                 {Object.values(modelTests).some((t) => t.status === "error") && (
@@ -1080,17 +1091,17 @@ export default function ModelsPage() {
           <DialogFooter className="flex flex-col gap-2 sm:flex-row sm:items-center">
             {!allModelsPassed && (
               <span className="text-xs text-muted-foreground sm:mr-auto">
-                Test every model first — Add/Update unlocks once they all pass.
+                {tr("Test every model first — Add or Update unlocks after all tests pass.", "请先测试所有模型；全部通过后才能添加或更新。")}
               </span>
             )}
             <Button variant="outline" onClick={() => setDialogOpen(false)}>
-              Cancel
+              {tr("Cancel", "取消")}
             </Button>
             <Button
               onClick={handleSaveProvider}
               disabled={!formName.trim() || saving || !allModelsPassed}
             >
-              {editingName ? "Update" : "Add"}
+              {editingName ? tr("Update", "更新") : tr("Add", "添加")}
             </Button>
           </DialogFooter>
         </DialogContent>

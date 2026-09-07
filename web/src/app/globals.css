@@ -156,24 +156,40 @@ html.theme-transition *::after {
 
 /* Custom scrollbar */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 4px;
+  height: 4px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  border-radius: 3px;
-  background: oklch(0.5 0 0 / 30%);
+  border-radius: 999px;
+  background: oklch(0.5 0 0 / 22%);
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: oklch(0.5 0 0 / 50%);
+  background: oklch(0.5 0 0 / 40%);
 }
 .dark ::-webkit-scrollbar-thumb {
-  background: oklch(0.7 0 0 / 20%);
+  background: oklch(0.7 0 0 / 16%);
 }
 .dark ::-webkit-scrollbar-thumb:hover {
-  background: oklch(0.7 0 0 / 35%);
+  background: oklch(0.7 0 0 / 30%);
+}
+
+/* Tailwind Typography normally paints markdown with its own foreground,
+   which would turn text inside the black user bubble dark again. Keep every
+   prose role on the bubble's current color while preserving code-block fills. */
+.user-chat-bubble .chat-md {
+  --tw-prose-body: currentColor;
+  --tw-prose-headings: currentColor;
+  --tw-prose-lead: currentColor;
+  --tw-prose-links: currentColor;
+  --tw-prose-bold: currentColor;
+  --tw-prose-counters: currentColor;
+  --tw-prose-bullets: currentColor;
+  --tw-prose-quotes: currentColor;
+  --tw-prose-quote-borders: currentColor;
+  --tw-prose-captions: currentColor;
 }
 
 /* Typing dots animation */

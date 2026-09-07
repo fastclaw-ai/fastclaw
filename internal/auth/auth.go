@@ -76,7 +76,8 @@ func (i Identity) ReadOnly() bool {
 }
 
 // CanAccessAgent answers "is this caller authorized for agentID?"
-//   - super_admin (session): yes, on any agent (read-only when actAs)
+//   - super_admin (session): identity-level yes; record-level handlers
+//     still require owner/public access or the read-only actAs audit flow
 //   - apikey type=admin: yes, on any agent
 //   - apikey type=user/agent: only if agentID ∈ APIKeyAgents (the list
 //     is pre-resolved at auth time per type — see Resolved.Agents)

@@ -23,10 +23,12 @@ import {
 } from "@/components/ui/table";
 import { adminListChats, type AdminChatSessionEntry } from "@/lib/api";
 import { ChannelIcon, channelLabel } from "@/components/channel-icon";
+import { useLocale } from "@/components/locale-provider";
 
 const PAGE_SIZE = 30;
 
 export default function AdminChatsPage() {
+  const { locale, tr } = useLocale();
   const [sessions, setSessions] = useState<AdminChatSessionEntry[]>([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -46,12 +48,12 @@ export default function AdminChatsPage() {
       setSessions(list);
       setError("");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load chats");
+      setError(e instanceof Error ? e.message : tr("Failed to load chats", "加载聊天记录失败"));
     } finally {
       if (initial) setLoading(false);
       else setRefreshing(false);
     }
-  }, []);
+  }, [tr]);
 
   useEffect(() => {
     void load(true);
@@ -74,9 +76,14 @@ export default function AdminChatsPage() {
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
       <div className="flex items-center justify-between gap-4">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight">Chats</h2>
+          <h2 className="text-2xl font-semibold tracking-tight">
+            {tr("Chats", "聊天记录")}
+          </h2>
           <p className="text-sm text-muted-foreground mt-1">
-            All conversations across every agent on the platform.
+            {tr(
+              "All conversations across every agent on the platform.",
+              "查看平台中所有 Agent 的聊天记录。",
+            )}
           </p>
         </div>
         <Button
@@ -84,10 +91,10 @@ export default function AdminChatsPage() {
           size="sm"
           onClick={() => void load(false)}
           disabled={loading || refreshing}
-          title="Refresh chats"
+          title={tr("Refresh chats", "刷新聊天记录")}
         >
           <RefreshCw className={`h-4 w-4 mr-2 ${refreshing ? "animate-spin" : ""}`} />
-          Refresh
+          {tr("Refresh", "刷新")}
         </Button>
       </div>
 
@@ -103,7 +110,9 @@ export default function AdminChatsPage() {
         <div className="rounded-lg border border-border bg-card">
           <div className="flex flex-col items-center justify-center py-16">
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-            <p className="mt-3 text-xs text-muted-foreground/60">Loading chats…</p>
+            <p className="mt-3 text-xs text-muted-foreground/60">
+              {tr("Loading chats…", "正在加载聊天记录…")}
+            </p>
           </div>
         </div>
       ) : sorted.length === 0 ? (
@@ -112,10 +121,14 @@ export default function AdminChatsPage() {
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 mb-4">
               <MessagesSquare className="h-7 w-7 text-primary" />
             </div>
-            <p className="text-sm text-muted-foreground mb-1">No chats yet</p>
+            <p className="text-sm text-muted-foreground mb-1">
+              {tr("No chats yet", "还没有聊天记录")}
+            </p>
             <p className="text-xs text-muted-foreground/60">
-              Conversations will appear here once users start chatting with
-              their agents.
+              {tr(
+                "Conversations will appear here once users start chatting with their agents.",
+                "用户开始与 Agent 聊天后，对话将显示在这里。",
+              )}
             </p>
           </div>
         </div>
@@ -125,20 +138,22 @@ export default function AdminChatsPage() {
             <Table className="table-fixed w-full">
               <TableHeader>
                 <TableRow>
-                  <TableHead>Title</TableHead>
+                  <TableHead>{tr("Title", "标题")}</TableHead>
                   <TableHead className="hidden md:table-cell w-[200px]">
-                    Agent
+                    {tr("Agent", "Agent")}
                   </TableHead>
                   <TableHead className="hidden lg:table-cell w-[180px]">
-                    Owner
+                    {tr("Owner", "所有者")}
                   </TableHead>
                   <TableHead className="hidden md:table-cell w-[120px]">
-                    Channel
+                    {tr("Channel", "渠道")}
                   </TableHead>
                   <TableHead className="hidden sm:table-cell w-[160px]">
-                    Updated
+                    {tr("Updated", "更新时间")}
                   </TableHead>
-                  <TableHead className="w-[60px] text-right">Open</TableHead>
+                  <TableHead className="w-[60px] text-right">
+                    {tr("Open", "打开")}
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -193,14 +208,14 @@ export default function AdminChatsPage() {
                       </div>
                     </TableCell>
                     <TableCell className="hidden sm:table-cell text-xs text-muted-foreground whitespace-nowrap">
-                      {formatTime(s.updatedAt)}
+                      {formatTime(s.updatedAt, locale)}
                     </TableCell>
                     <TableCell className="text-right">
                       <a
                         href={`/agents/${encodeURIComponent(s.agentId)}/chat/${encodeURIComponent(s.id)}/?actAs=${encodeURIComponent(s.userId)}`}
                         target="_blank"
                         rel="noopener noreferrer"
-                        title="Open in new tab (read-only)"
+                        title={tr("Open in new tab (read-only)", "在新标签页中以只读方式打开")}
                         className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
                       >
                         <ExternalLink className="size-4" />
@@ -216,8 +231,8 @@ export default function AdminChatsPage() {
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">
                 {pageStart + 1}–
-                {Math.min(pageStart + PAGE_SIZE, sorted.length)} of{" "}
-                {sorted.length}
+                {Math.min(pageStart + PAGE_SIZE, sorted.length)} {tr("of", "共")} {" "}
+                {sorted.length} {tr("items", "条")}
               </span>
               <div className="flex items-center gap-1">
                 <Button
@@ -229,7 +244,10 @@ export default function AdminChatsPage() {
                   <ChevronLeft className="size-4" />
                 </Button>
                 <span className="px-3 text-muted-foreground">
-                  Page {safePage} / {totalPages}
+                  {tr("Page {{current}} / {{total}}", "第 {{current}} / {{total}} 页", {
+                    current: safePage,
+                    total: totalPages,
+                  })}
                 </span>
                 <Button
                   variant="outline"
@@ -248,9 +266,9 @@ export default function AdminChatsPage() {
   );
 }
 
-function formatTime(ms?: number): string {
+function formatTime(ms: number | undefined, locale: "en" | "zh-CN"): string {
   if (!ms) return "—";
   const d = new Date(ms);
   if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleString();
+  return d.toLocaleString(locale === "zh-CN" ? "zh-CN" : "en-US");
 }

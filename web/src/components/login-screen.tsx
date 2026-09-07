@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { login as apiLogin, register, getStatus } from "@/lib/api";
+import { useLocale } from "@/components/locale-provider";
 
 interface LoginScreenProps {
   onSuccess: () => void;
@@ -18,6 +19,7 @@ interface LoginScreenProps {
 // success — we route both through `onSuccess` and let AuthGuard render
 // the originally-requested page.
 export function LoginScreen({ onSuccess }: LoginScreenProps) {
+  const { tr } = useLocale();
   const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [loginField, setLoginField] = useState("");
   const [password, setPassword] = useState("");
@@ -49,13 +51,13 @@ export function LoginScreen({ onSuccess }: LoginScreenProps) {
     try {
       const res = await apiLogin(loginField.trim(), password);
       if (!res.ok) {
-        setError(res.error || "Invalid credentials");
+        setError(res.error || tr("Invalid credentials", "登录凭据无效"));
         setLoading(false);
         return;
       }
       onSuccess();
     } catch {
-      setError("Cannot reach server");
+      setError(tr("Cannot reach server", "无法连接服务器"));
       setLoading(false);
     }
   }
@@ -64,15 +66,15 @@ export function LoginScreen({ onSuccess }: LoginScreenProps) {
     e.preventDefault();
     setError("");
     if (!signupUsername.trim() || !signupEmail.trim() || !password) {
-      setError("All fields are required");
+      setError(tr("All fields are required", "请填写所有字段"));
       return;
     }
     if (password.length < 8) {
-      setError("Password must be at least 8 characters");
+      setError(tr("Password must be at least 8 characters", "密码至少需要 8 个字符"));
       return;
     }
     if (password !== signupConfirm) {
-      setError("Passwords don't match");
+      setError(tr("Passwords do not match", "两次输入的密码不一致"));
       return;
     }
     setLoading(true);
@@ -83,7 +85,7 @@ export function LoginScreen({ onSuccess }: LoginScreenProps) {
         password,
       });
       if (!res.ok) {
-        setError(res.error || "Could not create account");
+        setError(res.error || tr("Could not create account", "无法创建账户"));
         setLoading(false);
         return;
       }
@@ -93,7 +95,7 @@ export function LoginScreen({ onSuccess }: LoginScreenProps) {
       // route without any redirect.
       onSuccess();
     } catch {
-      setError("Cannot reach server");
+      setError(tr("Cannot reach server", "无法连接服务器"));
       setLoading(false);
     }
   }
@@ -103,15 +105,19 @@ export function LoginScreen({ onSuccess }: LoginScreenProps) {
       <div className="flex min-h-screen items-center justify-center bg-zinc-950 p-4">
         <div className="w-full max-w-sm space-y-6">
           <div className="text-center space-y-2">
-            <h1 className="text-2xl font-bold text-zinc-100">Create your account</h1>
-            <p className="text-sm text-zinc-500">Sign up to start using FastClaw</p>
+            <h1 className="text-2xl font-bold text-zinc-100">
+              {tr("Create your account", "创建账户")}
+            </h1>
+            <p className="text-sm text-zinc-500">
+              {tr("Sign up to start using FastClaw", "注册后开始使用 FastClaw")}
+            </p>
           </div>
           <form onSubmit={handleSignUp} className="space-y-4">
             <input
               type="text"
               value={signupUsername}
               onChange={(e) => setSignupUsername(e.target.value)}
-              placeholder="username"
+              placeholder={tr("username", "用户名")}
               autoFocus
               autoComplete="username"
               className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm text-zinc-100 placeholder-zinc-600 outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500"
@@ -120,7 +126,7 @@ export function LoginScreen({ onSuccess }: LoginScreenProps) {
               type="email"
               value={signupEmail}
               onChange={(e) => setSignupEmail(e.target.value)}
-              placeholder="email"
+              placeholder={tr("email", "邮箱")}
               autoComplete="email"
               className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm text-zinc-100 placeholder-zinc-600 outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500"
             />
@@ -128,7 +134,7 @@ export function LoginScreen({ onSuccess }: LoginScreenProps) {
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="password (min 8 chars)"
+              placeholder={tr("password (at least 8 characters)", "密码（至少 8 个字符）")}
               autoComplete="new-password"
               className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm text-zinc-100 placeholder-zinc-600 outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500"
             />
@@ -136,7 +142,7 @@ export function LoginScreen({ onSuccess }: LoginScreenProps) {
               type="password"
               value={signupConfirm}
               onChange={(e) => setSignupConfirm(e.target.value)}
-              placeholder="confirm password"
+              placeholder={tr("confirm password", "确认密码")}
               autoComplete="new-password"
               className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm text-zinc-100 placeholder-zinc-600 outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500"
             />
@@ -146,17 +152,17 @@ export function LoginScreen({ onSuccess }: LoginScreenProps) {
               disabled={loading || !signupUsername.trim() || !signupEmail.trim() || !password || !signupConfirm}
               className="w-full rounded-lg bg-violet-600 px-4 py-3 text-sm font-medium text-white transition hover:bg-violet-500 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {loading ? "Creating account..." : "Create account"}
+              {loading ? tr("Creating account…", "正在创建账户…") : tr("Create account", "创建账户")}
             </button>
           </form>
           <p className="text-center text-sm text-zinc-500">
-            Already have an account?{" "}
+            {tr("Already have an account?", "已有账户？")} {" "}
             <button
               type="button"
               onClick={() => switchMode("signin")}
               className="text-violet-400 hover:text-violet-300"
             >
-              Sign in
+              {tr("Sign in", "登录")}
             </button>
           </p>
         </div>
@@ -169,14 +175,16 @@ export function LoginScreen({ onSuccess }: LoginScreenProps) {
       <div className="w-full max-w-sm space-y-6">
         <div className="text-center space-y-2">
           <h1 className="text-2xl font-bold text-zinc-100">FastClaw</h1>
-          <p className="text-sm text-zinc-500">Sign in with your username or email</p>
+          <p className="text-sm text-zinc-500">
+            {tr("Sign in with your username or email", "使用用户名或邮箱登录")}
+          </p>
         </div>
         <form onSubmit={handleSignIn} className="space-y-4">
           <input
             type="text"
             value={loginField}
             onChange={(e) => setLoginField(e.target.value)}
-            placeholder="username or email"
+            placeholder={tr("username or email", "用户名或邮箱")}
             autoFocus
             autoComplete="username"
             className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm text-zinc-100 placeholder-zinc-600 outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500"
@@ -185,7 +193,7 @@ export function LoginScreen({ onSuccess }: LoginScreenProps) {
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder="password"
+            placeholder={tr("password", "密码")}
             autoComplete="current-password"
             className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm text-zinc-100 placeholder-zinc-600 outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500"
           />
@@ -195,18 +203,18 @@ export function LoginScreen({ onSuccess }: LoginScreenProps) {
             disabled={loading || !loginField.trim() || !password}
             className="w-full rounded-lg bg-violet-600 px-4 py-3 text-sm font-medium text-white transition hover:bg-violet-500 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {loading ? "Signing in..." : "Sign in"}
+            {loading ? tr("Signing in…", "正在登录…") : tr("Sign in", "登录")}
           </button>
         </form>
         {registrationOpen && (
           <p className="text-center text-sm text-zinc-500">
-            Don&apos;t have an account?{" "}
+            {tr("Do not have an account?", "还没有账户？")} {" "}
             <button
               type="button"
               onClick={() => switchMode("signup")}
               className="text-violet-400 hover:text-violet-300"
             >
-              Sign up
+              {tr("Sign up", "注册")}
             </button>
           </p>
         )}

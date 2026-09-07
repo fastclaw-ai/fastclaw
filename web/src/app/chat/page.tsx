@@ -7,6 +7,7 @@ import { getStatus, getChatHistory, getChatSessions, sendChatStream, type AgentI
 import { useAgentName } from "@/hooks/use-agent-name";
 import { Bot, Send, Copy, Check, SquarePen, MessageSquare, Wrench, ChevronDown, ChevronRight } from "lucide-react";
 import { ChatMarkdown } from "@/components/chat-markdown";
+import { useLocale } from "@/components/locale-provider";
 
 interface ChatMessage {
   id: string;
@@ -69,6 +70,7 @@ function buildChatMessages(history: ChatHistoryMessage[]): ChatMessage[] {
 }
 
 export default function ChatPage() {
+  const { locale, tr } = useLocale();
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [selectedAgent, setSelectedAgent] = useState<string>("");
   const [sessionId, setSessionId] = useState<string>(() => generateSessionId());
@@ -260,7 +262,7 @@ export default function ChatPage() {
             break;
           }
           case "error": {
-            const message = evt.data?.message || "Unknown error";
+            const message = evt.data?.message || tr("Unknown error", "未知错误");
             setMessages((prev) => [
               ...prev,
               { id: `e-${Date.now()}`, role: "agent", content: `⚠️ ${message}`, timestamp: Date.now() },
@@ -273,7 +275,7 @@ export default function ChatPage() {
     } catch (err) {
       const errMsg = err instanceof Error && err.message
         ? err.message
-        : "Failed to get a response. Is the gateway running?";
+        : tr("Failed to get a response. Is the gateway running?", "获取回复失败，请确认网关是否正在运行。")
       setMessages((prev) => [
         ...prev,
         { id: `e-${Date.now()}`, role: "agent", content: errMsg, timestamp: Date.now() },
@@ -282,7 +284,7 @@ export default function ChatPage() {
       setSending(false);
       textareaRef.current?.focus();
     }
-  }, [input, selectedAgent, sessionId, sending, loadSessions]);
+  }, [input, selectedAgent, sessionId, sending, loadSessions, tr]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -307,7 +309,7 @@ export default function ChatPage() {
   };
 
   const formatTime = (ts: number) =>
-    new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    new Date(ts).toLocaleTimeString(locale === "zh-CN" ? "zh-CN" : "en-US", { hour: "2-digit", minute: "2-digit" });
 
   const currentAgent = agents.find((a) => a.id === selectedAgent);
   const agentName = useAgentName(selectedAgent);
@@ -318,7 +320,7 @@ export default function ChatPage() {
       <div className="hidden w-56 flex-col border-r border-border bg-card/30 lg:flex">
         <div className="flex items-center justify-between border-b border-border p-3">
           <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-            Agents
+            {tr("Agents", "Agent")}
           </p>
         </div>
         <div className="overflow-auto p-2 space-y-1">
@@ -346,7 +348,7 @@ export default function ChatPage() {
           <>
             <div className="flex items-center justify-between border-t border-b border-border p-3">
               <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                History
+                {tr("History", "历史记录")}
               </p>
             </div>
             <div className="flex-1 overflow-auto p-2 space-y-1">
@@ -378,7 +380,7 @@ export default function ChatPage() {
               <Bot className="h-4 w-4 text-primary" />
             </div>
             <span className="text-sm font-semibold">
-              {selectedAgent || "Select an agent"}
+              {selectedAgent || tr("Select an agent", "选择 Agent")}
             </span>
             {currentAgent && (
               <Badge variant="secondary" className="font-mono text-[10px]">
@@ -406,7 +408,7 @@ export default function ChatPage() {
             <button
               onClick={handleNewChat}
               className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
-              title="New Chat"
+              title={tr("New Chat", "新建对话")}
             >
               <SquarePen className="h-4 w-4" />
             </button>
@@ -422,10 +424,10 @@ export default function ChatPage() {
                   <Bot className="h-8 w-8 text-muted-foreground" />
                 </div>
                 <p className="text-lg font-medium mb-1">
-                  Chat with {agentName || selectedAgent || "your agent"}
+                  {tr("Chat with {{agent}}", "与 {{agent}} 对话", { agent: agentName || selectedAgent || tr("your agent", "你的 Agent") })}
                 </p>
                 <p className="text-sm text-muted-foreground">
-                  Send a message to start a conversation
+                  {tr("Send a message to start a conversation", "发送消息以开始对话")}
                 </p>
               </div>
             )}
@@ -466,7 +468,7 @@ export default function ChatPage() {
                         <button
                           onClick={() => handleCopy(msg)}
                           className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-muted text-muted-foreground/60 hover:text-muted-foreground transition-all"
-                          title="Copy"
+                          title={tr("Copy", "复制")}
                         >
                           {copiedId === msg.id ? (
                             <Check className="h-3 w-3 text-emerald-500" />
@@ -508,8 +510,8 @@ export default function ChatPage() {
                 onKeyDown={handleKeyDown}
                 placeholder={
                   selectedAgent
-                    ? `Message ${agentName || selectedAgent}...`
-                    : "Select an agent first"
+                    ? tr("Message {{agent}}…", "向 {{agent}} 发送消息…", { agent: agentName || selectedAgent })
+                    : tr("Select an agent first", "请先选择 Agent")
                 }
                 disabled={!selectedAgent || sending}
                 rows={1}
@@ -526,7 +528,7 @@ export default function ChatPage() {
               </Button>
             </div>
             <p className="text-center text-[11px] text-muted-foreground/50 mt-2">
-              Enter to send, Shift+Enter for new line
+              {tr("Enter to send, Shift+Enter for a new line", "按 Enter 发送，Shift+Enter 换行")}
             </p>
           </div>
         </div>
@@ -537,6 +539,7 @@ export default function ChatPage() {
 
 /** Renders a group of tool calls as a collapsible summary. */
 function ToolCallGroup({ msg }: { msg: ChatMessage }) {
+  const { tr } = useLocale();
   const [groupOpen, setGroupOpen] = useState(false);
   const [expandedTool, setExpandedTool] = useState<Record<string, boolean>>({});
 
@@ -569,8 +572,8 @@ function ToolCallGroup({ msg }: { msg: ChatMessage }) {
             )}
             <span className="font-medium text-foreground">
               {allDone
-                ? `Executed ${tools.length} tool${tools.length > 1 ? "s" : ""}`
-                : `Running tools (${doneCount}/${tools.length})...`}
+                ? tr("Executed {{count}} tool(s)", "已执行 {{count}} 个工具", { count: tools.length })
+                : tr("Running tools ({{done}}/{{total}})…", "正在运行工具（{{done}}/{{total}}）…", { done: doneCount, total: tools.length })}
             </span>
             <span className="text-muted-foreground/60 text-[11px] flex-1 text-left truncate">
               {tools.map((tc) => tc.name).join(", ")}
@@ -615,7 +618,7 @@ function ToolCallGroup({ msg }: { msg: ChatMessage }) {
                   {expandedTool[tc.id] && (
                     <div className="px-3 py-2 space-y-2 bg-muted/20">
                       <div>
-                        <p className="text-[10px] font-medium text-muted-foreground uppercase mb-1">Input</p>
+                        <p className="text-[10px] font-medium text-muted-foreground uppercase mb-1">{tr("Input", "输入")}</p>
                         <pre className="text-xs font-mono bg-muted/50 rounded p-2 overflow-x-auto whitespace-pre-wrap break-all max-h-40">
                           {(() => {
                             try { return JSON.stringify(JSON.parse(tc.arguments), null, 2); }
@@ -625,13 +628,13 @@ function ToolCallGroup({ msg }: { msg: ChatMessage }) {
                       </div>
                       {tc.result != null ? (
                         <div>
-                          <p className="text-[10px] font-medium text-muted-foreground uppercase mb-1">Output</p>
+                          <p className="text-[10px] font-medium text-muted-foreground uppercase mb-1">{tr("Output", "输出")}</p>
                           <pre className="text-xs font-mono bg-muted/50 rounded p-2 overflow-x-auto whitespace-pre-wrap break-all max-h-60">
                             {tc.result.length > 2000 ? tc.result.slice(0, 2000) + "..." : tc.result}
                           </pre>
                         </div>
                       ) : (
-                        <p className="text-xs text-muted-foreground/60 italic">Executing...</p>
+                        <p className="text-xs text-muted-foreground/60 italic">{tr("Executing…", "正在执行…")}</p>
                       )}
                     </div>
                   )}

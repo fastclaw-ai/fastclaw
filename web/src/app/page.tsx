@@ -2,13 +2,22 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { getStatus, getMe, login as loginApi } from "@/lib/api";
+import { getAgents, getStatus, getMe, login as loginApi } from "@/lib/api";
 import { logout } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useLocale } from "@/components/locale-provider";
+
+async function resolveAppLanding() {
+  const agents = await getAgents().catch(() => []);
+  return agents.length > 0
+    ? `/agents/${encodeURIComponent(agents[0].id)}/chat/`
+    : "/agents/?manage=1";
+}
 
 export default function RootPage() {
+  const { tr } = useLocale();
   const router = useRouter();
   const [showLogin, setShowLogin] = useState(false);
   const [loginField, setLoginField] = useState("");
@@ -30,7 +39,7 @@ export default function RootPage() {
         }
         const me = await getMe().catch(() => null);
         if (me?.ok && me.user) {
-          router.replace("/overview/");
+          router.replace(await resolveAppLanding());
         } else {
           setShowLogin(true);
           setLoading(false);
@@ -49,12 +58,12 @@ export default function RootPage() {
     try {
       const res = await loginApi(loginField.trim(), password);
       if (!res.ok) {
-        setError(res.error || "Invalid username or password");
+        setError(res.error || tr("Invalid username or password", "用户名或密码错误"));
         return;
       }
-      router.replace("/overview/");
+      router.replace(await resolveAppLanding());
     } catch {
-      setError("Connection failed");
+      setError(tr("Connection failed", "连接失败"));
     } finally {
       setSubmitting(false);
     }
@@ -75,12 +84,14 @@ export default function RootPage() {
           <div className="flex flex-col items-center gap-3">
             <img src="/logo.png" alt="FastClaw" className="h-12 w-12" />
             <h1 className="text-xl font-bold">FastClaw</h1>
-            <p className="text-sm text-muted-foreground">Sign in to continue</p>
+            <p className="text-sm text-muted-foreground">
+              {tr("Sign in to continue", "登录后继续")}
+            </p>
           </div>
 
           <form onSubmit={handleLogin} className="space-y-4">
             <div className="space-y-1.5">
-              <Label htmlFor="login-field">Username or email</Label>
+              <Label htmlFor="login-field">{tr("Username or email", "用户名或邮箱")}</Label>
               <Input
                 id="login-field"
                 value={loginField}
@@ -91,7 +102,7 @@ export default function RootPage() {
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="login-password">Password</Label>
+              <Label htmlFor="login-password">{tr("Password", "密码")}</Label>
               <Input
                 id="login-password"
                 type="password"
@@ -106,7 +117,7 @@ export default function RootPage() {
               disabled={!loginField.trim() || !password || submitting}
               className="w-full"
             >
-              {submitting ? "Signing in…" : "Sign In"}
+              {submitting ? tr("Signing in…", "正在登录…") : tr("Sign in", "登录")}
             </Button>
           </form>
         </div>

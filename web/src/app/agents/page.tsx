@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -38,6 +39,7 @@ import {
   deleteAgent,
   type AgentDetail,
 } from "@/lib/api";
+import { useLocale } from "@/components/locale-provider";
 
 interface OtherAgent {
   id: string;
@@ -85,6 +87,10 @@ function AgentAvatar({
 }
 
 export default function AgentsPage() {
+  const { tr } = useLocale();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const manageMode = searchParams.get("manage") === "1";
   const [agents, setAgents] = useState<AgentDetail[]>([]);
   const [otherAgents, setOtherAgents] = useState<OtherAgent[]>([]);
   const [isAdmin, setIsAdmin] = useState(false);
@@ -158,6 +164,10 @@ export default function AgentsPage() {
     // owned by other users surface as separate links — they don't auto-
     // populate the dashboard list.
     const list = await getAgents().catch(() => [] as AgentDetail[]);
+    if (!manageMode && list.length > 0) {
+      router.replace(`/agents/${encodeURIComponent(list[0].id)}/chat/`);
+      return;
+    }
     setAgents(list);
     // Admins also see other users' agents (read-only) below their own.
     // We resolve isAdmin from /api/status and only call adminListAgents
@@ -215,7 +225,7 @@ export default function AgentsPage() {
       description: newDescription.trim() || undefined,
     });
     if (resp && (resp.ok === false || resp.error)) {
-      setCreateError(resp.error || "Failed to create agent");
+      setCreateError(resp.error || tr("Failed to create agent", "创建 Agent 失败"));
       setSaving(false);
       return;
     }
@@ -243,7 +253,7 @@ export default function AgentsPage() {
       isPublic: editIsPublic,
     });
     if (resp && (resp.ok === false || resp.error)) {
-      setEditError(resp.error || "Failed to update agent");
+      setEditError(resp.error || tr("Failed to update agent", "更新 Agent 失败"));
       setSaving(false);
       return;
     }
@@ -269,7 +279,7 @@ export default function AgentsPage() {
       setDeleteId(null);
       fetchAgents();
     } catch (err) {
-      setDeleteError(err instanceof Error ? err.message : "Failed to delete agent");
+      setDeleteError(err instanceof Error ? err.message : tr("Failed to delete agent", "删除 Agent 失败"));
     } finally {
       setDeleting(false);
     }
@@ -279,15 +289,15 @@ export default function AgentsPage() {
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight">Agents</h2>
+          <h2 className="text-2xl font-semibold tracking-tight">{tr("Agents", "Agent")}</h2>
           <p className="text-sm text-muted-foreground mt-1">
-            Manage your AI agents and their configurations
+            {tr("Manage your AI agents and their configurations", "管理你的 AI Agent 及其配置")}
           </p>
         </div>
         {!quotaLocked && (
           <Button onClick={() => setCreateOpen(true)}>
             <Plus className="h-4 w-4 mr-2" />
-            New Agent
+            {tr("New Agent", "新建 Agent")}
           </Button>
         )}
       </div>
@@ -306,8 +316,8 @@ export default function AgentsPage() {
             </div>
             <p className="text-sm text-muted-foreground">
               {quotaLocked
-                ? "No agent has been provisioned for your account yet — contact your admin."
-                : "No agents configured yet"}
+                ? tr("No agent has been provisioned for your account yet — contact your admin.", "你的账户尚未分配 Agent，请联系管理员。")
+                : tr("No agents configured yet", "还没有配置 Agent")}
             </p>
             {!quotaLocked && (
               <Button
@@ -315,7 +325,7 @@ export default function AgentsPage() {
                 variant="outline"
                 className="mt-4"
               >
-                Create your first agent
+                {tr("Create your first agent", "创建第一个 Agent")}
               </Button>
             )}
           </div>
@@ -332,7 +342,7 @@ export default function AgentsPage() {
                   : "border-transparent text-muted-foreground hover:text-foreground"
               }`}
             >
-              Your agents
+              {tr("Your agents", "你的 Agent")}
               <span className="ml-1.5 text-xs text-muted-foreground/70">
                 {ownedAgents.length}
               </span>
@@ -345,7 +355,7 @@ export default function AgentsPage() {
                   : "border-transparent text-muted-foreground hover:text-foreground"
               }`}
             >
-              Others&apos; agents
+              {tr("Others' agents", "其他人的 Agent")}
               <span className="ml-1.5 text-xs text-muted-foreground/70">
                 {otherAgents.length}
               </span>
@@ -368,14 +378,14 @@ export default function AgentsPage() {
                     className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20"
                   >
                     <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                    Public
+                    {tr("Public", "公开")}
                   </Badge>
                 ) : (
                   <Badge
                     variant="outline"
                     className="bg-muted/60 text-muted-foreground"
                   >
-                    Private
+                    {tr("Private", "私有")}
                   </Badge>
                 )}
               </div>
@@ -410,7 +420,7 @@ export default function AgentsPage() {
                     }}
                   >
                     <Pencil className="h-3 w-3 mr-1.5" />
-                    Edit
+                    {tr("Edit", "编辑")}
                   </Button>
                   <Button
                     variant="ghost"
@@ -422,7 +432,7 @@ export default function AgentsPage() {
                     }}
                   >
                     <Trash2 className="h-3 w-3 mr-1.5" />
-                    Remove
+                    {tr("Remove", "移除")}
                   </Button>
                 </div>
               )}
@@ -438,7 +448,7 @@ export default function AgentsPage() {
                   key={agent.id}
                   className="group flex h-full flex-col rounded-lg border border-border bg-card p-5 opacity-90 transition-colors hover:bg-muted/50 hover:opacity-100 cursor-pointer"
                   onClick={() =>
-                    (window.location.href = `/agents/${agent.id}/chat/`)
+                    (window.location.href = `/agents/${agent.id}/chat/?actAs=${encodeURIComponent(agent.userId)}`)
                   }
                 >
                   <div className="flex items-start justify-between mb-4">
@@ -450,7 +460,7 @@ export default function AgentsPage() {
                       className="max-w-[60%] bg-muted/40 text-muted-foreground"
                     >
                       <span className="truncate">
-                        Owner: {agent.ownerDisplayName || agent.ownerUsername || agent.userId}
+                        {tr("Owner", "所有者")}：{agent.ownerDisplayName || agent.ownerUsername || agent.userId}
                       </span>
                     </Badge>
                   </div>
@@ -471,7 +481,7 @@ export default function AgentsPage() {
                   )}
                   <div className="mt-auto pt-3 border-t border-border">
                     <p className="text-xs text-muted-foreground">
-                      Click to chat — only the owner can edit or remove this agent.
+                      {tr("Click to chat — only the owner can edit or remove this agent.", "点击即可聊天；只有所有者能编辑或移除此 Agent。")}
                     </p>
                   </div>
                 </div>
@@ -491,11 +501,11 @@ export default function AgentsPage() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Create New Agent</DialogTitle>
+            <DialogTitle>{tr("Create New Agent", "新建 Agent")}</DialogTitle>
             <DialogDescription>
-              The system generates a globally unique id (e.g.{" "}
-              <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">agt_a1b2c3…</code>);
-              everything below is for display.
+              {tr("The system generates a globally unique ID (for example", "系统会生成全局唯一 ID（例如")} {" "}
+              <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">agt_a1b2c3…</code>
+              {tr("); everything below is for display.", "），以下内容用于展示。")}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
@@ -504,11 +514,11 @@ export default function AgentsPage() {
                 type="button"
                 onClick={() => createAvatarInput.current?.click()}
                 className="group relative flex size-20 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-dashed bg-muted/40 transition hover:bg-muted"
-                aria-label="Upload avatar"
+                aria-label={tr("Upload avatar", "上传头像")}
               >
                 {newAvatarPreview ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={newAvatarPreview} alt="avatar" className="size-full object-cover" />
+                  <img src={newAvatarPreview} alt={tr("Agent avatar", "Agent 头像")} className="size-full object-cover" />
                 ) : (
                   <ImagePlus className="size-6 text-muted-foreground" />
                 )}
@@ -526,7 +536,7 @@ export default function AgentsPage() {
                 />
               </button>
               <div className="flex-1 space-y-2">
-                <Label htmlFor="agent-name">Name</Label>
+                <Label htmlFor="agent-name">{tr("Name", "名称")}</Label>
                 <Input
                   id="agent-name"
                   value={newName}
@@ -534,18 +544,18 @@ export default function AgentsPage() {
                     setNewName(e.target.value);
                     setCreateError(null);
                   }}
-                  placeholder="My Helper"
+                  placeholder={tr("My Helper", "我的助手")}
                   autoFocus
                 />
               </div>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="agent-desc">Description (optional)</Label>
+              <Label htmlFor="agent-desc">{tr("Description (optional)", "说明（可选）")}</Label>
               <Textarea
                 id="agent-desc"
                 value={newDescription}
                 onChange={(e) => setNewDescription(e.target.value)}
-                placeholder="What's this agent for? Shown in the agent list and on its profile."
+                placeholder={tr("What is this agent for? Shown in the agent list and on its profile.", "这个 Agent 有什么用途？内容会显示在 Agent 列表和资料页中。")}
                 rows={3}
               />
             </div>
@@ -555,10 +565,10 @@ export default function AgentsPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)}>
-              Cancel
+              {tr("Cancel", "取消")}
             </Button>
             <Button onClick={handleCreate} disabled={!newName.trim() || saving}>
-              {saving ? "Creating..." : "Create Agent"}
+              {saving ? tr("Creating…", "正在创建…") : tr("Create Agent", "创建 Agent")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -576,9 +586,9 @@ export default function AgentsPage() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Edit Agent</DialogTitle>
+            <DialogTitle>{tr("Edit Agent", "编辑 Agent")}</DialogTitle>
             <DialogDescription>
-              ID is locked —{" "}
+              {tr("ID cannot be changed —", "ID 无法修改——")} {" "}
               <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
                 {editTarget?.id}
               </code>
@@ -590,11 +600,11 @@ export default function AgentsPage() {
                 type="button"
                 onClick={() => editAvatarInput.current?.click()}
                 className="group relative flex size-20 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-dashed bg-muted/40 transition hover:bg-muted"
-                aria-label="Upload avatar"
+                aria-label={tr("Upload avatar", "上传头像")}
               >
                 {editAvatarPreview ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={editAvatarPreview} alt="avatar" className="size-full object-cover" />
+                  <img src={editAvatarPreview} alt={tr("Agent avatar", "Agent 头像")} className="size-full object-cover" />
                 ) : editTarget ? (
                   <AgentAvatar agent={editTarget} bust={avatarBust[editTarget.id]} size={80} />
                 ) : null}
@@ -612,7 +622,7 @@ export default function AgentsPage() {
                 />
               </button>
               <div className="flex-1 space-y-2">
-                <Label htmlFor="agent-edit-name">Name</Label>
+                <Label htmlFor="agent-edit-name">{tr("Name", "名称")}</Label>
                 <Input
                   id="agent-edit-name"
                   value={editName}
@@ -620,17 +630,17 @@ export default function AgentsPage() {
                     setEditName(e.target.value);
                     setEditError(null);
                   }}
-                  placeholder="My Helper"
+                  placeholder={tr("My Helper", "我的助手")}
                 />
               </div>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="agent-edit-desc">Description</Label>
+              <Label htmlFor="agent-edit-desc">{tr("Description", "说明")}</Label>
               <Textarea
                 id="agent-edit-desc"
                 value={editDescription}
                 onChange={(e) => setEditDescription(e.target.value)}
-                placeholder="What's this agent for?"
+                placeholder={tr("What is this agent for?", "这个 Agent 有什么用途？")}
                 rows={3}
               />
             </div>
@@ -642,12 +652,12 @@ export default function AgentsPage() {
               <div className="flex items-start justify-between gap-4">
                 <div className="space-y-1">
                   <Label htmlFor="agent-edit-public" className="text-sm font-medium">
-                    Public access
+                    {tr("Public access", "公开访问")}
                   </Label>
                   <p className="text-xs text-muted-foreground">
                     {editIsPublic
-                      ? "Anyone with the link can chat. Their history stays private to them."
-                      : "Only you can use this agent."}
+                      ? tr("Anyone with the link can chat. Their history stays private to them.", "任何获得链接的人都能聊天，各自的历史记录彼此隔离。")
+                      : tr("Only you can use this agent.", "只有你可以使用此 Agent。")}
                   </p>
                 </div>
                 <Switch
@@ -689,12 +699,12 @@ export default function AgentsPage() {
                     {editLinkCopied ? (
                       <>
                         <Check className="h-4 w-4 mr-1.5" />
-                        Copied
+                        {tr("Copied", "已复制")}
                       </>
                     ) : (
                       <>
                         <Copy className="h-4 w-4 mr-1.5" />
-                        Copy
+                        {tr("Copy", "复制")}
                       </>
                     )}
                   </Button>
@@ -706,10 +716,10 @@ export default function AgentsPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditTarget(null)}>
-              Cancel
+              {tr("Cancel", "取消")}
             </Button>
             <Button onClick={handleEdit} disabled={!editName.trim() || saving}>
-              {saving ? "Saving..." : "Save"}
+              {saving ? tr("Saving…", "正在保存…") : tr("Save", "保存")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -727,17 +737,20 @@ export default function AgentsPage() {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Agent</AlertDialogTitle>
+            <AlertDialogTitle>{tr("Delete Agent", "删除 Agent")}</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete <strong>{deleteId}</strong>?
-              This action cannot be undone.
+              {tr(
+                "Are you sure you want to delete {{agent}}? This action cannot be undone.",
+                "确定要删除 {{agent}} 吗？此操作无法撤销。",
+                { agent: deleteId || "" },
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           {deleteError && (
             <p className="text-sm text-destructive">{deleteError}</p>
           )}
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogCancel disabled={deleting}>{tr("Cancel", "取消")}</AlertDialogCancel>
             <AlertDialogAction
               onClick={(e) => {
                 e.preventDefault();
@@ -746,7 +759,7 @@ export default function AgentsPage() {
               disabled={deleting}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              {deleting ? "Deleting..." : "Delete"}
+              {deleting ? tr("Deleting…", "正在删除…") : tr("Delete", "删除")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

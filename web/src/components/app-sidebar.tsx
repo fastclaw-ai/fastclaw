@@ -17,7 +17,14 @@ import { NavMain, NavItem } from "@/components/nav-main";
 import { NavSessions, SessionItem } from "@/components/nav-projects";
 import { NavProjectsList } from "@/components/nav-projects-list";
 import { NavUser } from "@/components/nav-user";
-import { AgentSettingsDialog } from "@/components/agent-settings-dialog";
+import {
+  AgentSettingsDialog,
+  type AgentSettingsTab,
+} from "@/components/agent-settings-dialog";
+import {
+  ConsumerChatSidebar,
+  type ConsumerAgentItem,
+} from "@/components/consumer-chat-sidebar";
 import {
   BotIcon,
   BrainIcon,
@@ -42,6 +49,7 @@ import {
   type ProjectEntry,
   type StatusResponse,
 } from "@/lib/api";
+import { useLocale } from "@/components/locale-provider";
 
 // Extract agent ID from pathname like /agents/default/chat/. The second
 // capture is an explicit allow-list of sub-routes so the bare /agents/
@@ -76,12 +84,12 @@ const OVERVIEW_ITEM: NavItem = {
 };
 
 const USER_AGENT_GROUP: NavItem[] = [
-  { title: "Agents", url: "/agents/", icon: BotIcon },
+  { title: "Agents", url: "/agents/?manage=1", icon: BotIcon },
   { title: "Models", url: "/models/", icon: BrainIcon },
 ];
 
 const ADMIN_AGENT_GROUP: NavItem[] = [
-  { title: "Agents", url: "/agents/", icon: BotIcon },
+  { title: "Agents", url: "/agents/?manage=1", icon: BotIcon },
   { title: "Models", url: "/models/", icon: BrainIcon },
   { title: "Skills", url: "/skills/", icon: SparklesIcon },
   { title: "Tools", url: "/tools/", icon: WrenchIcon },
@@ -127,6 +135,7 @@ const AGENT_NAV = (
 };
 
 export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
+  const { t, tr } = useLocale();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const activeAgentId = extractAgentId(pathname);
@@ -135,6 +144,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
   const [status, setStatus] = React.useState<StatusResponse | null>(null);
   const [me, setMe] = React.useState<MeResponse | null>(null);
   const [agents, setAgents] = React.useState<AgentSwitcherItem[]>([]);
+  const [consumerAgents, setConsumerAgents] = React.useState<ConsumerAgentItem[]>([]);
   // role flag per agent the caller can see — owner vs viewer (read-only
   // shared from another user). Drives whether the AGENT_NAV exposes
   // configuration tabs.
@@ -146,6 +156,38 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
   // Settings entry (User tabs only). `settingsUserOnly` picks the mode.
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [settingsUserOnly, setSettingsUserOnly] = React.useState(false);
+  const [settingsDefaultTab, setSettingsDefaultTab] =
+    React.useState<AgentSettingsTab>("profile");
+
+  // ChatScreen owns the sticky header while AppSidebar owns the existing
+  // tabbed settings dialog. A small window event connects the two without
+  // introducing route-level state or putting settings controls back into
+  // the deliberately minimal consumer sidebar footer.
+  React.useEffect(() => {
+    const openAgentSettings = (event: Event) => {
+      const detail = (event as CustomEvent<{
+        agentId?: string;
+        tab?: AgentSettingsTab;
+        userOnly?: boolean;
+      }>).detail;
+      if (detail?.agentId && detail.agentId !== activeAgentId) return;
+      const userOnly = detail?.userOnly === true;
+      setSettingsUserOnly(userOnly);
+      setSettingsDefaultTab(detail?.tab || (userOnly ? "general" : "profile"));
+      setSettingsOpen(true);
+    };
+    const openUserSettings = () => {
+      setSettingsUserOnly(true);
+      setSettingsDefaultTab("general");
+      setSettingsOpen(true);
+    };
+    window.addEventListener("fastclaw:open-agent-settings", openAgentSettings);
+    window.addEventListener("fastclaw:open-user-settings", openUserSettings);
+    return () => {
+      window.removeEventListener("fastclaw:open-agent-settings", openAgentSettings);
+      window.removeEventListener("fastclaw:open-user-settings", openUserSettings);
+    };
+  }, [activeAgentId]);
 
   // Keep status polling so the online dot / admin flag stay fresh.
   React.useEffect(() => {
@@ -156,16 +198,31 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
     return () => clearInterval(iv);
   }, []);
 
-  // Fetch current user once so the footer can show their name + role.
+  // Keep the footer in sync with the current profile. Account settings live
+  // inside a dialog, so saving them does not remount the sidebar.
   React.useEffect(() => {
-    getMe().then(setMe).catch(() => {});
+    const refreshProfile = () => {
+      getMe().then(setMe).catch(() => {});
+    };
+    refreshProfile();
+    window.addEventListener("fastclaw:user-profile-changed", refreshProfile);
+    return () => {
+      window.removeEventListener("fastclaw:user-profile-changed", refreshProfile);
+    };
   }, []);
 
   // Agent list drives the switcher dropdown at the top of the sidebar.
   React.useEffect(() => {
     getAgents()
       .then((list) => {
-        setAgents(list.map((a) => ({ id: a.id, name: a.name, model: a.model })));
+        setAgents(
+          list.map((a) => ({
+            id: a.id,
+            name: a.name,
+            model: a.model,
+            avatarUrl: a.avatarUrl,
+          })),
+        );
         const roles: Record<string, "owner" | "viewer"> = {};
         for (const a of list) {
           roles[a.id] = a.role === "viewer" ? "viewer" : "owner";
@@ -174,6 +231,57 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
       })
       .catch(() => {});
   }, []);
+
+  // The conversation-first sidebar is a Bot switcher, not a list of
+  // database sessions. Enrich each visible Bot with its most recent chat so
+  // the row can show a useful preview and resume where the user left off.
+  React.useEffect(() => {
+    if (agents.length === 0) {
+      setConsumerAgents([]);
+      return;
+    }
+
+    let aborted = false;
+    const refresh = () => {
+      Promise.all(
+        agents.map(async (agent) => {
+          const list = await getChatSessions(agent.id).catch(() => []);
+          const latest = [...list].sort(
+            (a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0),
+          )[0];
+          return {
+            id: agent.id,
+            name: agent.name || agent.id,
+            avatarUrl: agent.avatarUrl,
+            preview: latest?.preview,
+            updatedAt: latest?.updatedAt || latest?.createdAt,
+            sessionId: latest?.id,
+          } satisfies ConsumerAgentItem;
+        }),
+      )
+        .then((items) => {
+          if (!aborted) setConsumerAgents(items);
+        })
+        .catch(() => {
+          if (!aborted) {
+            setConsumerAgents(
+              agents.map((agent) => ({
+                id: agent.id,
+                name: agent.name || agent.id,
+                avatarUrl: agent.avatarUrl,
+              })),
+            );
+          }
+        });
+    };
+
+    refresh();
+    window.addEventListener("fastclaw:sessions-changed", refresh);
+    return () => {
+      aborted = true;
+      window.removeEventListener("fastclaw:sessions-changed", refresh);
+    };
+  }, [agents]);
 
   // When the active agent isn't in the caller's owned list — e.g. a
   // super_admin chatting with another user's agent — fetch its name
@@ -190,7 +298,10 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
         setAgents((prev) =>
           prev.some((x) => x.id === a.id)
             ? prev
-            : [...prev, { id: a.id, name: a.name, model: a.model }],
+            : [
+                { id: a.id, name: a.name, model: a.model, avatarUrl: a.avatarUrl },
+                ...prev,
+              ],
         );
         if (a.role === "viewer" || a.role === "owner") {
           setAgentRoles((prev) => ({ ...prev, [a.id]: a.role as "owner" | "viewer" }));
@@ -221,9 +332,11 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
             list.map((s) => ({
               id: s.id,
               title: s.title || s.preview || s.id,
+              preview: s.preview,
               thumbnailUrl: s.thumbnailUrl,
               channel: s.channel,
               projectId: s.projectId,
+              updatedAt: s.updatedAt,
             })),
           ),
         )
@@ -267,6 +380,52 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
   // been provisioned and jump into chat — it just hides the Create
   // button. So we keep the Agents nav entry visible.
   const quotaLocked = me?.user?.agentQuota === 0;
+  const localizeNavItems = React.useCallback(
+    (items: NavItem[]) =>
+      items.map((item) => ({
+        ...item,
+        title: tr(
+          item.title,
+          ({
+            Overview: "概览",
+            Agents: "Agent",
+            Models: "模型",
+            Skills: "技能",
+            Tools: "工具",
+            Users: "用户",
+            Chats: "聊天记录",
+            "Token Usage": "Token 用量",
+            "API Keys": "API 密钥",
+            "New chat": "新建对话",
+          } as Record<string, string>)[item.title] || item.title,
+        ),
+      })),
+    [tr],
+  );
+
+  const isConsumerChat =
+    !!activeAgentId &&
+    /^\/agents\/[^/]+\/(chat|project)(?:\/|$)/.test(pathname);
+
+  if (isConsumerChat && activeAgentId) {
+    return (
+      <>
+        <ConsumerChatSidebar
+          activeAgentId={activeAgentId}
+          agents={consumerAgents}
+          me={me}
+        />
+        <AgentSettingsDialog
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+          defaultTab={settingsDefaultTab}
+          role={agentRoles[activeAgentId] === "viewer" ? "viewer" : "owner"}
+          userOnly={settingsUserOnly}
+          isAdmin={isAdmin}
+        />
+      </>
+    );
+  }
 
   return (
     <Sidebar collapsible="icon" {...props}>
@@ -283,19 +442,19 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
       <SidebarContent>
         {activeAgentId ? (
           <NavMain
-            label="Agent"
-            items={AGENT_NAV(activeAgentId, pathname, hasOpenSession)}
+            label={t("common.agent")}
+            items={localizeNavItems(AGENT_NAV(activeAgentId, pathname, hasOpenSession))}
           />
         ) : (
           <>
-            <NavMain items={[OVERVIEW_ITEM]} />
+            <NavMain items={localizeNavItems([OVERVIEW_ITEM])} />
             <NavMain
-              label="Agent"
-              items={isAdmin ? ADMIN_AGENT_GROUP : USER_AGENT_GROUP}
+              label={t("common.agent")}
+              items={localizeNavItems(isAdmin ? ADMIN_AGENT_GROUP : USER_AGENT_GROUP)}
             />
             <NavMain
-              label="User"
-              items={isAdmin ? ADMIN_USER_GROUP : USER_USER_GROUP}
+              label={t("common.user")}
+              items={localizeNavItems(isAdmin ? ADMIN_USER_GROUP : USER_USER_GROUP)}
             />
           </>
         )}
@@ -319,14 +478,15 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton
-              tooltip="Settings"
+              tooltip={t("common.settings")}
               onClick={() => {
                 setSettingsUserOnly(!activeAgentId);
+                setSettingsDefaultTab(activeAgentId ? "profile" : "general");
                 setSettingsOpen(true);
               }}
             >
               <SettingsIcon />
-              <span>Settings</span>
+              <span>{t("common.settings")}</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
@@ -334,7 +494,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
           name={
             me?.user?.displayName ||
             me?.user?.username ||
-            (isAdmin ? "Admin" : "User")
+            t("common.user")
           }
           subtitle={me?.user?.role || (isAdmin ? "super_admin" : "user")}
         />
@@ -343,6 +503,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
       <AgentSettingsDialog
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
+        defaultTab={settingsDefaultTab}
         userOnly={settingsUserOnly}
         role={
           activeAgentId && agentRoles[activeAgentId] === "viewer"
