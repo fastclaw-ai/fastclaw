@@ -1681,7 +1681,21 @@ func (s *Server) handleChatHistory(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, http.StatusNotFound, map[string]any{"error": "agent not found"})
 		return
 	}
-	resp := map[string]any{"history": ag.WebChatHistory(sessionID)}
+	history := ag.WebChatHistory(sessionID)
+	historyStart := 0
+	hasMoreHistory := false
+	if limit, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && limit > 0 {
+		before := len(history)
+		if value, parseErr := strconv.Atoi(r.URL.Query().Get("before")); parseErr == nil {
+			before = value
+		}
+		history, historyStart, hasMoreHistory = paginateChatHistory(history, limit, before)
+	}
+	resp := map[string]any{
+		"history":        history,
+		"historyStart":   historyStart,
+		"hasMoreHistory": hasMoreHistory,
+	}
 	// latestEventSeq is the resume cursor for /api/chat/subscribe — the
 	// client opens that endpoint with `since=<latestEventSeq>` so a
 	// fresh page load picks up only deltas it hasn't already rendered.
@@ -1697,6 +1711,30 @@ func (s *Server) handleChatHistory(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	jsonResponse(w, http.StatusOK, resp)
+}
+
+// paginateChatHistory returns one ascending page ending at before. The start
+// is aligned to a user message so an assistant tool-call followed by its tool
+// results is never split across two browser requests.
+func paginateChatHistory(history []map[string]any, limit, before int) ([]map[string]any, int, bool) {
+	limit = max(1, min(limit, 100))
+	before = max(0, min(before, len(history)))
+	start := max(0, before-limit)
+	aligned := false
+	for index := start; index < before; index++ {
+		role, _ := history[index]["role"].(string)
+		if role == "user" {
+			start = index
+			aligned = true
+			break
+		}
+	}
+	for !aligned && start > 0 {
+		start--
+		role, _ := history[start]["role"].(string)
+		aligned = role == "user"
+	}
+	return history[start:before], start, start > 0
 }
 
 func (s *Server) handleChatSessions(w http.ResponseWriter, r *http.Request) {

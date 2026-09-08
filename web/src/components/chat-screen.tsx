@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback, useMemo } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo, useLayoutEffect } from "react";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { useAgentIdFromURL } from "@/hooks/use-agent-id";
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { createProject, deleteChatSession, fileUrl, getAgent, getAgentKnowledgeFile, getChangedFiles, getChatHistoryWithCursor, getChatSessions, getChatTodo, getMe, getScopePreview, getScopePreviewLogs, getSessionHistory, listAgentFiles, listProjects, renameChatSession, restoreSessionHistory, revealAgentWorkspace, sendChatStream, steerChat, updateAgent, updateProject, uploadAgentFiles, getSkills, type AgentDetail, type ChatHistoryMessage, type ChatStreamEvent, type KnowledgeSource, type ProjectEntry, type ScopePreview, type SkillInfo, type TodoItem, type ToolResultMetadata, type WorkspaceFile, type WorkspaceHistoryEntry } from "@/lib/api";
-import { ArrowLeft, ArrowUp, BookOpen, Brain, Check, ChevronDown, ChevronRight, ChevronsRight, Clock, Code2, Copy, Download, Eye, ExternalLink, File, FileCode, FileText, Film, Folder, FolderOpen, FolderPlus, FolderSearch, Globe2, Image as ImageIcon, Link2, ListChecks, LockKeyhole, MoreHorizontal, Music, PanelLeftClose, PanelLeftOpen, PanelRight, Paperclip, Pencil, Plus, Puzzle, Radio, RefreshCw, RotateCcw, Settings, Share2, ShieldCheck, SlidersHorizontal, Sparkles, Square, SquarePen, Terminal, Trash2, Wrench, X } from "lucide-react";
+import { ArrowLeft, ArrowUp, BookOpen, Brain, Check, ChevronDown, ChevronRight, ChevronUp, ChevronsRight, Clock, Code2, Copy, Download, Eye, ExternalLink, File, FileCode, FileText, Film, Folder, FolderOpen, FolderPlus, FolderSearch, Globe2, Image as ImageIcon, Link2, ListChecks, LockKeyhole, MoreHorizontal, Music, PanelLeftClose, PanelLeftOpen, PanelRight, Paperclip, Pencil, Plus, Puzzle, Radio, RefreshCw, RotateCcw, Settings, Share2, ShieldCheck, SlidersHorizontal, Sparkles, Square, SquarePen, Terminal, Trash2, Wrench, X } from "lucide-react";
 import Link from "next/link";
 import { ChatMarkdown } from "@/components/chat-markdown";
 import type { AgentSettingsTab } from "@/components/agent-settings-dialog";
@@ -188,6 +188,7 @@ interface ChatMessage {
 // outbound text on this marker into separate platform messages; the
 // web UI renders one bubble per split chunk so the experience matches.
 const SPLIT_MARKER = "<|split|>";
+const CHAT_HISTORY_PAGE_SIZE = 20;
 
 // splitOnMarker breaks `s` on SPLIT_MARKER, trims each chunk, and
 // drops the empty ones. Used at render time so a streamed assistant
@@ -324,8 +325,9 @@ function namePastedImage(file: File, pasteId: number, index: number): File {
 }
 
 /** Convert raw history messages into UI ChatMessages, grouping tool calls with results. */
-function buildChatMessages(history: ChatHistoryMessage[]): ChatMessage[] {
+function buildChatMessages(history: ChatHistoryMessage[], historyOffset = 0): ChatMessage[] {
   const msgs: ChatMessage[] = [];
+  const historyId = (index: number) => historyOffset + index;
   let i = 0;
   while (i < history.length) {
     const h = history[i];
@@ -351,7 +353,7 @@ function buildChatMessages(history: ChatHistoryMessage[]): ChatMessage[] {
             channel: h.senderChannel,
           }
         : undefined;
-      msgs.push({ id: `h-${i}`, role: "user", content: h.content || "", timestamp: 0, attachments, sender });
+      msgs.push({ id: `h-${historyId(i)}`, role: "user", content: h.content || "", timestamp: 0, attachments, sender });
       i++;
     } else if (h.role === "assistant" && h.toolCalls && h.toolCalls.length > 0) {
       // Group: assistant tool_calls + following tool results + final assistant content
@@ -390,10 +392,10 @@ function buildChatMessages(history: ChatHistoryMessage[]): ChatMessage[] {
       // block; split, the model's actual answer stands as a first-class
       // reply.
       if (h.content) {
-        msgs.push({ id: `h-pre-${i}`, role: "agent", content: h.content, timestamp: 0, metadata: h.metadata });
+        msgs.push({ id: `h-pre-${historyId(i)}`, role: "agent", content: h.content, timestamp: 0, metadata: h.metadata });
       }
       msgs.push({
-        id: `h-tool-${i}`,
+        id: `h-tool-${historyId(i)}`,
         role: "tool-group",
         content: "",
         timestamp: 0,
@@ -411,11 +413,11 @@ function buildChatMessages(history: ChatHistoryMessage[]): ChatMessage[] {
         history[i].content &&
         !(history[i].toolCalls && history[i].toolCalls!.length > 0)
       ) {
-        msgs.push({ id: `h-${i}`, role: "agent", content: history[i].content || "", timestamp: 0, metadata: history[i].metadata });
+        msgs.push({ id: `h-${historyId(i)}`, role: "agent", content: history[i].content || "", timestamp: 0, metadata: history[i].metadata });
         i++;
       }
     } else if (h.role === "assistant") {
-      msgs.push({ id: `h-${i}`, role: "agent", content: h.content || "", timestamp: 0, metadata: h.metadata });
+      msgs.push({ id: `h-${historyId(i)}`, role: "agent", content: h.content || "", timestamp: 0, metadata: h.metadata });
       i++;
     } else {
       i++; // skip unexpected
@@ -699,13 +701,24 @@ export function ChatScreen() {
       for (const url of attachmentPreviews) if (url) URL.revokeObjectURL(url);
     };
   }, [attachmentPreviews]);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesScrollRef = useRef<HTMLDivElement>(null);
+  const messagesContentRef = useRef<HTMLDivElement>(null);
   // Auto-scroll only when the user is already pinned to the bottom.
   // Toggled false the moment they scroll up so streaming agent output
   // can't yank them back down mid-read, then flipped back to true once
   // they return to the bottom (or hit the "scroll to latest" button).
   const stickToBottomRef = useRef(true);
+  const historyStartRef = useRef(0);
+  const historyLoadingOlderRef = useRef(false);
+  const activeHistoryScopeRef = useRef({ agentId: selectedAgent, sessionId });
+  const pendingInitialScrollRef = useRef("");
+  const pendingPrependScrollRef = useRef<{ height: number; top: number } | null>(null);
+  const [hasOlderHistory, setHasOlderHistory] = useState(false);
+  const [messageScrollState, setMessageScrollState] = useState({
+    overflow: false,
+    canScrollUp: false,
+    canScrollDown: false,
+  });
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pasteIdRef = useRef(0);
@@ -1130,11 +1143,13 @@ export function ChatScreen() {
             // message to session_messages.
             if (transientBubbleIdRef.current) {
               transientBubbleIdRef.current = null;
-              getChatHistoryWithCursor(selectedAgent, sessionId)
-                .then(({ history, latestEventSeq }) => {
+              getChatHistoryWithCursor(selectedAgent, sessionId, { limit: CHAT_HISTORY_PAGE_SIZE })
+                .then(({ history, latestEventSeq, historyStart, hasMoreHistory }) => {
                   if (latestEventSeq > maxSeqRef.current) maxSeqRef.current = latestEventSeq;
                   subscribeSinceRef.current = latestEventSeq;
-                  setMessages(buildChatMessages(history));
+                  historyStartRef.current = historyStart;
+                  setHasOlderHistory(hasMoreHistory);
+                  setMessages(buildChatMessages(history, historyStart));
                 })
                 .catch(() => {});
             }
@@ -1358,6 +1373,13 @@ export function ChatScreen() {
   useEffect(() => {
     if (!selectedAgent || !sessionId) return;
     const sessionHasActivePost = inFlightSendSessionRef.current === sessionId;
+    activeHistoryScopeRef.current = { agentId: selectedAgent, sessionId };
+    historyStartRef.current = 0;
+    historyLoadingOlderRef.current = false;
+    pendingPrependScrollRef.current = null;
+    pendingInitialScrollRef.current = sessionId;
+    stickToBottomRef.current = true;
+    setHasOlderHistory(false);
     // Reset dedup state when session changes — events from a previous
     // session must not bias the new session's seq filter, and any
     // transient placeholder is no longer relevant.
@@ -1378,13 +1400,15 @@ export function ChatScreen() {
     // empty-session case.
     refreshTodoForScope(selectedAgent, sessionId);
     let aborted = false;
-    getChatHistoryWithCursor(selectedAgent, sessionId)
-      .then(async ({ history, latestEventSeq }) => {
+    getChatHistoryWithCursor(selectedAgent, sessionId, { limit: CHAT_HISTORY_PAGE_SIZE })
+      .then(async ({ history, latestEventSeq, historyStart, hasMoreHistory }) => {
         if (aborted) return;
         if (!sessionHasActivePost && latestEventSeq > maxSeqRef.current) {
           maxSeqRef.current = latestEventSeq;
         }
         subscribeSinceRef.current = latestEventSeq;
+        historyStartRef.current = historyStart;
+        setHasOlderHistory(hasMoreHistory);
         if (!history || history.length === 0) {
           if (!sessionHasActivePost) {
             setMessages([]);
@@ -1392,7 +1416,7 @@ export function ChatScreen() {
           setLoadedSessionId(sessionId);
           return;
         }
-        const built = buildChatMessages(history);
+        const built = buildChatMessages(history, historyStart);
         try {
           // listAgentFiles(agentId, sessionId) lets the backend pick
           // the right prefix — projects/<pid>/ for project chats,
@@ -1419,6 +1443,8 @@ export function ChatScreen() {
       })
       .catch(() => {
         if (aborted) return;
+        historyStartRef.current = 0;
+        setHasOlderHistory(false);
         if (!sessionHasActivePost) {
           setMessages([]);
         }
@@ -1433,25 +1459,139 @@ export function ChatScreen() {
     };
   }, [selectedAgent, sessionId, refreshTodoForScope, resetTodoScope]);
 
-  useEffect(() => {
-    if (!stickToBottomRef.current) return;
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  const updateMessageScrollState = useCallback(() => {
+    const el = messagesScrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const next = {
+      overflow: el.scrollHeight > el.clientHeight + 1 || hasOlderHistory,
+      canScrollUp: el.scrollTop > 8 || hasOlderHistory,
+      canScrollDown: distanceFromBottom > 8,
+    };
+    setMessageScrollState((current) =>
+      current.overflow === next.overflow
+      && current.canScrollUp === next.canScrollUp
+      && current.canScrollDown === next.canScrollDown
+        ? current
+        : next,
+    );
+  }, [hasOlderHistory]);
 
-  // Watch the scroll container so we know whether to keep auto-scrolling
-  // as new content arrives. 64px slack absorbs streaming jitter — without
-  // it, a single token append can push the bottom past the viewport and
-  // flip us off "sticky" for one tick before the next auto-scroll fires.
+  const loadOlderHistory = useCallback(async () => {
+    if (
+      !selectedAgent
+      || !sessionId
+      || !hasOlderHistory
+      || historyStartRef.current <= 0
+      || historyLoadingOlderRef.current
+    ) {
+      return;
+    }
+    historyLoadingOlderRef.current = true;
+    const requestScope = { agentId: selectedAgent, sessionId };
+    try {
+      const result = await getChatHistoryWithCursor(selectedAgent, sessionId, {
+        limit: CHAT_HISTORY_PAGE_SIZE,
+        before: historyStartRef.current,
+      });
+      const activeScope = activeHistoryScopeRef.current;
+      if (
+        activeScope.agentId !== requestScope.agentId
+        || activeScope.sessionId !== requestScope.sessionId
+      ) {
+        return;
+      }
+      const olderMessages = buildChatMessages(result.history, result.historyStart);
+      historyStartRef.current = result.historyStart;
+      setHasOlderHistory(result.hasMoreHistory);
+      if (olderMessages.length === 0) return;
+
+      const el = messagesScrollRef.current;
+      if (el) {
+        pendingPrependScrollRef.current = {
+          height: el.scrollHeight,
+          top: el.scrollTop,
+        };
+      }
+      stickToBottomRef.current = false;
+      setMessages((current) => {
+        const existingIds = new Set(current.map((message) => message.id));
+        return [
+          ...olderMessages.filter((message) => !existingIds.has(message.id)),
+          ...current,
+        ];
+      });
+    } finally {
+      historyLoadingOlderRef.current = false;
+    }
+  }, [hasOlderHistory, selectedAgent, sessionId]);
+
+  // Perform all automatic positioning before paint. Entering a long
+  // conversation therefore opens on the newest message immediately instead
+  // of visibly animating the scrollbar from the top. Prepending an older page
+  // preserves the message that was under the reader's eyes.
+  useLayoutEffect(() => {
+    const el = messagesScrollRef.current;
+    if (!el) return;
+
+    const restore = pendingPrependScrollRef.current;
+    if (restore) {
+      pendingPrependScrollRef.current = null;
+      el.scrollTop = restore.top + (el.scrollHeight - restore.height);
+    } else if (
+      pendingInitialScrollRef.current === sessionId
+      && loadedSessionId === sessionId
+    ) {
+      pendingInitialScrollRef.current = "";
+      stickToBottomRef.current = true;
+      el.scrollTop = el.scrollHeight;
+    } else if (stickToBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
+    }
+    updateMessageScrollState();
+  }, [loadedSessionId, messages, sessionId, updateMessageScrollState]);
+
+  // Keep the controls accurate while the user scrolls and as Markdown,
+  // images, or tool panels change the content height after rendering.
   useEffect(() => {
     const el = messagesScrollRef.current;
+    const content = messagesContentRef.current;
     if (!el) return;
     const onScroll = () => {
       const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
       stickToBottomRef.current = distance <= 64;
+      updateMessageScrollState();
+      if (el.scrollTop <= 24 && hasOlderHistory) {
+        void loadOlderHistory();
+      }
     };
+    const resizeObserver = new ResizeObserver(() => {
+      if (stickToBottomRef.current && !pendingPrependScrollRef.current) {
+        el.scrollTop = el.scrollHeight;
+      }
+      updateMessageScrollState();
+    });
     el.addEventListener("scroll", onScroll, { passive: true });
-    return () => el.removeEventListener("scroll", onScroll);
-  }, []);
+    if (content) resizeObserver.observe(content);
+    updateMessageScrollState();
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      resizeObserver.disconnect();
+    };
+  }, [hasOlderHistory, loadOlderHistory, updateMessageScrollState]);
+
+  const scrollMessagesByPage = useCallback((direction: -1 | 1) => {
+    const el = messagesScrollRef.current;
+    if (!el) return;
+    if (direction < 0 && el.scrollTop <= 8 && hasOlderHistory) {
+      void loadOlderHistory();
+      return;
+    }
+    el.scrollBy({
+      top: direction * Math.max(240, el.clientHeight * 0.72),
+      behavior: "smooth",
+    });
+  }, [hasOlderHistory, loadOlderHistory]);
 
   useEffect(() => {
     const el = textareaRef.current;
@@ -2242,7 +2382,7 @@ export function ChatScreen() {
     <div className="flex h-[calc(100vh-3.5rem)] flex-row bg-background">
       <div
         className={
-          "flex flex-1 min-w-0 flex-col xl:min-w-[520px]" +
+          "relative flex flex-1 min-w-0 flex-col xl:min-w-[520px]" +
           // pb-14 (3.5rem) matches the header height we already subtracted
           // from the parent's h-[calc(100vh-3.5rem)]. Without it `justify-
           // center` centers content inside the post-header area, which
@@ -2267,6 +2407,7 @@ export function ChatScreen() {
           }
         >
           <div
+            ref={messagesContentRef}
             className={`mx-auto w-full max-w-5xl ${
               isConversationLoading ? "flex min-h-full items-center justify-center" : "space-y-3"
             }`}
@@ -2675,9 +2816,33 @@ export function ChatScreen() {
               </div>
             )}
 
-            <div ref={messagesEndRef} />
           </div>
         </div>
+
+        {!isConversationLoading && !showEmptyHero && messageScrollState.overflow && (
+          <div className="pointer-events-none absolute right-3 top-1/2 z-20 flex -translate-y-1/2 flex-col gap-1.5">
+            <button
+              type="button"
+              onClick={() => scrollMessagesByPage(-1)}
+              disabled={!messageScrollState.canScrollUp}
+              className="pointer-events-auto flex size-9 items-center justify-center rounded-xl border border-black/[0.08] bg-background/95 text-muted-foreground shadow-[0_6px_20px_rgba(0,0,0,0.12)] backdrop-blur transition hover:bg-background hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-35 dark:border-white/[0.1]"
+              aria-label={tr("Scroll up", "向上滚动")}
+              title={tr("Scroll up", "向上滚动")}
+            >
+              <ChevronUp className="size-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => scrollMessagesByPage(1)}
+              disabled={!messageScrollState.canScrollDown}
+              className="pointer-events-auto flex size-9 items-center justify-center rounded-xl border border-black/[0.08] bg-background/95 text-muted-foreground shadow-[0_6px_20px_rgba(0,0,0,0.12)] backdrop-blur transition hover:bg-background hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-35 dark:border-white/[0.1]"
+              aria-label={tr("Scroll down", "向下滚动")}
+              title={tr("Scroll down", "向下滚动")}
+            >
+              <ChevronDown className="size-4" />
+            </button>
+          </div>
+        )}
 
         {/* Full-width conversation composer, matching the compact Bot layout. */}
         <div

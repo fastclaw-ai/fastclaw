@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { ChevronsLeft, ChevronsRight, ImagePlus, Plus, Search } from "lucide-react";
+import { ChevronDown, ChevronsLeft, ChevronsRight, ImagePlus, Plus, Search } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -30,14 +30,50 @@ import { BotAvatar } from "@/components/bot-avatar";
 import { NavUser } from "@/components/nav-user";
 import { useLocale, type Locale } from "@/components/locale-provider";
 import { apiFetch, createAgent, type MeResponse } from "@/lib/api";
+import { rememberAgentAccess } from "@/lib/agent-access-cache";
 
 export interface ConsumerAgentItem {
   id: string;
   name: string;
+  description?: string;
   preview?: string;
   avatarUrl?: string;
   sessionId?: string;
   updatedAt?: number;
+}
+
+const AGENT_PAGE_SIZE = 20;
+const INLINE_MARKDOWN_TOKEN = /(\*\*[^*\n]+?\*\*|__[^_\n]+?__|~~[^~\n]+?~~|`[^`\n]+?`|\[[^\]\n]+?\]\([^)]+\)|\*[^*\n]+?\*|_[^_\n]+?_)/g;
+
+// Sidebar summaries are deliberately one line, so a full block Markdown
+// renderer would introduce invalid nested controls and list/table layout.
+// Render the inline subset descriptions and message previews actually use,
+// preserving emphasis while keeping links non-interactive inside the row.
+function renderInlineMarkdown(text: string, keyPrefix = "md"): React.ReactNode[] {
+  const normalized = text.replace(/\s*\n+\s*/g, " ").trim();
+  return normalized
+    .split(INLINE_MARKDOWN_TOKEN)
+    .filter(Boolean)
+    .map((part, index) => {
+      const key = `${keyPrefix}-${index}`;
+      if ((part.startsWith("**") && part.endsWith("**")) || (part.startsWith("__") && part.endsWith("__"))) {
+        return <strong key={key}>{renderInlineMarkdown(part.slice(2, -2), key)}</strong>;
+      }
+      if (part.startsWith("~~") && part.endsWith("~~")) {
+        return <del key={key}>{renderInlineMarkdown(part.slice(2, -2), key)}</del>;
+      }
+      if (part.startsWith("`") && part.endsWith("`")) {
+        return <code key={key} className="rounded bg-black/[0.05] px-0.5 font-mono text-[0.92em] dark:bg-white/[0.08]">{part.slice(1, -1)}</code>;
+      }
+      const link = /^\[([^\]]+)\]\([^)]+\)$/.exec(part);
+      if (link) {
+        return <span key={key} className="underline decoration-current/35 underline-offset-2">{renderInlineMarkdown(link[1], key)}</span>;
+      }
+      if ((part.startsWith("*") && part.endsWith("*")) || (part.startsWith("_") && part.endsWith("_"))) {
+        return <em key={key}>{renderInlineMarkdown(part.slice(1, -1), key)}</em>;
+      }
+      return <React.Fragment key={key}>{part}</React.Fragment>;
+    });
 }
 
 function relativeSessionTime(updatedAt: number | undefined, locale: Locale) {
@@ -78,19 +114,34 @@ export function ConsumerChatSidebar({
   const { state: sidebarState, toggleSidebar } = useSidebar();
   const { locale, t, tr } = useLocale();
   const [query, setQuery] = React.useState("");
+  const [visibleCount, setVisibleCount] = React.useState(AGENT_PAGE_SIZE);
   const [createOpen, setCreateOpen] = React.useState(false);
 
   const filtered = React.useMemo(() => {
     const q = query.trim().toLocaleLowerCase();
     if (!q) return agents;
     return agents.filter((agent) =>
-      `${agent.name} ${agent.preview || ""}`.toLocaleLowerCase().includes(q),
+      `${agent.name} ${agent.description || ""} ${agent.preview || ""}`.toLocaleLowerCase().includes(q),
     );
   }, [query, agents]);
+  const visibleAgents = React.useMemo(
+    () => filtered.slice(0, visibleCount),
+    [filtered, visibleCount],
+  );
+  const hasMoreAgents = visibleAgents.length < filtered.length;
 
   const openAgent = (agent: ConsumerAgentItem) => {
     const base = `/agents/${encodeURIComponent(agent.id)}/chat/`;
-    router.push(agent.sessionId ? `${base}${encodeURIComponent(agent.sessionId)}/` : base);
+    const target = agent.sessionId ? `${base}${encodeURIComponent(agent.sessionId)}/` : base;
+    // This row came from the caller's authenticated agent list, so the access
+    // gate can safely keep the current shell visible during the route swap.
+    rememberAgentAccess(agent.id);
+    // Dynamic agent ids are served through the static-export fallback. A
+    // router navigation can remount that fallback and briefly replace the
+    // persistent Bot list with its loading state. Next patches pushState into
+    // its reactive router, so this swaps only the active conversation while
+    // the left list stays mounted and visually stable.
+    window.history.pushState(null, "", target);
   };
 
   return (
@@ -143,7 +194,10 @@ export function ConsumerChatSidebar({
             <Search className="pointer-events-none absolute left-2.5 top-1/2 size-[15px] -translate-y-1/2 text-muted-foreground" />
             <input
               value={query}
-              onChange={(event) => setQuery(event.target.value)}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setVisibleCount(AGENT_PAGE_SIZE);
+              }}
               placeholder={t("sidebar.searchBots")}
               aria-label={t("sidebar.searchBots")}
               className="h-8 w-full rounded-md border border-black/7 bg-black/[0.035] pl-8 pr-2.5 text-sm outline-none transition focus:border-black/15 focus:bg-white focus:ring-2 focus:ring-black/5 dark:border-white/8 dark:bg-white/[0.055] dark:focus:border-white/15 dark:focus:bg-white/[0.08]"
@@ -184,8 +238,9 @@ export function ConsumerChatSidebar({
               </span>
             </>
           )}
-          {filtered.map((agent) => {
+          {visibleAgents.map((agent) => {
             const active = activeAgentId === agent.id;
+            const summary = agent.preview || agent.description || t("sidebar.greeting", { name: agent.name });
             return (
               <SidebarMenuItem key={agent.id}>
                 <SidebarMenuButton
@@ -210,13 +265,27 @@ export function ConsumerChatSidebar({
                       </span>
                     </span>
                     <span className="truncate text-[13px] font-normal leading-5 text-muted-foreground">
-                      {agent.preview || t("sidebar.greeting", { name: agent.name })}
+                      {renderInlineMarkdown(summary)}
                     </span>
                   </span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             );
           })}
+          {hasMoreAgents && (
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                onClick={() => setVisibleCount((count) => count + AGENT_PAGE_SIZE)}
+                tooltip={t("sidebar.loadMore")}
+                className="h-9 justify-center gap-1.5 rounded-lg text-xs font-medium text-muted-foreground hover:bg-black/[0.05] hover:text-foreground group-data-[collapsible=icon]:size-10! group-data-[collapsible=icon]:rounded-xl group-data-[collapsible=icon]:p-0! dark:hover:bg-white/[0.07]"
+              >
+                <ChevronDown className="size-3.5 shrink-0" />
+                <span className="group-data-[collapsible=icon]:hidden">
+                  {t("sidebar.loadMore")}
+                </span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          )}
         </SidebarMenu>
 
         <button

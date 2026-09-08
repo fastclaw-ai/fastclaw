@@ -5,6 +5,10 @@ import { usePathname } from "next/navigation";
 import { Bot } from "lucide-react";
 import { getAgentStatus } from "@/lib/api";
 import { useLocale } from "@/components/locale-provider";
+import {
+  hasRememberedAgentAccess,
+  rememberAgentAccess,
+} from "@/lib/agent-access-cache";
 
 // Pull the agent id straight from the URL. Under output:'export' the
 // HTML served for /agents/agt_xxx/chat/ is actually the prebuilt
@@ -42,30 +46,33 @@ export default function AgentAccessGate({
   const { tr } = useLocale();
   const pathname = usePathname();
   const agentId = agentIdFromPath(pathname);
-  const [state, setState] = useState<"checking" | "ok" | "denied">("checking");
+  const [results, setResults] = useState<Partial<Record<string, "ok" | "denied">>>({});
+  const state: "checking" | "ok" | "denied" =
+    !agentId || agentId === "default" || hasRememberedAgentAccess(agentId)
+      ? "ok"
+      : results[agentId] || "checking";
 
   useEffect(() => {
     // The "default" id is the prebuilt static-export placeholder, not
     // a real agent — skip the probe and let children render. The real
     // /agents/default/* route is super_admin's local-mode dashboard
     // which has its own server-side gating already.
-    if (!agentId || agentId === "default") {
-      setState("ok");
-      return;
-    }
+    if (!agentId || agentId === "default" || hasRememberedAgentAccess(agentId)) return;
     let aborted = false;
-    setState("checking");
     getAgentStatus(agentId)
       .then(({ status, agent }) => {
         if (aborted) return;
         if (status === 200 && agent) {
-          setState("ok");
+          rememberAgentAccess(agentId);
+          setResults((current) => ({ ...current, [agentId]: "ok" }));
           return;
         }
-        setState("denied");
+        setResults((current) => ({ ...current, [agentId]: "denied" }));
       })
       .catch(() => {
-        if (!aborted) setState("denied");
+        if (!aborted) {
+          setResults((current) => ({ ...current, [agentId]: "denied" }));
+        }
       });
     return () => {
       aborted = true;

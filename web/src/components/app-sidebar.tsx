@@ -50,6 +50,7 @@ import {
   type StatusResponse,
 } from "@/lib/api";
 import { useLocale } from "@/components/locale-provider";
+import { rememberAgentAccess } from "@/lib/agent-access-cache";
 
 // Extract agent ID from pathname like /agents/default/chat/. The second
 // capture is an explicit allow-list of sub-routes so the bare /agents/
@@ -216,11 +217,13 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
   React.useEffect(() => {
     getAgents()
       .then((list) => {
+        rememberAgentAccess(list.map((agent) => agent.id));
         setAgents(
           list.map((a) => ({
             id: a.id,
             name: a.name,
             model: a.model,
+            description: a.description,
             avatarUrl: a.avatarUrl,
           })),
         );
@@ -256,6 +259,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
           return {
             id: agent.id,
             name: agent.name || agent.id,
+            description: agent.description,
             avatarUrl: agent.avatarUrl,
             preview: latest?.lastMessage || latest?.preview,
             updatedAt: latest?.lastMessageAt || latest?.updatedAt || latest?.createdAt,
@@ -279,6 +283,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
               agents.map((agent) => ({
                 id: agent.id,
                 name: agent.name || agent.id,
+                description: agent.description,
                 avatarUrl: agent.avatarUrl,
               })),
             );
@@ -307,11 +312,12 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
     getAgent(activeAgentId)
       .then((a) => {
         if (aborted || !a) return;
+        rememberAgentAccess(a.id);
         setAgents((prev) =>
           prev.some((x) => x.id === a.id)
             ? prev
             : [
-                { id: a.id, name: a.name, model: a.model, avatarUrl: a.avatarUrl },
+                { id: a.id, name: a.name, model: a.model, description: a.description, avatarUrl: a.avatarUrl },
                 ...prev,
               ],
         );

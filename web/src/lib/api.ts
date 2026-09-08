@@ -896,18 +896,31 @@ export async function getChatHistory(agentId: string, sessionId: string): Promis
 export interface ChatHistoryResult {
   history: ChatHistoryMessage[];
   latestEventSeq: number; // -1 when there's nothing logged yet
+  historyStart: number;
+  hasMoreHistory: boolean;
 }
 
-export async function getChatHistoryWithCursor(agentId: string, sessionId: string): Promise<ChatHistoryResult> {
-  const res = await apiFetch(`/api/chat/history?agentId=${encodeURIComponent(agentId)}&sessionId=${encodeURIComponent(sessionId)}`);
-  if (!res.ok) return { history: [], latestEventSeq: -1 };
+export async function getChatHistoryWithCursor(
+  agentId: string,
+  sessionId: string,
+  options: { limit?: number; before?: number } = {},
+): Promise<ChatHistoryResult> {
+  const params = new URLSearchParams({ agentId, sessionId });
+  if (options.limit && options.limit > 0) params.set("limit", String(options.limit));
+  if (typeof options.before === "number") params.set("before", String(options.before));
+  const res = await apiFetch(`/api/chat/history?${params.toString()}`);
+  if (!res.ok) {
+    return { history: [], latestEventSeq: -1, historyStart: 0, hasMoreHistory: false };
+  }
   const data = await res.json();
   const history: ChatHistoryMessage[] = Array.isArray(data?.history)
     ? data.history
     : Array.isArray(data) ? data : [];
   const seqRaw = data?.latestEventSeq;
   const latestEventSeq = typeof seqRaw === "number" ? seqRaw : -1;
-  return { history, latestEventSeq };
+  const historyStart = typeof data?.historyStart === "number" ? data.historyStart : 0;
+  const hasMoreHistory = data?.hasMoreHistory === true;
+  return { history, latestEventSeq, historyStart, hasMoreHistory };
 }
 
 export interface ChatSessionEntry {
