@@ -2158,7 +2158,20 @@ func (a *Agent) runToolsWithProgress(ctx context.Context, toolCalls []provider.T
 }
 
 // HandleMessage processes an inbound message through the ReAct loop.
-func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) string {
+func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) (reply string) {
+	// Panic recovery: an unexpected nil pointer or similar fault in the
+	// ReAct loop must not tear down the entire process. The turn is
+	// reported as an error so the UI shows a message instead of hanging.
+	defer func() {
+		if r := recover(); r != nil {
+			errMsg := fmt.Sprintf("internal error: %v", r)
+			slog.Error("HandleMessage panic recovered", "agent", a.name, "panic", r)
+			emitEvent(ctx, ChatEvent{Type: "error", Data: map[string]any{"message": errMsg}})
+			emitEvent(ctx, ChatEvent{Type: "done"})
+			reply = errMsg
+		}
+	}()
+
 	// Check for slash commands first. Empty reply means "handled but
 	// intentionally silent" — /goal foo and /goal resume both fall
 	// through to a streaming continuation that IS the response, so
@@ -2682,7 +2695,10 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 			// Registry.PriorFailure / web_fetch).
 			thisFailed := isFailedToolResult(r.err, resultContent)
 			if thisFailed {
-				summary := r.err.Error()
+				summary := ""
+				if r.err != nil {
+					summary = fmt.Sprintf("%v", r.err)
+				}
 				if summary == "" || summary == "<nil>" {
 					summary = firstNonEmptyLine(resultContent)
 				}
@@ -3337,7 +3353,7 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 			if isFailedToolResult(r.err, resultContent) {
 				summary := ""
 				if r.err != nil {
-					summary = r.err.Error()
+					summary = fmt.Sprintf("%v", r.err)
 				}
 				if summary == "" || summary == "<nil>" {
 					summary = firstNonEmptyLine(resultContent)
