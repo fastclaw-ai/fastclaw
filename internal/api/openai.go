@@ -265,17 +265,22 @@ func (s *Server) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// scope. When/if we expose project addressing here, look up the
 	// session row and pass its project_id instead of "".
 	atts := req.allAttachments()
-	attachmentPaths := ag.WriteSessionAttachments(r.Context(), sessionKey, "", atts)
-	if len(attachmentPaths) > 0 {
+	attachmentResults := ag.WriteSessionAttachments(r.Context(), sessionKey, "", atts)
+	if len(attachmentResults) > 0 {
 		var b strings.Builder
-		for _, p := range attachmentPaths {
+		for _, res := range attachmentResults {
 			b.WriteString("[Attached: /workspace/")
-			b.WriteString(p)
+			b.WriteString(res.Path)
 			b.WriteString("]\n")
 		}
 		b.WriteString(userText)
 		userText = b.String()
 	}
+	// Vision gate (issue #106): images that failed the server-side
+	// sniff/allowlist check stay out of image_url content parts (their
+	// workspace breadcrumb above still lets the agent reach the file),
+	// and accepted-but-compressed data URLs inline their smaller form.
+	inlineURLs := agent.VisionGate(req.inlineImageURLs(), attachmentResults)
 
 	// Build inbound message.
 	// X-Fastclaw-Channel lets callers override the reply channel so
@@ -292,7 +297,7 @@ func (s *Server) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		Text:      userText,
 		PeerKind:  "dm",
 		Params:    req.Params,
-		PhotoURLs: req.inlineImageURLs(),
+		PhotoURLs: inlineURLs,
 	}
 
 	slog.Info("chat completion request",

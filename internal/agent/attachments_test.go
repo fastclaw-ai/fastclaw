@@ -144,7 +144,7 @@ func TestDecodeDataURLEnforcesSizeCap(t *testing.T) {
 	// Build a base64-encoded payload that exceeds maxAttachmentBytes.
 	huge := make([]byte, maxAttachmentBytes+1)
 	url := "data:application/octet-stream;base64," + base64.StdEncoding.EncodeToString(huge)
-	if _, _, err := decodeDataURL(url); err == nil {
+	if _, _, _, err := decodeDataURL(url); err == nil {
 		t.Fatal("expected size-cap error, got nil")
 	}
 }
@@ -152,7 +152,7 @@ func TestDecodeDataURLEnforcesSizeCap(t *testing.T) {
 func TestDecodeDataURLPDF(t *testing.T) {
 	payload := []byte("%PDF-1.4 hello")
 	url := "data:application/pdf;base64," + base64.StdEncoding.EncodeToString(payload)
-	data, ext, err := decodeDataURL(url)
+	data, ext, mime, err := decodeDataURL(url)
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -161,6 +161,9 @@ func TestDecodeDataURLPDF(t *testing.T) {
 	}
 	if ext != ".pdf" {
 		t.Errorf("ext = %q, want .pdf", ext)
+	}
+	if mime != "application/pdf" {
+		t.Errorf("mime = %q, want application/pdf", mime)
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	"github.com/codeany-ai/open-agent-sdk-go/costtracker"
 
 	"github.com/fastclaw-ai/fastclaw/internal/agent/goal"
+	"github.com/fastclaw-ai/fastclaw/internal/agent/imageproc"
 	"github.com/fastclaw-ai/fastclaw/internal/agent/tools"
 	"github.com/fastclaw-ai/fastclaw/internal/buildinfo"
 	"github.com/fastclaw-ai/fastclaw/internal/bus"
@@ -996,9 +997,31 @@ func buildUserMessage(msg bus.InboundMessage) provider.Message {
 		parts = append(parts, provider.ContentPart{Type: "text", Text: userText})
 	}
 	for _, u := range imageURLs {
+		// Vision gate (issue #106): data URLs are sniffed, policy-checked
+		// and (when oversized) compressed before inlining. Downgraded or
+		// unparseable URLs are dropped — their bytes still reached
+		// /workspace via WriteSessionAttachments and surface through the
+		// `[Attached: …]` breadcrumb in the text. http(s) URLs pass
+		// through: the bytes were already gated server-side during
+		// materialization (see VisionGate).
+		if strings.HasPrefix(u, "data:") {
+			gated, res, ok := imageproc.ProcessDataURL(u)
+			if !ok || res.Decision != imageproc.DecisionAccept {
+				slog.Warn("image excluded from vision inline", "note", res.Note)
+				continue
+			}
+			u = gated
+		}
 		parts = append(parts, provider.ContentPart{
 			Type: "image_url", ImageURL: &provider.ImageURL{URL: u, Detail: "auto"},
 		})
+	}
+	if len(parts) == 0 {
+		// Every image was downgraded and there is no text: fall back to
+		// a plain (empty-content) message rather than emitting an empty
+		// ContentParts slice, matching the no-image path.
+		userMsg.Content = userText
+		return userMsg
 	}
 	userMsg.ContentParts = parts
 	return userMsg

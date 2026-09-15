@@ -500,11 +500,11 @@ func New(env *config.EnvConfig) (*Gateway, error) {
 					URL:  "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(item.Bytes),
 				})
 			}
-			paths := ag.WriteSessionAttachments(ctx, task.Message.ChatID, task.Message.ProjectID, atts)
-			if len(paths) > 0 {
+			results := ag.WriteSessionAttachments(ctx, task.Message.ChatID, task.Message.ProjectID, atts)
+			if len(results) > 0 {
 				var refs strings.Builder
-				for _, p := range paths {
-					fmt.Fprintf(&refs, "[Attached: /workspace/%s]\n", p)
+				for _, res := range results {
+					fmt.Fprintf(&refs, "[Attached: /workspace/%s]\n", res.Path)
 				}
 				task.Message.Text = refs.String() + task.Message.Text
 			}

@@ -2,7 +2,10 @@ package setup
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
+
+	"github.com/fastclaw-ai/fastclaw/internal/agent"
 )
 
 // Wire round-trip: the JSON a real API client would POST decodes into
@@ -98,5 +101,53 @@ func TestInlineImageURLsEmptyIsNil(t *testing.T) {
 	}
 	if got := req.inlineImageURLs(); got != nil {
 		t.Errorf("expected nil, got %v", got)
+	}
+}
+
+// VisionGate zips inline candidates against WriteSessionAttachments
+// results by INDEX, which is only correct because inlineImageURLs() is
+// an index-aligned prefix of allAttachments(). Pin that contract: if a
+// future refactor reorders either helper, this test fails before the
+// misalignment silently drops or mislabels vision images.
+func TestInlineURLsArePrefixOfAllAttachments(t *testing.T) {
+	req := chatRequest{
+		Images:    []string{"i0", "i1"},
+		ImageURLs: []string{"u2"},
+		Attachments: []attachmentRequest{
+			{URL: "a3", Name: "report.pdf"},
+		},
+	}
+	inline := req.inlineImageURLs()
+	all := req.allAttachments()
+	if len(inline) > len(all) {
+		t.Fatalf("inline longer than all: %d > %d", len(inline), len(all))
+	}
+	for i, u := range inline {
+		if all[i].URL != u {
+			t.Fatalf("index %d misaligned: inline=%q all=%q", i, u, all[i].URL)
+		}
+	}
+}
+
+// Handler flow for issue #106: a downgraded image (declared image/* but
+// not actually a supported format) is excluded from vision inline URLs
+// yet still materialized — its filename shows up in the breadcrumb
+// paths handed to annotateMessageWithAttachments.
+func TestVisionGateExcludesDowngradedButKeepsBreadcrumb(t *testing.T) {
+	results := []agent.AttachmentResult{
+		{Index: 0, Path: "image_ab12_0.svg", VisionSafe: false, URL: "data:image/svg+xml;base64,PHN2Zy8+"},
+		{Index: 1, Path: "report.pdf", VisionSafe: false, URL: "data:application/pdf;base64,AAA"},
+	}
+	inline := agent.VisionGate([]string{"data:image/svg+xml;base64,PHN2Zy8+"}, results)
+	if len(inline) != 0 {
+		t.Errorf("downgraded svg must not inline, got %v", inline)
+	}
+	paths := attachmentPaths(results)
+	if len(paths) != 2 || paths[0] != "image_ab12_0.svg" {
+		t.Errorf("breadcrumb paths = %v", paths)
+	}
+	msg := annotateMessageWithAttachments("what is this", paths)
+	if !strings.HasPrefix(msg, "[Attached: /workspace/image_ab12_0.svg]\n[Attached: /workspace/report.pdf]\n") {
+		t.Errorf("breadcrumb missing downgraded file: %q", msg)
 	}
 }
