@@ -59,7 +59,7 @@ Open `http://localhost:18953` and login with your admin token.
 
 - **Agents** — Create and manage agents, each with its own personality and model
 - **Skills** — Install shared skills from ClawHub or GitHub
-- **Models** — Configure LLM providers (OpenAI, Anthropic, Ollama, OpenRouter, etc.)
+- **Models** — Configure LLM providers (OpenAI, Anthropic, Ollama, OpenRouter, Requesty, etc.)
 - **API Keys** — Issue programmatic credentials (admin / user / agent tiers)
 - **Settings** — General (theme), Account (profile + password), Runtime (sandbox config; admin only)
 
@@ -121,7 +121,7 @@ table and is edited through the dashboard or `fastclaw agents config`.
 ## Features
 
 ### LLM Providers
-- OpenAI, Anthropic, Ollama, OpenRouter, Groq, DeepSeek, Mistral, and any OpenAI-compatible API
+- OpenAI, Anthropic, Ollama, OpenRouter, Requesty, Groq, DeepSeek, Mistral, and any OpenAI-compatible API
 - Per-agent provider + model override (agent-scope shadows system by name)
 - Prompt cache support (RawAssistant preservation)
 
@@ -301,7 +301,7 @@ fastclaw agents config alpha set provider.openai.model gpt-4o      # adds; idemp
 fastclaw agents config alpha set provider.openai.models '[]'        # explicit clear
 ```
 
-Provider presets ship for `openai`, `openrouter`, `anthropic`, `ollama`,
+Provider presets ship for `openai`, `openrouter`, `requesty`, `anthropic`, `ollama`,
 `groq`, `deepseek`, `mistral` — `--api-key-env` populates `apiKey` from
 the named environment variable, the rest comes from the preset.
 
