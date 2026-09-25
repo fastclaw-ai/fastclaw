@@ -45,6 +45,7 @@ import {
   startAgentWeChatLogin,
   pollAgentWeChatLoginStatus,
   disconnectAgentChannel,
+  updateAgentChannel,
   type AgentChannel,
 } from "@/lib/api";
 import { useAgentIdFromURL } from "@/hooks/use-agent-id";
@@ -184,9 +185,11 @@ export default function AgentChannelsPage() {
             return connected ? (
               <ConnectedCard
                 key={entry.type}
+                agentId={agentId}
                 label={entry.label}
                 channel={connected}
                 onDelete={() => setDeleteTarget(connected)}
+                onChanged={refresh}
               />
             ) : (
               <CatalogCard
@@ -323,15 +326,39 @@ function CatalogCard({
 }
 
 function ConnectedCard({
+  agentId,
   label,
   channel,
   onDelete,
+  onChanged,
 }: {
+  agentId: string;
   label: string;
   channel: AgentChannel;
   onDelete: () => void;
+  onChanged: () => void;
 }) {
   const { tr } = useLocale();
+  const saved = (channel.allowedUsers ?? []).join(", ");
+  // null = untouched, so the field keeps showing the server value after refresh.
+  const [draft, setDraft] = useState<string | null>(null);
+  const allowed = draft ?? saved;
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
+
+  const saveAllowed = async () => {
+    setSaving(true);
+    setSaveError("");
+    const ids = allowed.split(/[\s,]+/).filter(Boolean);
+    const res = await updateAgentChannel(agentId, channel.type, channel.accountId, { allowedUsers: ids });
+    setSaving(false);
+    if (res.error || !res.ok) {
+      setSaveError(res.error || tr("Failed to save", "保存失败"));
+      return;
+    }
+    setDraft(null);
+    onChanged();
+  };
   // Telegram is the only provider with a public profile URL pattern
   // (t.me/<username>); Discord/Slack don't expose one from a bot
   // username alone, so we render plain text for those.
@@ -376,6 +403,36 @@ function ConnectedCard({
         <code className="text-xs text-muted-foreground/80 font-mono truncate block">
           {channel.botToken}
         </code>
+      </div>
+
+      <div className="space-y-1.5">
+        <Label htmlFor={`allowed-${channel.type}`} className="text-xs">
+          {tr("Allowed users", "允许的用户")}
+        </Label>
+        <div className="flex gap-2">
+          <Input
+            id={`allowed-${channel.type}`}
+            value={allowed}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="123456789, 987654321"
+            className="h-8 font-mono text-xs"
+          />
+          <Button size="sm" variant="outline" onClick={saveAllowed} disabled={saving || allowed === saved}>
+            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : tr("Save", "保存")}
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {saved
+            ? tr(
+                "Only these user IDs can chat with the bot; messages from anyone else are ignored.",
+                "只有这些用户 ID 可以与机器人聊天，其他人的消息会被忽略。",
+              )
+            : tr(
+                "Anyone who finds the bot can chat with it. Add platform user IDs to restrict access; ignored senders' IDs appear in the gateway log.",
+                "任何找到机器人的人都可以与它聊天。添加平台用户 ID 以限制访问；被忽略的发送者 ID 会记录在网关日志中。",
+              )}
+        </p>
+        {saveError && <p className="text-xs text-destructive">{saveError}</p>}
       </div>
 
       <Button

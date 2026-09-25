@@ -1774,6 +1774,8 @@ export interface AgentChannel {
   botToken: string;    // server-masked
   enabled: boolean;
   sharedIdentity: boolean;
+  // Platform-side sender IDs allowed to chat with this bot; empty = anyone.
+  allowedUsers?: string[];
   updatedAt?: string;
 }
 
@@ -1969,7 +1971,7 @@ export async function updateAgentChannel(
   agentId: string,
   type: string,
   accountId: string,
-  patch: { sharedIdentity?: boolean },
+  patch: { sharedIdentity?: boolean; allowedUsers?: string[] },
 ): Promise<{ ok: boolean; error?: string }> {
   const res = await apiFetch(
     `/api/agents/${agentId}/channels/${encodeURIComponent(type)}/${encodeURIComponent(accountId)}`,

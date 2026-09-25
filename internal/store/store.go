@@ -633,10 +633,17 @@ type ChannelRecord struct {
 	// owner share sessions and memory across multiple personal channels
 	// (e.g. WeChat + Feishu + Telegram all resolving as the same user).
 	// Default false — each platform sender gets an isolated chatter.
-	SharedIdentity bool                   `json:"sharedIdentity"`
-	Data           map[string]interface{} `json:"data,omitempty"` // extra config (accounts map, etc.)
-	CreatedAt      time.Time              `json:"createdAt"`
-	UpdatedAt      time.Time              `json:"updatedAt"`
+	SharedIdentity bool `json:"sharedIdentity"`
+	// AllowedUsers, when non-empty, restricts who can talk to this bot:
+	// inbound messages whose platform-side sender ID (Telegram numeric
+	// user ID, Discord user ID, Slack user ID, …) is not listed are
+	// dropped by the gateway before they reach the agent, so strangers
+	// who find the bot cannot spend the owner's LLM credits. Empty =
+	// anyone can chat (backward-compatible default).
+	AllowedUsers []string               `json:"allowedUsers,omitempty"`
+	Data         map[string]interface{} `json:"data,omitempty"` // extra config (accounts map, etc.)
+	CreatedAt    time.Time              `json:"createdAt"`
+	UpdatedAt    time.Time              `json:"updatedAt"`
 }
 
 // computeConfigScope derives the scope label from the (userID, agentID)

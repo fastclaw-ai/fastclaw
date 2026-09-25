@@ -168,6 +168,9 @@ func (d *DBStore) Migrate(ctx context.Context) error {
 	if err := d.migrateChannelsAddSharedIdentity(ctx); err != nil {
 		return fmt.Errorf("migrate channels shared_identity: %w", err)
 	}
+	if err := d.migrateChannelsAddAllowedUsers(ctx); err != nil {
+		return fmt.Errorf("migrate channels allowed_users: %w", err)
+	}
 	if err := d.migrateChannelsFromConfigs(ctx); err != nil {
 		return fmt.Errorf("migrate channels from configs: %w", err)
 	}
@@ -1984,6 +1987,7 @@ func (d *DBStore) migrationSQL() []string {
 			base_url TEXT NOT NULL DEFAULT '',
 			platform_user_id TEXT NOT NULL DEFAULT '',
 			shared_identity INTEGER NOT NULL DEFAULT 0,
+			allowed_users TEXT NOT NULL DEFAULT '[]',
 			data TEXT NOT NULL DEFAULT '{}',
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -3695,7 +3699,7 @@ func scanConfigs(rows *sql.Rows) ([]ConfigRecord, error) {
 
 // --- Channels (IM bot bindings) ---
 
-const channelSelectCols = `id, user_id, agent_id, type, account_id, enabled, bot_token, base_url, platform_user_id, shared_identity, data, created_at, updated_at`
+const channelSelectCols = `id, user_id, agent_id, type, account_id, enabled, bot_token, base_url, platform_user_id, shared_identity, allowed_users, data, created_at, updated_at`
 
 func (d *DBStore) ListChannels(ctx context.Context, userID, agentID string) ([]ChannelRecord, error) {
 	rows, err := d.db.QueryContext(ctx,
@@ -3739,6 +3743,7 @@ func (d *DBStore) SaveChannel(ctx context.Context, ch *ChannelRecord) error {
 		ch.ID = randomChannelID()
 	}
 	dataBytes, _ := json.Marshal(ch.Data)
+	allowedBytes := encodeAllowedUsers(ch.AllowedUsers)
 	// Convert bools to int for PostgreSQL INTEGER columns.
 	enabledInt := 0
 	if ch.Enabled {
@@ -3750,23 +3755,23 @@ func (d *DBStore) SaveChannel(ctx context.Context, ch *ChannelRecord) error {
 	}
 	if d.dialect == "postgres" {
 		_, err := d.db.ExecContext(ctx,
-			`INSERT INTO channels (id, user_id, agent_id, type, account_id, enabled, bot_token, base_url, platform_user_id, shared_identity, data, created_at, updated_at)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+			`INSERT INTO channels (id, user_id, agent_id, type, account_id, enabled, bot_token, base_url, platform_user_id, shared_identity, allowed_users, data, created_at, updated_at)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 				ON CONFLICT (type, account_id) DO UPDATE SET
 				  user_id=$2, agent_id=$3, enabled=$6, bot_token=$7, base_url=$8,
-				  platform_user_id=$9, shared_identity=$10, data=$11, updated_at=$13`,
-			ch.ID, ch.UserID, ch.AgentID, ch.Type, ch.AccountID, enabledInt, ch.BotToken, ch.BaseURL, ch.PlatformUserID, sharedIdent, string(dataBytes), ch.CreatedAt, ch.UpdatedAt)
+				  platform_user_id=$9, shared_identity=$10, allowed_users=$11, data=$12, updated_at=$14`,
+			ch.ID, ch.UserID, ch.AgentID, ch.Type, ch.AccountID, enabledInt, ch.BotToken, ch.BaseURL, ch.PlatformUserID, sharedIdent, allowedBytes, string(dataBytes), ch.CreatedAt, ch.UpdatedAt)
 		return err
 	}
 	_, err := d.db.ExecContext(ctx,
-		`INSERT INTO channels (id, user_id, agent_id, type, account_id, enabled, bot_token, base_url, platform_user_id, shared_identity, data, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO channels (id, user_id, agent_id, type, account_id, enabled, bot_token, base_url, platform_user_id, shared_identity, allowed_users, data, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT (type, account_id) DO UPDATE SET
 			  user_id=excluded.user_id, agent_id=excluded.agent_id, enabled=excluded.enabled,
 			  bot_token=excluded.bot_token, base_url=excluded.base_url,
 			  platform_user_id=excluded.platform_user_id, shared_identity=excluded.shared_identity,
-			  data=excluded.data, updated_at=excluded.updated_at`,
-		ch.ID, ch.UserID, ch.AgentID, ch.Type, ch.AccountID, enabledInt, ch.BotToken, ch.BaseURL, ch.PlatformUserID, sharedIdent, string(dataBytes), ch.CreatedAt, ch.UpdatedAt)
+			  allowed_users=excluded.allowed_users, data=excluded.data, updated_at=excluded.updated_at`,
+		ch.ID, ch.UserID, ch.AgentID, ch.Type, ch.AccountID, enabledInt, ch.BotToken, ch.BaseURL, ch.PlatformUserID, sharedIdent, allowedBytes, string(dataBytes), ch.CreatedAt, ch.UpdatedAt)
 	return err
 }
 
@@ -3798,13 +3803,14 @@ func randomChannelID() string {
 
 func scanChannelRow(row rowScanner) (*ChannelRecord, error) {
 	var c ChannelRecord
-	var dataStr string
+	var dataStr, allowedStr string
 	var enabledInt, sharedIdent int
-	if err := row.Scan(&c.ID, &c.UserID, &c.AgentID, &c.Type, &c.AccountID, &enabledInt, &c.BotToken, &c.BaseURL, &c.PlatformUserID, &sharedIdent, &dataStr, &c.CreatedAt, &c.UpdatedAt); err != nil {
+	if err := row.Scan(&c.ID, &c.UserID, &c.AgentID, &c.Type, &c.AccountID, &enabledInt, &c.BotToken, &c.BaseURL, &c.PlatformUserID, &sharedIdent, &allowedStr, &dataStr, &c.CreatedAt, &c.UpdatedAt); err != nil {
 		return nil, scanErr(err)
 	}
 	c.Enabled = enabledInt != 0
 	c.SharedIdentity = sharedIdent != 0
+	c.AllowedUsers = decodeAllowedUsers(allowedStr)
 	json.Unmarshal([]byte(dataStr), &c.Data)
 	return &c, nil
 }
@@ -3813,13 +3819,14 @@ func scanChannels(rows *sql.Rows) ([]ChannelRecord, error) {
 	var out []ChannelRecord
 	for rows.Next() {
 		var c ChannelRecord
-		var dataStr string
+		var dataStr, allowedStr string
 		var enabledInt, sharedIdent int
-		if err := rows.Scan(&c.ID, &c.UserID, &c.AgentID, &c.Type, &c.AccountID, &enabledInt, &c.BotToken, &c.BaseURL, &c.PlatformUserID, &sharedIdent, &dataStr, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.UserID, &c.AgentID, &c.Type, &c.AccountID, &enabledInt, &c.BotToken, &c.BaseURL, &c.PlatformUserID, &sharedIdent, &allowedStr, &dataStr, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, err
 		}
 		c.Enabled = enabledInt != 0
 		c.SharedIdentity = sharedIdent != 0
+		c.AllowedUsers = decodeAllowedUsers(allowedStr)
 		json.Unmarshal([]byte(dataStr), &c.Data)
 		out = append(out, c)
 	}
@@ -4028,6 +4035,40 @@ func (d *DBStore) migrateChannelsAddSharedIdentity(ctx context.Context) error {
 	_, err = d.db.ExecContext(ctx,
 		`ALTER TABLE channels ADD COLUMN shared_identity INTEGER NOT NULL DEFAULT 0`)
 	return err
+}
+
+// migrateChannelsAddAllowedUsers retrofits an allowed_users column onto
+// the channels table. Stored as a JSON array of platform-side sender IDs.
+// Default '[]' (empty) keeps every existing bot open to anyone, exactly
+// as before the column existed.
+func (d *DBStore) migrateChannelsAddAllowedUsers(ctx context.Context) error {
+	has, err := d.tableHasColumn(ctx, "channels", "allowed_users")
+	if err != nil {
+		return err
+	}
+	if has {
+		return nil
+	}
+	_, err = d.db.ExecContext(ctx,
+		`ALTER TABLE channels ADD COLUMN allowed_users TEXT NOT NULL DEFAULT '[]'`)
+	return err
+}
+
+func encodeAllowedUsers(ids []string) string {
+	if len(ids) == 0 {
+		return "[]"
+	}
+	b, _ := json.Marshal(ids)
+	return string(b)
+}
+
+func decodeAllowedUsers(s string) []string {
+	var ids []string
+	_ = json.Unmarshal([]byte(s), &ids)
+	if len(ids) == 0 {
+		return nil
+	}
+	return ids
 }
 
 // --- Cron jobs ---

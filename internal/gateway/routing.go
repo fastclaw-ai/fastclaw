@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 
 	"github.com/fastclaw-ai/fastclaw/internal/agent"
@@ -41,7 +42,10 @@ func (g *Gateway) processInbound(ctx context.Context) {
 			ownerID := msg.OwnerUserID
 			var sharedIdentity bool
 			if ownerID == "" {
-				info := g.resolveChannelOwner(ctx, msg)
+				info, ok := g.admitInbound(ctx, msg)
+				if !ok {
+					continue
+				}
 				ownerID = info.ownerID
 				sharedIdentity = info.sharedIdentity
 			}
@@ -99,6 +103,31 @@ func (g *Gateway) processInbound(ctx context.Context) {
 type channelOwnerInfo struct {
 	ownerID        string
 	sharedIdentity bool
+	allowedUsers   []string
+}
+
+// admitInbound resolves the receiving channel of an IM inbound and
+// applies its sender allowlist. It runs before anything else touches the
+// message (dedup, chatter minting, agent turn), so a stranger who finds
+// the bot costs nothing. Only IM inbounds reach it — cron / web / API
+// messages carry OwnerUserID and are authorized upstream.
+func (g *Gateway) admitInbound(ctx context.Context, msg bus.InboundMessage) (channelOwnerInfo, bool) {
+	info := g.resolveChannelOwner(ctx, msg)
+	if !senderAllowed(info.allowedUsers, msg.UserID) {
+		slog.Info("dropping inbound: sender not in channel allowlist",
+			"channel", msg.Channel, "account", msg.AccountID,
+			"sender_id", msg.UserID, "sender_name", msg.SenderName)
+		return channelOwnerInfo{}, false
+	}
+	return info, true
+}
+
+// senderAllowed reports whether a platform-side sender may talk to a
+// channel with the given allowlist. An empty allowlist means the
+// channel is open to everyone (the default for bots bound before the
+// allowlist existed).
+func senderAllowed(allowed []string, senderID string) bool {
+	return len(allowed) == 0 || slices.Contains(allowed, senderID)
 }
 
 // resolveChannelOwner looks up the channels table for the inbound's
@@ -111,7 +140,7 @@ func (g *Gateway) resolveChannelOwner(ctx context.Context, msg bus.InboundMessag
 	}
 	// Try the new channels table first.
 	if ch, err := g.store.LookupChannel(ctx, msg.Channel, msg.AccountID); err == nil && ch != nil {
-		info := channelOwnerInfo{sharedIdentity: ch.SharedIdentity}
+		info := channelOwnerInfo{sharedIdentity: ch.SharedIdentity, allowedUsers: ch.AllowedUsers}
 		if ch.UserID != "" {
 			info.ownerID = ch.UserID
 			return info

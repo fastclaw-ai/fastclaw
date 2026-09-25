@@ -40,6 +40,9 @@ type channelOut struct {
 	SharedIdentity bool   `json:"sharedIdentity"`
 	UpdatedAt      string `json:"updatedAt,omitempty"`
 	Source         string `json:"source,omitempty"`
+
+	// AllowedUsers is the sender allowlist; empty = anyone can chat.
+	AllowedUsers []string `json:"allowedUsers"`
 }
 
 // resolveChannelBindingScope authorizes a connect/disconnect call and
@@ -212,6 +215,7 @@ func flattenChannelRecords(rows []store.ChannelRecord, source string) []channelO
 				BotToken:       maskAPIKey(rec.BotToken),
 				Enabled:        rec.Enabled,
 				SharedIdentity: rec.SharedIdentity,
+				AllowedUsers:   nonNilStrings(rec.AllowedUsers),
 				UpdatedAt:      rec.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 				Source:         source,
 			})
@@ -229,6 +233,7 @@ func flattenChannelRecords(rows []store.ChannelRecord, source string) []channelO
 				BotToken:       maskAPIKey(tok),
 				Enabled:        rec.Enabled,
 				SharedIdentity: rec.SharedIdentity,
+				AllowedUsers:   nonNilStrings(rec.AllowedUsers),
 				UpdatedAt:      rec.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 				Source:         source,
 			})
@@ -321,12 +326,13 @@ func (s *Server) handleConnectAgentTelegram(w http.ResponseWriter, r *http.Reque
 	})
 }
 
-// handleUpdateAgentChannel patches channel-level settings (currently
-// only shared_identity). The channel is identified by (type, accountId)
-// within the agent's channels.
+// handleUpdateAgentChannel patches channel-level settings
+// (shared_identity, allowed_users). The channel is identified by
+// (type, accountId) within the agent's channels.
 //
 //	PATCH /api/agents/{id}/channels/{type}/{accountId}
 //	Body: {"sharedIdentity": true}
+//	Body: {"allowedUsers": ["123456789", "987654321"]}  // [] = open to anyone
 func (s *Server) handleUpdateAgentChannel(w http.ResponseWriter, r *http.Request) {
 	if !s.requireWritable(w, r) {
 		return
@@ -340,7 +346,8 @@ func (s *Server) handleUpdateAgentChannel(w http.ResponseWriter, r *http.Request
 	}
 
 	var req struct {
-		SharedIdentity *bool `json:"sharedIdentity"`
+		SharedIdentity *bool     `json:"sharedIdentity"`
+		AllowedUsers   *[]string `json:"allowedUsers"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
@@ -367,6 +374,9 @@ func (s *Server) handleUpdateAgentChannel(w http.ResponseWriter, r *http.Request
 
 	if req.SharedIdentity != nil {
 		target.SharedIdentity = *req.SharedIdentity
+	}
+	if req.AllowedUsers != nil {
+		target.AllowedUsers = normalizeAllowedUsers(*req.AllowedUsers)
 	}
 	if err := s.dataStore.SaveChannel(r.Context(), target); err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
@@ -1286,12 +1296,42 @@ func (s *Server) saveChannelRecord(ctx context.Context, userID, agentID, channel
 		ch.BaseURL = acct.BaseURL
 		ch.PlatformUserID = acct.UserID
 	}
+	// Re-connecting a bot (e.g. to rotate its token) upserts a fresh
+	// record. Carry the sender allowlist over so a token rotation never
+	// silently opens a restricted bot to everyone.
+	if prev, err := s.dataStore.LookupChannel(ctx, channelType, accountID); err == nil && prev != nil {
+		ch.AllowedUsers = prev.AllowedUsers
+	}
 	if err := s.dataStore.SaveChannel(ctx, ch); err != nil {
 		slog.Error("saveChannelRecord failed",
 			"type", channelType, "account", accountID, "error", err)
 		return fmt.Errorf("save channel record: %w", err)
 	}
 	return nil
+}
+
+// normalizeAllowedUsers trims whitespace and drops empty / duplicate IDs
+// so the stored allowlist matches inbound sender IDs exactly.
+func normalizeAllowedUsers(ids []string) []string {
+	out := make([]string, 0, len(ids))
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
+}
+
+// nonNilStrings keeps the JSON wire shape a list ([]) rather than null.
+func nonNilStrings(ids []string) []string {
+	if ids == nil {
+		return []string{}
+	}
+	return ids
 }
 
 // channelConfigToData converts a ChannelConfig to a JSON data map,
