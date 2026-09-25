@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/fastclaw-ai/fastclaw/internal/auth"
 	"github.com/fastclaw-ai/fastclaw/internal/config"
+	"github.com/fastclaw-ai/fastclaw/internal/provider"
 	"github.com/fastclaw-ai/fastclaw/internal/scope"
 	"github.com/fastclaw-ai/fastclaw/internal/store"
 	"github.com/fastclaw-ai/fastclaw/internal/users"
@@ -184,6 +186,7 @@ func (s *Server) handleListProviders(w http.ResponseWriter, r *http.Request) {
 			"apiType":   pc.APIType,
 			"authType":  pc.AuthType,
 			"models":    pc.Models,
+			"headers":   maskProviderHeaders(pc.Headers),
 			"updatedAt": r.UpdatedAt,
 		})
 	}
@@ -199,6 +202,52 @@ type writeProviderRequest struct {
 	APIType  string              `json:"apiType"`
 	AuthType string              `json:"authType"`
 	Models   []config.ModelEntry `json:"models,omitempty"`
+	// Headers: nil = keep stored headers, {} = clear. Masked values
+	// (as returned by the list endpoint) keep the stored value.
+	Headers *map[string]string `json:"headers,omitempty"`
+}
+
+// maskProviderHeaders hides header values in API responses the same way
+// apiKey is hidden — a header may carry a credential. Values made only of
+// placeholders (e.g. "{{session}}") are not secret and stay readable.
+func maskProviderHeaders(h map[string]string) map[string]string {
+	if len(h) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(h))
+	for k, v := range h {
+		if strings.TrimSpace(strings.ReplaceAll(v, provider.SessionPlaceholder, "")) == "" {
+			out[k] = v
+		} else {
+			out[k] = maskAPIKey(v)
+		}
+	}
+	return out
+}
+
+// mergeProviderHeaders builds the headers to store from a client
+// submission: empty names are dropped and masked values resolve to the
+// stored value for that header (dropped if there is none).
+func mergeProviderHeaders(in, stored map[string]string) map[string]string {
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		k = strings.TrimSpace(k)
+		if k == "" {
+			continue
+		}
+		if isMaskedSecret(v) {
+			prev, ok := stored[k]
+			if !ok {
+				continue
+			}
+			v = prev
+		}
+		out[k] = v
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func (s *Server) handleCreateProvider(w http.ResponseWriter, r *http.Request) {
@@ -227,6 +276,9 @@ func (s *Server) handleCreateProvider(w http.ResponseWriter, r *http.Request) {
 		APIType:  req.APIType,
 		AuthType: req.AuthType,
 		Models:   req.Models,
+	}
+	if req.Headers != nil {
+		pcfg.Headers = mergeProviderHeaders(*req.Headers, nil)
 	}
 	if err := scope.SaveProviderByScope(r.Context(), s.dataStore, sc, scopeID, req.Name, pcfg); err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
@@ -276,6 +328,9 @@ func (s *Server) handleUpdateProvider(w http.ResponseWriter, r *http.Request) {
 	// "remove last model" actually persists.
 	if req.Models != nil {
 		pc.Models = req.Models
+	}
+	if req.Headers != nil {
+		pc.Headers = mergeProviderHeaders(*req.Headers, pc.Headers)
 	}
 	if err := scope.SaveProviderByScope(r.Context(), s.dataStore, rec.LegacyScope(), rec.LegacyScopeID(), rec.Name, pc); err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})

@@ -2261,6 +2261,9 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 	// identifier); goal tools need the durable session.Session.SessionKey
 	// to address rows in agent_goals.
 	a.registry.SetGoalSessionKey(sess.SessionKey())
+	// Provider headers with {{session}} derive their per-conversation ID
+	// from the session key.
+	ctx = provider.WithSessionKey(ctx, sess.SessionKey())
 	// Per-user file writes (USER.md / MEMORY.md) need to land in the
 	// per-turn chatter's row, not the UserSpace owner — see
 	// Registry.systemFileUserID for the routing rule.
@@ -3085,6 +3088,7 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 	a.bindSession(ctx, msg.Channel, msg.AccountID, msg.ChatID, msg.ProjectID)
 	a.registry.SetCallerIsAdmin(a.isTrustedTurn(msg))
 	a.registry.SetGoalSessionKey(sess.SessionKey())
+	ctx = provider.WithSessionKey(ctx, sess.SessionKey())
 	// Per-user file writes (USER.md / MEMORY.md) need to land in the
 	// per-turn chatter's row, not the UserSpace owner — see
 	// Registry.systemFileUserID for the routing rule.

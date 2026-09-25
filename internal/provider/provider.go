@@ -290,9 +290,14 @@ func SplitProviderModel(s string) (provider, model string) {
 
 // NewProvider creates a Provider based on apiType.
 // "anthropic-messages" creates an Anthropic provider, anything else creates OpenAI-compatible.
-func NewProvider(apiKey, apiBase, apiType string) Provider {
+// headers are extra request headers from the provider config (may be nil).
+func NewProvider(apiKey, apiBase, apiType string, headers map[string]string) Provider {
 	if apiType == "anthropic-messages" {
-		return NewAnthropic(apiKey, apiBase)
+		p := NewAnthropic(apiKey, apiBase)
+		p.headers = headers
+		return p
 	}
-	return NewOpenAI(apiKey, apiBase)
+	p := NewOpenAI(apiKey, apiBase)
+	p.headers = headers
+	return p
 }

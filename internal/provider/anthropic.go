@@ -16,6 +16,7 @@ import (
 type AnthropicProvider struct {
 	apiKey  string
 	apiBase string
+	headers map[string]string // operator-configured extra headers
 	client  *http.Client
 }
 
@@ -395,6 +396,7 @@ func (p *AnthropicProvider) buildRequest(ctx context.Context, messages []Message
 	httpReq.Header.Set("x-api-key", p.apiKey)
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
 	SetAppIdentityHeaders(httpReq.Header)
+	ApplyCustomHeaders(ctx, httpReq.Header, p.headers)
 	return httpReq, nil
 }
 

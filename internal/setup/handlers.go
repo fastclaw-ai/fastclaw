@@ -546,6 +546,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	masked.Providers = make(map[string]config.ProviderConfig)
 	for k, v := range cfg.Providers {
 		v.APIKey = maskAPIKey(v.APIKey)
+		v.Headers = maskProviderHeaders(v.Headers)
 		masked.Providers[k] = v
 	}
 	if len(cfg.Skills.Entries) > 0 {
@@ -746,11 +747,12 @@ func (s *Server) scopeForSave(r *http.Request) (string, string) {
 // --- /api/test-provider ---
 
 type testProviderRequest struct {
-	APIBase  string `json:"apiBase"`
-	APIKey   string `json:"apiKey"`
-	Model    string `json:"model"`
-	APIType  string `json:"apiType"`
-	AuthType string `json:"authType"`
+	APIBase  string            `json:"apiBase"`
+	APIKey   string            `json:"apiKey"`
+	Model    string            `json:"model"`
+	APIType  string            `json:"apiType"`
+	AuthType string            `json:"authType"`
+	Headers  map[string]string `json:"headers,omitempty"`
 }
 
 func (s *Server) handleTestProvider(w http.ResponseWriter, r *http.Request) {
@@ -787,10 +789,11 @@ func (s *Server) handleTestStoredProvider(w http.ResponseWriter, r *http.Request
 	// the old URL and reports green. Honor any overrides the client
 	// sends; fall back to the stored values when a field is omitted.
 	var body struct {
-		Model    string  `json:"model"`
-		APIBase  *string `json:"apiBase,omitempty"`
-		APIType  *string `json:"apiType,omitempty"`
-		AuthType *string `json:"authType,omitempty"`
+		Model    string             `json:"model"`
+		APIBase  *string            `json:"apiBase,omitempty"`
+		APIType  *string            `json:"apiType,omitempty"`
+		AuthType *string            `json:"authType,omitempty"`
+		Headers  *map[string]string `json:"headers,omitempty"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	pc := config.ProviderConfig{}
@@ -809,12 +812,17 @@ func (s *Server) handleTestStoredProvider(w http.ResponseWriter, r *http.Request
 	if body.AuthType != nil {
 		authType = *body.AuthType
 	}
+	headers := pc.Headers
+	if body.Headers != nil {
+		headers = mergeProviderHeaders(*body.Headers, pc.Headers)
+	}
 	jsonResponse(w, http.StatusOK, runProviderTest(r.Context(), testProviderRequest{
 		APIBase:  apiBase,
 		APIKey:   pc.APIKey,
 		Model:    body.Model,
 		APIType:  apiType,
 		AuthType: authType,
+		Headers:  headers,
 	}))
 }
 
@@ -897,6 +905,7 @@ func sendProviderTestRequest(ctx context.Context, req testProviderRequest, testU
 		httpReq.Header.Set("Authorization", "Bearer "+req.APIKey)
 	}
 	provider.SetAppIdentityHeaders(httpReq.Header)
+	provider.ApplyCustomHeaders(ctx, httpReq.Header, req.Headers)
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(httpReq)
 	if err != nil {

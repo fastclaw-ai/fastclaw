@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -46,6 +47,7 @@ import {
 } from "@/lib/api";
 import { useAgentIdFromURL } from "@/hooks/use-agent-id";
 import { useLocale } from "@/components/locale-provider";
+import { headersToText, parseHeadersText } from "@/lib/provider-headers";
 
 // Keep these maps in sync with onboard's ProviderStep so the two flows
 // look and behave identically — same preset set, same labels, same
@@ -56,7 +58,7 @@ import { useLocale } from "@/components/locale-provider";
 // vary too much to ship a baked-in suggestion).
 const PROVIDER_PRESETS: Record<
   string,
-  { apiBase: string; apiType: string; authType: string; models: string[] }
+  { apiBase: string; apiType: string; authType: string; models: string[]; headers?: Record<string, string> }
 > = {
   openai: { apiBase: "https://api.openai.com/v1", apiType: "openai-chat", authType: "bearer-token", models: ["gpt-5.5"] },
   openrouter: { apiBase: "https://openrouter.ai/api/v1", apiType: "openai-chat", authType: "bearer-token", models: [] },
@@ -94,6 +96,7 @@ interface ProviderEntry {
   apiType: string;
   authType: string;
   models: ModelEntry[];
+  headers: Record<string, string>; // values masked by the server
   // scope tells the row apart from the inherited (system) ones a regular
   // user is allowed to see but not mutate. "system" and "agent" rows
   // render with an Inherited badge and disabled edit/delete; "user" rows
@@ -172,6 +175,7 @@ export default function ModelsPage({ scope = "auto" }: { scope?: "auto" | "user"
   const [formApiType, setFormApi] = useState("openai-chat");
   const [formAuthType, setFormAuthType] = useState("api-key");
   const [formModels, setFormModels] = useState<ModelEntry[]>([]);
+  const [formHeaders, setFormHeaders] = useState("");
   // Per-model test results keyed by model index in formModels. We test
   // every configured model so the user sees which model IDs the provider
   // actually exposes — a single "ping the base URL" check would mask
@@ -257,6 +261,7 @@ export default function ModelsPage({ scope = "auto" }: { scope?: "auto" | "user"
         apiType: r.apiType || "openai-chat",
         authType: r.authType || "bearer-token",
         models: r.models || [],
+        headers: r.headers || {},
         scope: sc,
       });
       // Order: agent (most specific) → user → system. Read-only "agent"
@@ -302,6 +307,7 @@ export default function ModelsPage({ scope = "auto" }: { scope?: "auto" | "user"
     setFormApiBase(PROVIDER_PRESETS["openai"].apiBase);
     setFormApi(PROVIDER_PRESETS["openai"].apiType);
     setFormAuthType(PROVIDER_PRESETS["openai"].authType);
+    setFormHeaders(headersToText(PROVIDER_PRESETS["openai"].headers));
     setFormApiKey("");
     setFormModels(presetModelRows("openai"));
     setModelTests({});
@@ -317,6 +323,7 @@ export default function ModelsPage({ scope = "auto" }: { scope?: "auto" | "user"
     setFormApiBase(provider.apiBase);
     setFormApi(provider.apiType);
     setFormAuthType(provider.authType || "bearer-token");
+    setFormHeaders(headersToText(provider.headers));
     setFormApiKey("");
     // Saved providers may have models persisted before we shipped the
     // full ModelEntry schema (no cost block, no input array). Layer
@@ -362,6 +369,7 @@ export default function ModelsPage({ scope = "auto" }: { scope?: "auto" | "user"
       setFormApiBase(cfg.apiBase);
       setFormApi(cfg.apiType);
       setFormAuthType(cfg.authType);
+      setFormHeaders(headersToText(cfg.headers));
     }
     setFormName(preset === "custom" ? "" : preset);
     setFormModels(presetModelRows(preset));
@@ -401,6 +409,7 @@ export default function ModelsPage({ scope = "auto" }: { scope?: "auto" | "user"
                 apiBase: formApiBase,
                 apiType: formApiType,
                 authType: formAuthType,
+                headers: parseHeadersText(formHeaders),
               })
             : await testProvider({
                 apiBase: formApiBase,
@@ -408,6 +417,7 @@ export default function ModelsPage({ scope = "auto" }: { scope?: "auto" | "user"
                 model: id,
                 apiType: formApiType,
                 authType: formAuthType,
+                headers: parseHeadersText(formHeaders),
               });
           setModelTests((prev) => ({
             ...prev,
@@ -493,6 +503,7 @@ export default function ModelsPage({ scope = "auto" }: { scope?: "auto" | "user"
           apiType: formApiType,
           authType: formAuthType,
           models: cleanedModels,
+          headers: parseHeadersText(formHeaders),
         });
       } else {
         await createProvider({
@@ -504,6 +515,7 @@ export default function ModelsPage({ scope = "auto" }: { scope?: "auto" | "user"
           apiType: formApiType,
           authType: formAuthType,
           models: cleanedModels,
+          headers: parseHeadersText(formHeaders),
         });
       }
       flashSaved();
@@ -964,6 +976,24 @@ export default function ModelsPage({ scope = "auto" }: { scope?: "auto" | "user"
                   </SelectContent>
                 </Select>
               </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="provider-headers">{tr("Custom headers", "自定义请求头")}</Label>
+              <Textarea
+                id="provider-headers"
+                value={formHeaders}
+                onChange={(e) => setFormHeaders(e.target.value)}
+                placeholder="x-opencode-session: {{session}}"
+                rows={2}
+                className="font-mono text-xs"
+              />
+              <p className="text-xs text-muted-foreground">
+                {tr(
+                  "Optional. One \"Name: value\" per line, sent with every request. {{session}} becomes a stable per-conversation ID.",
+                  "可选。每行一个“名称: 值”，随每个请求发送。{{session}} 会替换为每个会话固定的 ID。",
+                )}
+              </p>
             </div>
 
             {/* Models Section */}

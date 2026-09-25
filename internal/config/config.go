@@ -340,6 +340,10 @@ type ProviderConfig struct {
 	APIType  string       `json:"apiType,omitempty"`
 	AuthType string       `json:"authType,omitempty"`
 	Models   []ModelEntry `json:"models,omitempty"`
+	// Headers are extra HTTP headers sent with every request to this
+	// provider. "{{session}}" in a value expands to a stable
+	// per-conversation ID (e.g. OpenCode Go's x-opencode-session).
+	Headers map[string]string `json:"headers,omitempty"`
 }
 
 // UnmarshalJSON handles a long-deprecated `api` alias for `apiType`.

@@ -944,7 +944,7 @@ func newProviderFromConfig(cfg *config.Config) provider.Provider {
 		"key", key, "apiBase", p.APIBase, "apiType", p.APIType,
 		"defaultModel", defaultModel,
 	)
-	return provider.NewProvider(p.APIKey, p.APIBase, p.APIType)
+	return provider.NewProvider(p.APIKey, p.APIBase, p.APIType, p.Headers)
 }
 
 func providerKeyList(m map[string]config.ProviderConfig) []string {

@@ -35,7 +35,7 @@ func providerForAgent(rc config.ResolvedAgent, shared provider.Provider) provide
 	parts := strings.SplitN(rc.Model, "/", 2)
 	if len(parts) == 2 {
 		if pc, ok := rc.Providers[parts[0]]; ok && pc.APIKey != "" {
-			return provider.NewProvider(pc.APIKey, pc.APIBase, pc.APIType)
+			return provider.NewProvider(pc.APIKey, pc.APIBase, pc.APIType, pc.Headers)
 		}
 	}
 	return shared

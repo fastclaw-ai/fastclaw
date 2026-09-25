@@ -525,6 +525,7 @@ export interface ProviderRow {
   apiType?: string;
   authType?: string;
   models?: ModelEntry[];
+  headers?: Record<string, string>; // values masked on read
   updatedAt?: string;
 }
 
@@ -559,6 +560,7 @@ export async function createProvider(req: {
   apiType?: string;
   authType?: string;
   models?: ModelEntry[];
+  headers?: Record<string, string>;
 }) {
   const res = await apiFetch("/api/providers", {
     method: "POST",
@@ -594,7 +596,7 @@ export async function deleteProvider(id: string) {
 export async function testStoredProvider(
   providerId: string,
   model: string,
-  overrides?: { apiBase?: string; apiType?: string; authType?: string },
+  overrides?: { apiBase?: string; apiType?: string; authType?: string; headers?: Record<string, string> },
 ): Promise<{ ok: boolean; error?: string }> {
   const res = await apiFetch(`/api/providers/${providerId}/test`, {
     method: "POST",
@@ -652,7 +654,7 @@ export async function getStatus(): Promise<StatusResponse> {
 }
 
 // Provider
-export async function testProvider(config: { apiBase: string; apiKey: string; model: string; apiType?: string; authType?: string }) {
+export async function testProvider(config: { apiBase: string; apiKey: string; model: string; apiType?: string; authType?: string; headers?: Record<string, string> }) {
   const res = await apiFetch("/api/test-provider", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
