@@ -36,9 +36,22 @@ type CredentialFree interface {
 	CredentialFree() bool
 }
 
+// ExplicitOnly is an optional Provider opt-in for backends that must never be
+// selected by an auto chain or "all" mode. The provider is only usable when an
+// admin explicitly adds it to a chain's Order. Chain.FilterExplicitOnly removes
+// any provider that reports ExplicitOnly() == true.
+type ExplicitOnly interface {
+	ExplicitOnly() bool
+}
+
 func providerCredentialFree(p Provider) bool {
 	cf, ok := p.(CredentialFree)
 	return ok && cf.CredentialFree()
+}
+
+func providerExplicitOnly(p Provider) bool {
+	eo, ok := p.(ExplicitOnly)
+	return ok && eo.ExplicitOnly()
 }
 
 // Request carries the LLM-provided args plus the resolved per-tenant config.
@@ -124,6 +137,25 @@ type Chain struct {
 	// GetConfig returns the config for a provider name. Allows per-agent /
 	// per-tenant overrides without the Chain owning any state.
 	GetConfig func(providerName string) ProviderConfig
+}
+
+// FilterExplicitOnly removes explicit-only providers from the chain's Order.
+// Call this after building the chain from config so that auto-selected
+// providers that are marked explicit-only are excluded.
+func (c *Chain) FilterExplicitOnly() {
+	if c.Registry == nil {
+		return
+	}
+	var filtered []string
+	for _, ref := range c.Order {
+		name, _ := parseRef(ref)
+		p := c.Registry.Get(c.Category, name)
+		if p != nil && providerExplicitOnly(p) {
+			continue
+		}
+		filtered = append(filtered, ref)
+	}
+	c.Order = filtered
 }
 
 // Available reports whether at least one provider in Order is registered AND
