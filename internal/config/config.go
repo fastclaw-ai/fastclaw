@@ -193,6 +193,8 @@ type SandboxCfg struct {
 	Policy          string `json:"policy,omitempty"`
 	Backend         string `json:"backend,omitempty"`
 	E2BKey          string `json:"e2bKey,omitempty"`
+	E2BAPIURL       string `json:"e2bApiUrl,omitempty"`
+	E2BDomain       string `json:"e2bDomain,omitempty"`
 	// Boxlite (https://github.com/boxlite-ai/boxlite) is a hosted sandbox
 	// service speaking the REST spec at openapi/rest-sandbox-open-api.yaml.
 	// BoxliteURL is the full base URL (default https://api.boxlite.ai/v1);

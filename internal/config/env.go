@@ -46,6 +46,8 @@ type EnvSandbox struct {
 	Backend         string // FASTCLAW_SANDBOX_BACKEND  — "docker", "e2b", or "boxlite"
 	Image           string // FASTCLAW_SANDBOX_IMAGE
 	E2BKey          string // E2B_API_KEY
+	E2BAPIURL       string // E2B_API_URL
+	E2BDomain       string // E2B_DOMAIN
 	BoxliteURL      string // FASTCLAW_SANDBOX_BOXLITE_URL — full base URL e.g. https://api.boxlite.ai/v1
 	BoxliteClientID string // FASTCLAW_SANDBOX_BOXLITE_CLIENT_ID — default "default"
 	BoxliteKey      string // BOXLITE_API_KEY — apikey sent as Authorization: Bearer
@@ -122,6 +124,12 @@ func LoadEnv() *EnvConfig {
 	}
 	if v := os.Getenv("E2B_API_KEY"); v != "" {
 		cfg.Sandbox.E2BKey = v
+	}
+	if v := os.Getenv("E2B_API_URL"); v != "" {
+		cfg.Sandbox.E2BAPIURL = v
+	}
+	if v := os.Getenv("E2B_DOMAIN"); v != "" {
+		cfg.Sandbox.E2BDomain = v
 	}
 	if v := os.Getenv("FASTCLAW_SANDBOX_BOXLITE_URL"); v != "" {
 		cfg.Sandbox.BoxliteURL = v
@@ -260,6 +268,12 @@ func (e *EnvConfig) ApplyToConfig(cfg *Config) {
 		}
 		if e.Sandbox.E2BKey != "" {
 			cfg.Sandbox.E2BKey = e.Sandbox.E2BKey
+		}
+		if e.Sandbox.E2BAPIURL != "" {
+			cfg.Sandbox.E2BAPIURL = e.Sandbox.E2BAPIURL
+		}
+		if e.Sandbox.E2BDomain != "" {
+			cfg.Sandbox.E2BDomain = e.Sandbox.E2BDomain
 		}
 		if e.Sandbox.BoxliteURL != "" {
 			cfg.Sandbox.BoxliteURL = e.Sandbox.BoxliteURL
