@@ -499,8 +499,18 @@ func New(env *config.EnvConfig) (*Gateway, error) {
 		if ag == nil {
 			return "", fmt.Errorf("agent %q not found", task.AgentID)
 		}
-		if len(task.Message.MediaItems) > 0 {
-			atts := make([]agent.Attachment, 0, len(task.Message.MediaItems))
+		// Photos go to the model as vision input (PhotoURL/PhotoURLs) but are
+		// also written to the workspace, like web-chat uploads, so skills
+		// that process the image get a real file path.
+		photos := task.Message.PhotoURLs
+		if task.Message.PhotoURL != "" {
+			photos = append([]string{task.Message.PhotoURL}, photos...)
+		}
+		if len(task.Message.MediaItems) > 0 || len(photos) > 0 {
+			atts := make([]agent.Attachment, 0, len(task.Message.MediaItems)+len(photos))
+			for _, u := range photos {
+				atts = append(atts, agent.Attachment{URL: u}) // unique image_<token>_<i> name
+			}
 			for _, item := range task.Message.MediaItems {
 				mimeType := item.ContentType
 				if mimeType == "" {
@@ -967,18 +977,16 @@ func splitFilesFromReply(ctx context.Context, ws workspace.Store, agentID, proje
 	cursor := 0
 	for _, m := range matches {
 		path := reply[m[4]:m[5]]
-		key := strings.TrimPrefix(path, "/workspace/")
-		rc, err := ws.Get(ctx, agentID, projectID, sessionID, key)
+		data, base, err := resolveWorkspaceBytes(ctx, ws, agentID, projectID, sessionID, path)
 		if err != nil {
-			slog.Warn("split file: workspace get failed", "key", key, "error", err)
+			slog.Warn("split file: workspace get failed", "path", path, "error", err)
 			continue
 		}
-		data, readErr := io.ReadAll(rc)
-		rc.Close()
-		if readErr != nil || len(data) == 0 || len(data) > maxAttachmentBytes {
+		if len(data) > maxAttachmentBytes {
+			slog.Warn("split file: skipping oversize attachment",
+				"agent", agentID, "session", sessionID, "filename", base, "size", len(data), "cap", maxAttachmentBytes)
 			continue
 		}
-		base := filepath.Base(key)
 		items = append(items, bus.MediaItem{Filename: base, ContentType: mime.TypeByExtension(filepath.Ext(base)), Bytes: data})
 		out.WriteString(reply[cursor:m[0]])
 		cursor = m[1]
@@ -991,6 +999,78 @@ func splitFilesFromReply(ctx context.Context, ws workspace.Store, agentID, proje
 	}
 	out.WriteString(reply[cursor:])
 	return strings.TrimSpace(out.String()), items
+}
+
+// resolveWorkspaceBytes reads a workspace-relative key for an outbound
+// media/file ref, looking beyond just the session scope.
+//
+// Agents emit refs as bare relative paths (`![cat](cat.png)`), but the
+// file they name was not necessarily written into the session scope
+// the gateway resolves against (sessions/<chatID>/). Turns that run
+// without a session scope — cron jobs, web-dashboard default scope,
+// and anything that shells out to a host tool whose cwd is the
+// agent-shared root (`exec`, the local-coding-agents hand-off) — drop
+// their files directly under <root>/<agent>/. Resolving only the
+// session scope therefore misses the file, and the image is silently
+// stripped from the reply with nothing sent to the IM channel.
+//
+// So try the session scope first (the common case, and the only scope
+// a chat can normally write to) and then widen to the project root and
+// the agent-shared root. Every candidate is still passed through
+// workspace.Store, so the ".." escape guard in the backend applies to
+// all of them.
+func resolveWorkspaceBytes(ctx context.Context, ws workspace.Store, agentID, projectID, sessionID, path string) ([]byte, string, error) {
+	if ws == nil {
+		return nil, "", fmt.Errorf("no workspace store")
+	}
+	key := strings.TrimPrefix(path, "/workspace/")
+	key = strings.TrimPrefix(key, "workspace/")
+	key = strings.TrimPrefix(key, "/")
+	if key == "" {
+		return nil, "", fmt.Errorf("empty workspace key")
+	}
+	candidates := [][2]string{{projectID, sessionID}}
+	if projectID != "" {
+		candidates = append(candidates, [2]string{projectID, ""})
+	}
+	if sessionID != "" && projectID != "" {
+		candidates = append(candidates, [2]string{"", sessionID})
+	}
+	candidates = append(candidates, [2]string{"", ""})
+
+	var lastErr error
+	for i, c := range candidates {
+		dup := false
+		for _, prev := range candidates[:i] {
+			if prev == c {
+				dup = true
+				break
+			}
+		}
+		if dup {
+			continue
+		}
+		rc, err := ws.Get(ctx, agentID, c[0], c[1], key)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		data, readErr := io.ReadAll(rc)
+		rc.Close()
+		if readErr != nil {
+			lastErr = readErr
+			continue
+		}
+		if len(data) == 0 {
+			lastErr = fmt.Errorf("workspace: %s is empty", key)
+			continue
+		}
+		return data, filepath.Base(key), nil
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("workspace: %s not found in any scope", key)
+	}
+	return nil, "", lastErr
 }
 
 // splitMediaFromReply pulls every `![alt](src)` ref out of `reply` and
@@ -1049,23 +1129,13 @@ func splitMediaFromReply(ctx context.Context, ws workspace.Store, agentID, proje
 				filename = name
 			}
 		} else if ws != nil {
-			key := strings.TrimPrefix(path, "/workspace/")
-			key = strings.TrimPrefix(key, "workspace/")
-			key = strings.TrimPrefix(key, "/")
-			if key != "" {
-				rc, err := ws.Get(ctx, agentID, projectID, sessionID, key)
-				if err != nil {
-					slog.Warn("split media: workspace get failed", "agent", agentID, "project", projectID, "session", sessionID, "key", key, "error", err)
-				} else {
-					data, rerr := io.ReadAll(rc)
-					rc.Close()
-					if rerr != nil {
-						slog.Warn("split media: read failed", "key", key, "error", rerr)
-					} else {
-						bytes = data
-						filename = filepath.Base(key)
-					}
-				}
+			data, name, err := resolveWorkspaceBytes(ctx, ws, agentID, projectID, sessionID, path)
+			if err != nil {
+				slog.Warn("split media: workspace get failed",
+					"agent", agentID, "project", projectID, "session", sessionID, "key", path, "error", err)
+			} else {
+				bytes = data
+				filename = name
 			}
 		}
 
