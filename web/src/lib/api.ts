@@ -2301,6 +2301,48 @@ export async function deleteChannelPairing(
   return res.json();
 }
 
+// Agent configuration archive (Settings → Advanced). The export is a
+// ZIP of identity files + the agent's own skills; import replaces both.
+export interface AgentArchivePreview {
+  ok?: boolean;
+  format: "fastclaw-agent" | "workspace";
+  name?: string;
+  description?: string;
+  files: string[];
+  skills: string[];
+  ignored: string[];
+  error?: string;
+}
+
+export async function exportAgentArchive(agentId: string): Promise<{ blob: Blob; filename: string }> {
+  const res = await apiFetch(`/api/agents/${agentId}/archive`);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Export failed (${res.status})`);
+  }
+  const disposition = res.headers.get("Content-Disposition") || "";
+  const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  const plain = disposition.match(/filename="?([^";]+)"?/i)?.[1];
+  const filename = encoded ? decodeURIComponent(encoded) : plain || `${agentId}-config.zip`;
+  return { blob: await res.blob(), filename };
+}
+
+export async function importAgentArchive(
+  agentId: string,
+  file: File,
+  dryRun: boolean,
+): Promise<AgentArchivePreview> {
+  const fd = new FormData();
+  fd.append("file", file, file.name);
+  const res = await apiFetch(`/api/agents/${agentId}/archive${dryRun ? "?dryRun=1" : ""}`, {
+    method: "POST",
+    body: fd,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Import failed (${res.status})`);
+  return data;
+}
+
 export async function updateAgentChannel(
   agentId: string,
   type: string,

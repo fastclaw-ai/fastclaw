@@ -11,6 +11,7 @@ import {
   Palette,
   Plug,
   RadioIcon,
+  SlidersHorizontalIcon,
   ServerIcon,
   SparklesIcon,
   UserCog,
@@ -23,6 +24,7 @@ import { AgentIdContext } from "@/hooks/use-agent-id";
 import { useLocale, type MessageKey } from "@/components/locale-provider";
 
 import AgentProfilePanel from "@/components/agent-profile-panel";
+import AgentAdvancedPanel from "@/components/agent-advanced-panel";
 import AgentCustomizePage from "@/app/console/agents/[id]/customize/page";
 import AgentModelsPage from "@/app/console/agents/[id]/models/page";
 import AgentContextPage from "@/app/console/agents/[id]/context/page";
@@ -49,6 +51,7 @@ export type AgentSettingsTab =
   | "channels"
   | "scheduler"
   | "usage"
+  | "advanced"
   | "account"
   | "general";
 
@@ -66,6 +69,7 @@ const AGENT_TABS: Array<{ id: AgentSettingsTab; label: string; icon: TabIcon }> 
   { id: "channels", label: "Channels", icon: RadioIcon },
   { id: "scheduler", label: "Scheduler", icon: ClockIcon },
   { id: "usage", label: "Token Usage", icon: CoinsIcon },
+  { id: "advanced", label: "Advanced", icon: SlidersHorizontalIcon },
 ];
 
 const USER_TABS: Array<{ id: AgentSettingsTab; label: string; icon: TabIcon }> = [
@@ -85,6 +89,7 @@ const TAB_LABEL_KEYS: Record<AgentSettingsTab, MessageKey> = {
   channels: "settings.tab.channels",
   scheduler: "settings.tab.scheduler",
   usage: "settings.tab.usage",
+  advanced: "settings.tab.advanced",
   account: "settings.tab.account",
   general: "settings.tab.general",
 };
@@ -207,6 +212,7 @@ export function AgentSettingsDialog({
           {tab === "channels" && <AgentChannelsPage />}
           {tab === "scheduler" && <AgentSchedulerPage />}
           {tab === "usage" && <AgentUsagePage />}
+          {tab === "advanced" && <AgentAdvancedPanel />}
           {tab === "account" && (
             <div className="max-w-3xl p-4 md:p-6">
               <AccountSettingsPage />

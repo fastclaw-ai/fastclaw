@@ -309,6 +309,8 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("GET /api/agents/{id}/config", auth(s.handleGetAgentConfig))
 	mux.HandleFunc("GET /api/agents/{id}/tools/registered", auth(s.handleListAgentRegisteredTools))
 	mux.HandleFunc("DELETE /api/agents/{id}", auth(s.handleDeleteAgent))
+	mux.HandleFunc("GET /api/agents/{id}/archive", auth(s.handleExportAgentArchive))
+	mux.HandleFunc("POST /api/agents/{id}/archive", auth(s.handleImportAgentArchive))
 
 	mux.HandleFunc("GET /api/agents/{id}/files", auth(s.handleAgentFileList))
 	mux.HandleFunc("GET /api/agents/{id}/files.zip", auth(s.handleAgentFilesZip))
