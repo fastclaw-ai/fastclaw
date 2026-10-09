@@ -1517,6 +1517,10 @@ export function ChatScreen() {
   }, [fallbackChatHref]);
   const navigationPanelOpen = botPanelOpen || isChatsPage;
 
+  // The header is memoized; reach the per-render new-chat handler
+  // through a ref instead of rebuilding the header on every render.
+  const newChatRef = useRef<() => void>(() => {});
+
   // Conversation header follows the compact Bot pattern: identity opens
   // settings, while the monitor action opens the live workspace.
   const headerSlot = useMemo(
@@ -1542,9 +1546,20 @@ export function ChatScreen() {
         {/* Pushes share + the panel toggle to the right edge, with or
             without the share button. */}
         <span aria-hidden="true" className="flex-1" />
-        {/* Share copies this session's link, so it only shows on a session
-            that exists (not a new, unsent chat). */}
+        {/* New chat and share act on a session that exists, so both stay
+            hidden on a new, unsent chat. */}
+        <div className="flex shrink-0 items-center gap-1">
         {routeSessionId && sessions.some((session) => session.id === routeSessionId) && (
+        <>
+        <button
+          type="button"
+          onClick={() => newChatRef.current()}
+          className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          title={tr("New chat (⌘N)", "新建对话 (⌘N)")}
+          aria-label={tr("New chat", "新建对话")}
+        >
+          <SquarePen className="size-[17px]" />
+        </button>
         <ShareAgentMenu
           agentId={selectedAgent}
           sessionId={routeSessionId}
@@ -1553,6 +1568,7 @@ export function ChatScreen() {
           canChangeVisibility={agentDetail?.role === "owner" && !isActAsView}
           onPublicChange={handleAgentPublicChange}
         />
+        </>
         )}
         <RightPanelToggle
           open={navigationPanelOpen}
@@ -1569,6 +1585,7 @@ export function ChatScreen() {
             setBotPanelOpen((value) => !value);
           }}
         />
+        </div>
       </div>
     ),
     [
@@ -1583,6 +1600,8 @@ export function ChatScreen() {
       leaveChatsPage,
       navigationPanelOpen,
       botPanelOpen,
+      routeSessionId,
+      sessions,
       tr,
     ],
   );
@@ -2708,6 +2727,7 @@ export function ChatScreen() {
     setMessages([]);
     window.history.replaceState(null, "", chatHref(newId));
   };
+  newChatRef.current = handleNewChat;
 
   const handleSelectSession = (sid: string) => {
     resetTodoScope(selectedAgent, sid);
