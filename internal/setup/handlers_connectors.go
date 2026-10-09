@@ -33,9 +33,7 @@ import (
 //   POST   /api/connector-requests/confirm        {providerSessionId}: the return page
 
 func (s *Server) registerConnectorRoutes(mux *http.ServeMux, auth func(http.HandlerFunc) http.HandlerFunc) {
-	if svc := connectors.Get(); svc != nil {
-		svc.SetWaker(s.wakeConnectorChat)
-	}
+	connectors.SetWaker(s.wakeConnectorChat)
 	mux.HandleFunc("GET /api/connectors", auth(s.handleConnectorCatalog))
 	mux.HandleFunc("GET /api/connectors/{name}/avatar", auth(s.handleConnectorAvatar))
 	mux.HandleFunc("GET /api/connector-accounts", auth(s.handleConnectorAccounts))
@@ -48,6 +46,110 @@ func (s *Server) registerConnectorRoutes(mux *http.ServeMux, auth func(http.Hand
 	mux.HandleFunc("GET /api/connector-requests/{id}", auth(s.handleConnectorRequestStatus))
 	mux.HandleFunc("POST /api/connector-requests/{id}/recheck", auth(s.handleConnectorRequestRecheck))
 	mux.HandleFunc("POST /api/connector-requests/{id}/cancel", auth(s.handleConnectorRequestCancel))
+	// System → Tools → Connectors (super admin): where Connany is.
+	mux.HandleFunc("GET /api/admin/connectors-config", s.requireSuperAdmin(s.handleGetConnectorsConfig))
+	mux.HandleFunc("PUT /api/admin/connectors-config", s.requireSuperAdmin(s.handleSaveConnectorsConfig))
+	mux.HandleFunc("DELETE /api/admin/connectors-config", s.requireSuperAdmin(s.handleClearConnectorsConfig))
+}
+
+// keyHint shows only the last four characters of a key.
+func keyHint(key string) string {
+	if len(key) <= 4 {
+		return ""
+	}
+	return "…" + key[len(key)-4:]
+}
+
+// connectorsConfigView is the admin form's state. The key itself never
+// leaves the server.
+func (s *Server) connectorsConfigView(ctx context.Context) map[string]any {
+	view := map[string]any{"enabled": connectors.Get() != nil, "source": "", "url": "", "apiKeySet": false, "apiKeyHint": ""}
+	env := connectors.EnvFallback()
+	view["envConfigured"] = env.URL != "" && env.APIKey != ""
+	if s.dataStore != nil {
+		if saved, ok, err := connectors.LoadSettings(ctx, s.dataStore); err == nil && ok {
+			view["source"] = "settings"
+			view["url"] = saved.URL
+			view["apiKeySet"] = saved.APIKey != ""
+			view["apiKeyHint"] = keyHint(saved.APIKey)
+			return view
+		}
+	}
+	if env.URL != "" && env.APIKey != "" {
+		view["source"] = "env"
+		view["url"] = env.URL
+		view["apiKeySet"] = true
+		view["apiKeyHint"] = keyHint(env.APIKey)
+	}
+	return view
+}
+
+func (s *Server) handleGetConnectorsConfig(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, http.StatusOK, s.connectorsConfigView(r.Context()))
+}
+
+// handleSaveConnectorsConfig checks the URL + key against Connany, saves
+// them and switches the running service over — no restart. An empty key
+// keeps the one already saved (the form never sees it).
+func (s *Server) handleSaveConnectorsConfig(w http.ResponseWriter, r *http.Request) {
+	if s.dataStore == nil {
+		jsonResponse(w, http.StatusServiceUnavailable, map[string]any{"error": "no data store", "code": "service_unavailable"})
+		return
+	}
+	var req struct {
+		URL    string `json:"url"`
+		APIKey string `json:"apiKey"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		connectorError(w, &connectors.Error{Code: "invalid_request"})
+		return
+	}
+	url := strings.TrimRight(strings.TrimSpace(req.URL), "/")
+	key := strings.TrimSpace(req.APIKey)
+	if key == "" {
+		if saved, ok, _ := connectors.LoadSettings(r.Context(), s.dataStore); ok {
+			key = saved.APIKey
+		} else if env := connectors.EnvFallback(); env.APIKey != "" {
+			key = env.APIKey
+		}
+	}
+	if url == "" || key == "" {
+		connectorError(w, &connectors.Error{Code: "invalid_request"})
+		return
+	}
+	probeCtx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	if err := connectors.Probe(probeCtx, url, key); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": connectors.Code(err), "code": connectors.Code(err)})
+		return
+	}
+	if err := connectors.SaveSettings(r.Context(), s.dataStore, connectors.Settings{URL: url, APIKey: key}); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	if _, err := connectors.Apply(r.Context(), s.dataStore); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	jsonResponse(w, http.StatusOK, s.connectorsConfigView(r.Context()))
+}
+
+// handleClearConnectorsConfig removes the saved settings; the env
+// configuration (if any) applies again, else connectors turn off.
+func (s *Server) handleClearConnectorsConfig(w http.ResponseWriter, r *http.Request) {
+	if s.dataStore == nil {
+		jsonResponse(w, http.StatusServiceUnavailable, map[string]any{"error": "no data store"})
+		return
+	}
+	if err := connectors.ClearSettings(r.Context(), s.dataStore); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	if _, err := connectors.Apply(r.Context(), s.dataStore); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	jsonResponse(w, http.StatusOK, s.connectorsConfigView(r.Context()))
 }
 
 // connectorCaller resolves the service and the caller, or writes the error.

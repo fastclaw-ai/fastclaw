@@ -10,13 +10,23 @@ Status: first version — **read-only**, **web 1:1 chats with your own agents**.
 
 ## Configuration
 
+A super admin sets it in **System → Tools → Connectors**: the Connany address
+and project API key. Saving checks them against the service and applies at
+once — no restart. The key stays on the server: the form only ever sees its
+last four characters.
+
+Alternatively, environment variables (used when nothing is saved in the UI):
+
 | Env | |
 | --- | --- |
 | `FASTCLAW_CONNANY_URL` | Connany's origin. HTTPS, or HTTP on `localhost` for development. |
-| `FASTCLAW_CONNANY_API_KEY` | The project key. Server-side only; scrubbed from the process environment after boot. |
+| `FASTCLAW_CONNANY_API_KEY` | The project key. Scrubbed from the process environment after boot. |
 
-Both unset → connectors are off: Settings shows "not available", agents get no
-tool. For `make dev`, put them in an untracked `.env.dev` at the repo root.
+Neither → connectors are off: Settings shows "not available", agents get no
+tool. For `make dev`, the env vars can go in an untracked `.env.dev`.
+
+Each person then connects their own accounts in **Settings → Connectors**
+(account menu → Settings).
 
 ## Ownership
 

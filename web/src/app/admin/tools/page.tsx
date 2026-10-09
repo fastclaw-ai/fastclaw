@@ -33,11 +33,13 @@ import {
   type ToolCategorySettings,
 } from "@/lib/api";
 import RuntimeSettingsPage from "@/app/settings/runtime/page";
+import { ConnectorsAdminPanel } from "@/components/connectors-admin";
 import { useLocale } from "@/components/locale-provider";
 
 // Sentinel value used as the active rail entry when Runtime is selected.
 // Real tool categories never start with "__" so this can never collide.
 const RUNTIME_ACTIVE = "__runtime__";
+const CONNECTORS_ACTIVE = "__connectors__";
 
 export default function ToolsPage() {
   const { tr } = useLocale();
@@ -126,13 +128,17 @@ export default function ToolsPage() {
         />
       </aside>
       <div className="flex-1 min-w-0">
-        {error && active !== RUNTIME_ACTIVE && (
+        {error && active !== RUNTIME_ACTIVE && active !== CONNECTORS_ACTIVE && (
           <div className="mb-4 rounded-md border border-destructive/40 bg-destructive/10 px-4 py-2 text-sm text-destructive">
             {error}
           </div>
         )}
 
-        {active === RUNTIME_ACTIVE ? (
+        {active === CONNECTORS_ACTIVE ? (
+          // Deployment-wide like Runtime: where the connector service is.
+          // The panel manages its own save / loading state.
+          <ConnectorsAdminPanel />
+        ) : active === RUNTIME_ACTIVE ? (
           // Runtime is a deployment-wide knob (sandbox backend, etc.), not
           // a per-category provider; it lives in the same rail as the tool
           // categories purely as a convenient admin entry point. The
@@ -211,6 +217,13 @@ function CategoryRail({
           anyone else away. The hairline divider visually separates it
           from the per-category tool entries. */}
       <div className="hidden md:block my-1 border-t border-border/60" />
+      <button
+        type="button"
+        onClick={() => onSelect(CONNECTORS_ACTIVE)}
+        className={itemClass(active === CONNECTORS_ACTIVE)}
+      >
+        {tr("Connectors", "连接器")}
+      </button>
       <button
         type="button"
         onClick={() => onSelect(RUNTIME_ACTIVE)}

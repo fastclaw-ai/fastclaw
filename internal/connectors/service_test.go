@@ -171,7 +171,7 @@ func TestAuthorizationWakesConversationOnce(t *testing.T) {
 	ctx := context.Background()
 	var mu sync.Mutex
 	var woke []string
-	svc.SetWaker(func(userID, agentID, sessionID, text string) {
+	SetWaker(func(userID, agentID, sessionID, text string) {
 		mu.Lock()
 		woke = append(woke, userID+"|"+agentID+"|"+sessionID+"|"+text)
 		mu.Unlock()
@@ -238,7 +238,7 @@ func TestCancelNotifiesAndSettingsRequestsDoNot(t *testing.T) {
 	ctx := context.Background()
 	var woke []string
 	var mu sync.Mutex
-	svc.SetWaker(func(_, _, _, text string) { mu.Lock(); woke = append(woke, text); mu.Unlock() })
+	SetWaker(func(_, _, _, text string) { mu.Lock(); woke = append(woke, text); mu.Unlock() })
 
 	req, _ := svc.CreateRequest(ctx, "u1", "github", "connect", "", ChatRef{AgentID: "a", SessionID: "s"})
 	if v, err := svc.Cancel(ctx, "u1", req.ID); err != nil || v.Status != "cancelled" {

@@ -215,12 +215,12 @@ func runGateway(port int) error {
 		return fmt.Errorf("create gateway: %w", err)
 	}
 
-	// The person's connected third-party accounts (internal/connectors).
-	// Off unless FASTCLAW_CONNANY_URL + FASTCLAW_CONNANY_API_KEY are set.
-	if db, ok := gw.Store().(connectors.DB); ok {
-		if err := connectors.Configure(context.Background(), env.Connany.URL, env.Connany.APIKey, db); err != nil {
-			slog.Error("connectors disabled", "error", err)
-		}
+	// The person's connected third-party accounts (internal/connectors):
+	// configured in System → Tools → Connectors, else from
+	// FASTCLAW_CONNANY_URL + FASTCLAW_CONNANY_API_KEY; off when neither.
+	connectors.SetEnvFallback(connectors.Settings{URL: env.Connany.URL, APIKey: env.Connany.APIKey})
+	if _, err := connectors.Apply(context.Background(), gw.Store()); err != nil {
+		slog.Error("connectors disabled", "error", err)
 	}
 
 	// Remove credential-bearing env vars from the process environment

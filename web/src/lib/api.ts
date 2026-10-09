@@ -2639,3 +2639,28 @@ export function cancelConnectorRequest(id: string) {
 export function confirmConnectorReturn(providerSessionId: string) {
   return connectorJSON<ConnectorRequestView>("/api/connector-requests/confirm", jsonInit("POST", { providerSessionId }));
 }
+
+/** System → Tools → Connectors (super admin): where Connany is. The key
+ *  never comes back — only whether one is set and its last characters. */
+export interface ConnectorsConfig {
+  enabled: boolean;
+  source: "" | "settings" | "env";
+  url: string;
+  apiKeySet: boolean;
+  apiKeyHint: string;
+  envConfigured: boolean;
+}
+
+export function getConnectorsConfig() {
+  return connectorJSON<ConnectorsConfig>("/api/admin/connectors-config");
+}
+
+/** Validates against Connany, saves and applies at once. An empty apiKey
+ *  keeps the one already set. */
+export function saveConnectorsConfig(url: string, apiKey: string) {
+  return connectorJSON<ConnectorsConfig>("/api/admin/connectors-config", jsonInit("PUT", { url, apiKey }));
+}
+
+export function clearConnectorsConfig() {
+  return connectorJSON<ConnectorsConfig>("/api/admin/connectors-config", jsonInit("DELETE"));
+}

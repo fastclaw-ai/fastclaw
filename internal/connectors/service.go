@@ -122,7 +122,6 @@ type Service struct {
 	mu      sync.Mutex
 	catalog map[string]catalogEntry
 	conns   map[string]connsEntry
-	waker   Waker
 }
 
 type catalogEntry struct {
@@ -139,12 +138,17 @@ type connsEntry struct {
 var (
 	defaultMu  sync.RWMutex
 	defaultSvc *Service
+	waker      Waker
 )
 
-// Configure sets up the process-wide service. Connectors stay off (Get
-// returns nil) unless both the base URL and key are set.
+// Configure (re)sets the process-wide service; an admin saving the
+// settings takes effect at once. Connectors are off (Get returns nil)
+// unless both the base URL and key are set.
 func Configure(ctx context.Context, baseURL, apiKey string, db DB) error {
 	if baseURL == "" || apiKey == "" || db == nil {
+		defaultMu.Lock()
+		defaultSvc = nil
+		defaultMu.Unlock()
 		return nil
 	}
 	client, err := NewClient(baseURL, apiKey)
@@ -162,6 +166,25 @@ func Configure(ctx context.Context, baseURL, apiKey string, db DB) error {
 	return nil
 }
 
+// Probe checks a base URL + key against Connany before they're saved.
+func Probe(ctx context.Context, baseURL, apiKey string) error {
+	client, err := NewClient(baseURL, apiKey)
+	if err != nil {
+		return newError("invalid_url")
+	}
+	if _, _, err := client.Connectors(ctx, "en"); err != nil {
+		var se *ServiceError
+		if errors.As(err, &se) && se.Status == 401 {
+			return newError("invalid_key")
+		}
+		if errors.As(err, &se) {
+			return newError("service_unavailable")
+		}
+		return newError("unreachable")
+	}
+	return nil
+}
+
 // Get returns the configured service, or nil when connectors are off.
 func Get() *Service {
 	defaultMu.RLock()
@@ -170,10 +193,11 @@ func Get() *Service {
 }
 
 // SetWaker installs how a conversation is woken after an authorization.
-func (s *Service) SetWaker(w Waker) {
-	s.mu.Lock()
-	s.waker = w
-	s.mu.Unlock()
+// Package-level, so it survives Configure replacing the service.
+func SetWaker(w Waker) {
+	defaultMu.Lock()
+	waker = w
+	defaultMu.Unlock()
 }
 
 // Subject is a person's opaque id in Connany. Stable forever: changing
@@ -816,9 +840,9 @@ func (s *Service) notify(ctx context.Context, r *request, access *AccessListing,
 	if err != nil || !claimed {
 		return
 	}
-	s.mu.Lock()
-	wake := s.waker
-	s.mu.Unlock()
+	defaultMu.RLock()
+	wake := waker
+	defaultMu.RUnlock()
 	if wake == nil {
 		return
 	}
