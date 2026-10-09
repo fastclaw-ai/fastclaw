@@ -5,6 +5,26 @@ action on upgrade — read those notes before deploying.
 
 ## [Unreleased]
 
+### Added — connectors (Notion, GitHub, Linear, …)
+
+People connect their own accounts in Console → Connectors and agents they
+own can read from them in web chats, through the Connany connector service
+(configured in System → Tools → Connectors). Read-only for now; never
+available in IM, groups, cron or on someone else's agent. See
+`docs/connectors.md`.
+
+### Added — chat list working and unread states
+
+Agent and group rows in the chat list show a spinner while any of their
+chats is running — including IM and cron turns — and a red dot for unread
+replies.
+
+### Changed — long conversations open fast
+
+Chat history pages are read directly from the database instead of loading
+the whole conversation for every page, so very long chats open as fast as
+short ones. A New chat button now sits next to Share in the chat header.
+
 ### Added — agent configuration export / import
 
 Settings → Advanced exports an agent's identity files (SOUL.md, AGENTS.md,
