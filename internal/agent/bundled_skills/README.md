@@ -38,6 +38,9 @@ Currently bundled:
   code. Gated on `npx` (declared via `requires.bins`), so on hosts
   without Node it's filtered out by SkillsLoader rather than surfaced
   and broken. Same source-of-truth + rsync flow as skill-creator.
+- `local-coding-agents/` — drives the host's `codex` / `claude` CLIs
+  non-interactively (worktree per task, background run, verify, PR). Gated
+  on `anyBins: [codex, claude]`. Same source-of-truth + rsync flow.
 
 To add another bundled skill: drop the folder in here (or, better, add it
 to `make bundle-skills`) and rebuild.

@@ -23,7 +23,8 @@ func RegisterMessageAgent(r *Registry, send MessageAgentFunc) {
 		"Send a real private message to another of the user's agents. Use it when the user asks you to contact, ask, tell or send something to another agent, "+
 			"or to consult a specialist agent. The recipient runs in its own chat, where a copy is kept, and its answer is returned to you. "+
 			"Answer the user in your own voice, attributing the findings to the recipient; do not paste its reply verbatim. "+
-			"Never pretend to have contacted an agent without calling this tool, and do not ask the user to relay the message.",
+			"Never pretend to have contacted an agent without calling this tool, and do not ask the user to relay the message. "+
+			"Only reaches FastClaw agents: command-line coding tools on the host such as codex or claude (Claude Code) are not agents — run them with exec (see the local-coding-agents skill).",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{

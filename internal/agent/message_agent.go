@@ -50,7 +50,7 @@ func (a *Agent) messageAgent(ctx context.Context, resolve AgentResolver, ownerUs
 	}
 	target, err := resolve(ctx, strings.TrimSpace(ref))
 	if err != nil || target == nil {
-		return "", fmt.Errorf("no agent named %q exists", ref)
+		return "", fmt.Errorf("no agent named %q exists. message_agent only reaches the user's FastClaw agents; if %q is a program on the host (e.g. the codex or claude CLI), run it with exec instead", ref, ref)
 	}
 	if target == a || (target.agentID != "" && target.agentID == a.agentID) {
 		return "", fmt.Errorf("you cannot message yourself")

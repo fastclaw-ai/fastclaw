@@ -34,6 +34,8 @@ bundle-skills:
 	@cp -R skills/skill-creator internal/agent/bundled_skills/skill-creator
 	@rm -rf internal/agent/bundled_skills/find-skills
 	@cp -R skills/find-skills internal/agent/bundled_skills/find-skills
+	@rm -rf internal/agent/bundled_skills/local-coding-agents
+	@cp -R skills/local-coding-agents internal/agent/bundled_skills/local-coding-agents
 	@echo "==> bundled skills synced"
 
 # bundle-docs copies docs served by the binary into its embed tree
