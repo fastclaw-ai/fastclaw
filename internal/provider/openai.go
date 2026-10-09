@@ -98,8 +98,9 @@ type sseUsage struct {
 // by tool messages`. We strip the offending tool_calls (and any
 // orphan tool replies) at wire-build time so the request goes through
 // — the session keeps its historical record untouched.
-func toAPIMessages(msgs []Message) []json.RawMessage {
+func toAPIMessages(msgs []Message, model string) []json.RawMessage {
 	orphanAssistant, orphanTool := findOrphanToolCalls(msgs)
+	echoReasoning := needsReasoningEcho(msgs, model)
 	out := make([]json.RawMessage, 0, len(msgs))
 	for i, m := range msgs {
 		if orphanTool[i] {
@@ -111,7 +112,11 @@ func toAPIMessages(msgs []Message) []json.RawMessage {
 		// unless the cached message has orphan tool_calls, in which
 		// case rebuild it without them.
 		if m.Role == "assistant" && len(m.RawAssistant) > 0 && !orphanAssistant[i] {
-			out = append(out, m.RawAssistant)
+			raw := m.RawAssistant
+			if echoReasoning {
+				raw = withReasoningContent(raw)
+			}
+			out = append(out, raw)
 			continue
 		}
 
@@ -132,7 +137,54 @@ func toAPIMessages(msgs []Message) []json.RawMessage {
 			am.Content, _ = json.Marshal(m.Content)
 		}
 		raw, _ := json.Marshal(am)
+		if echoReasoning && m.Role == "assistant" {
+			raw = withReasoningContent(raw)
+		}
 		out = append(out, raw)
+	}
+	return out
+}
+
+// needsReasoningEcho reports whether the upstream is (likely) a thinking-
+// mode model that rejects any assistant message without
+// `reasoning_content` — DeepSeek answers 400 "The reasoning_content in the
+// thinking mode must be passed back to the API". That happens when an
+// assistant turn has no reasoning to echo: the model skipped thinking for
+// that step, or a routing model (e.g. "autojev/fast") served it from a
+// non-thinking backend. Sending an empty reasoning_content satisfies the
+// check. We only add it when the model name or the history says thinking
+// mode is in play, because strict OpenAI-compatible APIs reject unknown
+// message fields.
+func needsReasoningEcho(msgs []Message, model string) bool {
+	if strings.Contains(strings.ToLower(model), "deepseek") {
+		return true
+	}
+	for _, m := range msgs {
+		if m.Role != "assistant" {
+			continue
+		}
+		if m.Thinking != "" || bytes.Contains(m.RawAssistant, []byte(`"reasoning_content"`)) {
+			return true
+		}
+	}
+	return false
+}
+
+// withReasoningContent adds `"reasoning_content":""` to a wire-format
+// assistant message that lacks the field. Anything that isn't an
+// OpenAI-shaped assistant object is returned unchanged.
+func withReasoningContent(raw json.RawMessage) json.RawMessage {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return raw
+	}
+	if _, ok := obj["reasoning_content"]; ok || string(obj["role"]) != `"assistant"` {
+		return raw
+	}
+	obj["reasoning_content"] = json.RawMessage(`""`)
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return raw
 	}
 	return out
 }
@@ -265,7 +317,7 @@ func initialOpenAIRequestMode(model string) openAIRequestMode {
 func (p *OpenAIProvider) buildRequest(ctx context.Context, messages []Message, tools []Tool, model string, maxTokens int, temperature float64, stream bool, mode openAIRequestMode) (*http.Request, error) {
 	req := chatRequest{
 		Model:    StripProviderPrefix(model),
-		Messages: toAPIMessages(messages),
+		Messages: toAPIMessages(messages, model),
 		Stream:   stream,
 	}
 	if !mode.omitTemperature {

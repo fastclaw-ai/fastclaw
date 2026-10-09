@@ -131,7 +131,7 @@ func TestChatStreamRawAssistantIncludesToolCalls(t *testing.T) {
 	// Also double-check the wire output doesn't drop the assistant's
 	// tool_calls — toAPIMessages preferring RawAssistant must give a
 	// payload that still carries "tool_calls".
-	wire := toAPIMessages(msgs)
+	wire := toAPIMessages(msgs, "")
 	if len(wire) != 3 {
 		t.Fatalf("toAPIMessages returned %d msgs, want 3", len(wire))
 	}
@@ -152,7 +152,7 @@ func TestToAPIMessagesRebuildAssistantKeepsReasoningContent(t *testing.T) {
 		{Role: "tool", ToolCallID: "call_abc", Content: "ok"},
 	}
 
-	wire := toAPIMessages(msgs)
+	wire := toAPIMessages(msgs, "")
 	if len(wire) != 3 {
 		t.Fatalf("toAPIMessages returned %d msgs, want 3", len(wire))
 	}
