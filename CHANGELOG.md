@@ -24,6 +24,8 @@ replies.
 Chat history pages are read directly from the database instead of loading
 the whole conversation for every page, so very long chats open as fast as
 short ones. A New chat button now sits next to Share in the chat header.
+Pictures in replies are shown at a bounded size and open full size on
+click.
 
 ### Added — agent configuration export / import
 
