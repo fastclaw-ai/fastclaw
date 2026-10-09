@@ -41,6 +41,9 @@ type AgentHandle interface {
 	// normal send).
 	SteerWeb(sessionId, projectIDHint, text string) bool
 	WebChatHistory(sessionId string) []map[string]any
+	// WebChatHistoryPage pages the history in the database; ok=false
+	// means the caller should page WebChatHistory in memory instead.
+	WebChatHistoryPage(sessionId string, before int64, limit int) (history []map[string]any, start int64, hasMore, ok bool)
 	WebChatSessions() []session.WebSession
 	// SessionTurnActive reports a turn in flight in that session, from any channel.
 	SessionTurnActive(sessionKey string) bool

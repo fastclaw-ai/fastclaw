@@ -1716,15 +1716,30 @@ func (s *Server) handleChatHistory(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, http.StatusNotFound, map[string]any{"error": "agent not found"})
 		return
 	}
-	history := ag.WebChatHistory(sessionID)
+	var history []map[string]any
 	historyStart := 0
 	hasMoreHistory := false
 	if limit, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && limit > 0 {
-		before := len(history)
+		limit = max(1, min(limit, 100))
+		before := -1
 		if value, parseErr := strconv.Atoi(r.URL.Query().Get("before")); parseErr == nil {
 			before = value
 		}
-		history, historyStart, hasMoreHistory = paginateChatHistory(history, limit, before)
+		// The cursor is an archive seq when the database pages the
+		// history, otherwise an index into the in-memory list. A session
+		// keeps one mode, so a client's cursor always matches it.
+		page, start, more, ok := ag.WebChatHistoryPage(sessionID, int64(before), limit)
+		if ok {
+			history, historyStart, hasMoreHistory = page, int(start), more
+		} else {
+			history = ag.WebChatHistory(sessionID)
+			if before < 0 {
+				before = len(history)
+			}
+			history, historyStart, hasMoreHistory = paginateChatHistory(history, limit, before)
+		}
+	} else {
+		history = ag.WebChatHistory(sessionID)
 	}
 	resp := map[string]any{
 		"history":        history,

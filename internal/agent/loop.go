@@ -1087,7 +1087,30 @@ func (a *Agent) WebChatHistory(sessionId string) []map[string]any {
 	}
 	resolved := a.sessions.ResolveSessionKey(sessionId)
 	sess := a.sessions.GetByKey(resolved)
-	msgs := sess.ArchivedMessages()
+	return webHistoryEntries(sess.ArchivedMessages())
+}
+
+// WebChatHistoryPage returns one page of chat history ending before the
+// cursor, read straight from the archive so a long conversation opens as
+// fast as a short one. before < 0 asks for the newest page; the returned
+// start is the cursor for the next older page. ok is false when the
+// session has no paged archive and the caller should page
+// WebChatHistory in memory instead.
+func (a *Agent) WebChatHistoryPage(sessionId string, before int64, limit int) (history []map[string]any, start int64, hasMore, ok bool) {
+	if sessionId == "" {
+		sessionId = "web-ui"
+	}
+	resolved := a.sessions.ResolveSessionKey(sessionId)
+	msgs, start, hasMore, ok := a.sessions.ArchivedMessagesPage(resolved, before, limit)
+	if !ok {
+		return nil, 0, false, false
+	}
+	return webHistoryEntries(msgs), start, hasMore, true
+}
+
+// webHistoryEntries converts archived messages into the chat UI's
+// history shape, dropping runtime-injected and empty messages.
+func webHistoryEntries(msgs []provider.Message) []map[string]any {
 	var history []map[string]any
 	var groupTurnID string
 	for _, m := range msgs {

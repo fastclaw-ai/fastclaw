@@ -189,6 +189,12 @@ type Store interface {
 	// untouched by compaction. DeleteSession cascades to clean these up.
 	AppendSessionMessage(ctx context.Context, userID, agentID, sessionKey string, msg SessionMessage) error
 	ListSessionMessages(ctx context.Context, userID, agentID, sessionKey string) ([]SessionMessage, error)
+	// ListSessionMessagesPage returns the archived rows with seq in
+	// [start, before), where start is the seq of a user turn chosen so
+	// the page holds about limit rows and never splits a turn. before <
+	// 0 means "from the newest row". hasMore reports rows below start.
+	// An empty page with start = -1 means the session has no archive.
+	ListSessionMessagesPage(ctx context.Context, userID, agentID, sessionKey string, before int64, limit int) (msgs []SessionMessage, start int64, hasMore bool, err error)
 	// CountChatterUserMessages returns how many role='user' rows this
 	// chatter has accumulated under the agent — across all sessions,
 	// all channels. Used by the autoPersist gate as a *durable* "every

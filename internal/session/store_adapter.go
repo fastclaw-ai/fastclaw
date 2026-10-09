@@ -184,6 +184,30 @@ func (a *StoreAdapter) ListMessages(ctx context.Context, agentID, sessionKey str
 	return msgs, nil
 }
 
+// ListMessagesPage reads one page of the archive; see
+// store.Store.ListSessionMessagesPage for the cursor contract.
+func (a *StoreAdapter) ListMessagesPage(ctx context.Context, agentID, sessionKey string, before int64, limit int) ([]provider.Message, int64, bool, error) {
+	sms, start, hasMore, err := a.st.ListSessionMessagesPage(ctx, a.resolveSessionOwner(ctx, agentID, sessionKey), agentID, sessionKey, before, limit)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	msgs := make([]provider.Message, len(sms))
+	for i, m := range sms {
+		msgs[i] = providerMessageFromStored(m)
+	}
+	return msgs, start, hasMore, nil
+}
+
+// SessionExists checks for the session row without reading its
+// messages, under the same owner rules as GetSession.
+func (a *StoreAdapter) SessionExists(ctx context.Context, agentID, sessionKey string) (bool, error) {
+	_, _, _, err := a.st.LookupSessionTriple(ctx, a.resolveSessionOwner(ctx, agentID, sessionKey), agentID, sessionKey)
+	if errors.Is(err, store.ErrNotFound) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 // sessionMessageFromProvider converts a provider.Message into the wire
 // shape stored in both sessions.messages (as a JSON array element) and
 // session_messages (as a row). Single conversion site so the two paths

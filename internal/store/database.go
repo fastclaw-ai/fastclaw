@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -1032,7 +1033,7 @@ func (d *DBStore) migrateCronJobsAddUserID(ctx context.Context) error {
 // migrateCronJobsAddChatterID retrofits chatter_id onto cron_jobs so a
 // job created by one chatter of a public agent is invisible to the
 // others (the list_cron_jobs tool filters on it). Legacy rows default to
-// '' — they predate per-chatter attribution, so they're treated as
+// ” — they predate per-chatter attribution, so they're treated as
 // owner/system-owned and only surface in the owner's web dashboard / CLI
 // (the agent tool layer hides empty-chatter rows from any chatter). A
 // partial index keeps the lookup cheap and legacy rows out of it.
@@ -3280,6 +3281,73 @@ func (d *DBStore) ListSessionMessages(ctx context.Context, userID, agentID, sess
 	if err != nil {
 		return nil, err
 	}
+	return scanSessionMessages(rows)
+}
+
+// ListSessionMessagesPage reads one page of the archive without loading
+// the rest of it, so opening a long conversation costs the same as a
+// short one. See the Store interface for the start / hasMore contract.
+func (d *DBStore) ListSessionMessagesPage(ctx context.Context, userID, agentID, sessionKey string, before int64, limit int) ([]SessionMessage, int64, bool, error) {
+	if before < 0 {
+		before = math.MaxInt32
+	}
+	limit = max(1, limit)
+	scope := fmt.Sprintf(`FROM session_messages WHERE user_id = %s AND agent_id = %s AND session_key = %s`,
+		d.ph(1), d.ph(2), d.ph(3))
+	args := []any{userID, agentID, sessionKey}
+	queryInt := func(query string, extra ...any) (sql.NullInt64, error) {
+		var v sql.NullInt64
+		err := d.db.QueryRowContext(ctx, query, append(append([]any{}, args...), extra...)...).Scan(&v)
+		return v, err
+	}
+
+	// The lowest seq among the limit newest rows below before.
+	candidate, err := queryInt(fmt.Sprintf(`SELECT MIN(seq) FROM (SELECT seq %s AND seq < %s ORDER BY seq DESC LIMIT %d) page`,
+		scope, d.ph(4), limit), before)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	if !candidate.Valid {
+		return nil, -1, false, nil
+	}
+	// Start on a visible user turn so a tool call and its results are
+	// never split across pages: the first one inside the window, else
+	// the one before it, else the beginning of the session.
+	userTurn := `role = 'user' AND origin = ''`
+	start, err := queryInt(fmt.Sprintf(`SELECT MIN(seq) %s AND seq >= %s AND seq < %s AND %s`,
+		scope, d.ph(4), d.ph(5), userTurn), candidate.Int64, before)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	if !start.Valid {
+		if start, err = queryInt(fmt.Sprintf(`SELECT MAX(seq) %s AND seq < %s AND %s`,
+			scope, d.ph(4), userTurn), candidate.Int64); err != nil {
+			return nil, 0, false, err
+		}
+	}
+	if !start.Valid {
+		start = sql.NullInt64{Valid: true}
+	}
+
+	rows, err := d.db.QueryContext(ctx,
+		fmt.Sprintf(`SELECT role, content, content_parts, tool_calls, tool_call_id, name, metadata, thinking, raw_assistant, origin, created_at, provider, model
+			%s AND seq >= %s AND seq < %s ORDER BY seq ASC`, scope, d.ph(4), d.ph(5)),
+		userID, agentID, sessionKey, start.Int64, before)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	msgs, err := scanSessionMessages(rows)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	older, err := queryInt(fmt.Sprintf(`SELECT MAX(seq) %s AND seq < %s`, scope, d.ph(4)), start.Int64)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	return msgs, start.Int64, older.Valid, nil
+}
+
+func scanSessionMessages(rows *sql.Rows) ([]SessionMessage, error) {
 	defer rows.Close()
 	var out []SessionMessage
 	for rows.Next() {

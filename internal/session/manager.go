@@ -321,8 +321,34 @@ func (m *Manager) SessionExists(sessionKey string) bool {
 		// on disk (empty file → empty Session, harmless).
 		return true
 	}
+	if checker, ok := m.store.(interface {
+		SessionExists(ctx context.Context, agentID, sessionKey string) (bool, error)
+	}); ok {
+		exists, err := checker.SessionExists(m.ctx(), m.agentID, sessionKey)
+		return err == nil && exists
+	}
 	msgs, err := m.store.GetSession(m.ctx(), m.agentID, sessionKey)
 	return err == nil && msgs != nil
+}
+
+// ArchivedMessagesPage reads one page of a session's archive straight
+// from the store, without loading the session's working set. ok is
+// false when there is no paged archive to read (file-backed mode or a
+// session that predates the archive); callers then fall back to
+// ArchivedMessages. start and hasMore follow
+// store.Store.ListSessionMessagesPage.
+func (m *Manager) ArchivedMessagesPage(sessionKey string, before int64, limit int) (msgs []provider.Message, start int64, hasMore, ok bool) {
+	pager, isPager := m.store.(interface {
+		ListMessagesPage(ctx context.Context, agentID, sessionKey string, before int64, limit int) ([]provider.Message, int64, bool, error)
+	})
+	if !isPager {
+		return nil, 0, false, false
+	}
+	msgs, start, hasMore, err := pager.ListMessagesPage(m.ctx(), m.agentID, sessionKey, before, limit)
+	if err != nil || start < 0 {
+		return nil, 0, false, false
+	}
+	return msgs, start, hasMore, true
 }
 
 // ResolveSessionKey turns a URL token (`?session=…`) into the

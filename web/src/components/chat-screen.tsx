@@ -1642,6 +1642,18 @@ export function ChatScreen() {
           return;
         }
         const built = buildChatMessages(history, historyStart);
+        setMessages(built);
+        setLoadedSessionId(sessionId);
+        // Attach the files after the conversation is on screen: listing a
+        // large workspace can take a while and must not hold up the chat.
+        let anchorId = "";
+        for (let i = built.length - 1; i >= 0; i--) {
+          if (built[i].role === "agent" || built[i].role === "tool-group") {
+            anchorId = built[i].id;
+            break;
+          }
+        }
+        if (!anchorId) return;
         try {
           // listAgentFiles(agentId, sessionId) lets the backend pick
           // the right prefix — projects/<pid>/ for project chats,
@@ -1653,18 +1665,15 @@ export function ChatScreen() {
           )
             .filter((f) => !isSystemFile(f.path))
             .map((f) => ({ path: f.path, size: f.size }));
-          if (sessionFiles.length > 0) {
-            for (let i = built.length - 1; i >= 0; i--) {
-              if (built[i].role === "agent" || built[i].role === "tool-group") {
-                built[i] = { ...built[i], files: sessionFiles };
-                break;
-              }
-            }
-          }
+          if (aborted || sessionFiles.length === 0) return;
+          setMessages((current) =>
+            current.map((message) =>
+              message.id === anchorId && !message.files
+                ? { ...message, files: sessionFiles }
+                : message,
+            ),
+          );
         } catch { /* listing failed — fall back to no panel */ }
-        if (aborted) return;
-        setMessages(built);
-        setLoadedSessionId(sessionId);
       })
       .catch(() => {
         if (aborted) return;
