@@ -2,8 +2,8 @@
 
 // System → Tools → Connectors: where the Connany connector service is.
 // Saving checks the URL + key against the service first and applies at
-// once — no restart. People then connect their own accounts in their
-// Settings → Connectors.
+// once — no restart. People then connect their own accounts in
+// Console → Connectors.
 
 import * as React from "react";
 import { Check, Loader2, Save } from "lucide-react";
@@ -91,8 +91,8 @@ export function ConnectorsAdminPanel() {
         <h2 className="text-lg font-semibold tracking-tight">{tr("Connectors", "连接器")}</h2>
         <p className="mt-1 text-sm text-muted-foreground">
           {tr(
-            "Let people connect their own accounts (Notion, GitHub, Linear, …) so their agents can read them in web chats. Accounts are connected through the Connany connector service; each person connects theirs in Settings → Connectors.",
-            "让用户连接自己的账号（Notion、GitHub、Linear 等），他们的 Agent 在网页对话中就能读取。账号通过 Connany 连接服务接入，每个用户在自己的「设置 → 连接器」里连接。",
+            "Let people connect their own accounts (Notion, GitHub, Linear, …) so their agents can read them in web chats. Accounts are connected through the Connany connector service; each person connects theirs in Console → Connectors.",
+            "让用户连接自己的账号（Notion、GitHub、Linear 等），他们的 Agent 在网页对话中就能读取。账号通过 Connany 连接服务接入，每个用户在「控制台 → 连接器」里连接自己的账号。",
           )}
         </p>
       </div>

@@ -15,7 +15,6 @@ import {
   ServerIcon,
   SparklesIcon,
   UserCog,
-  Cable,
   Wand2Icon,
 } from "lucide-react";
 
@@ -38,7 +37,6 @@ import AgentMCPPage from "@/app/console/agents/[id]/mcp/page";
 import AgentUsagePage from "@/app/console/agents/[id]/usage/page";
 import AccountSettingsPage from "@/app/settings/account/page";
 import GeneralSettingsPage from "@/app/settings/general/page";
-import { ConnectorsSettingsPage } from "@/components/connectors-settings";
 import UserModelsPage from "@/app/console/models/page";
 
 export type AgentSettingsTab =
@@ -55,7 +53,6 @@ export type AgentSettingsTab =
   | "usage"
   | "advanced"
   | "account"
-  | "connectors"
   | "general";
 
 type TabIcon = React.ComponentType<{ className?: string }>;
@@ -77,7 +74,6 @@ const AGENT_TABS: Array<{ id: AgentSettingsTab; label: string; icon: TabIcon }> 
 
 const USER_TABS: Array<{ id: AgentSettingsTab; label: string; icon: TabIcon }> = [
   { id: "account", label: "Account", icon: UserCog },
-  { id: "connectors", label: "Connectors", icon: Cable },
   { id: "general", label: "General", icon: Palette },
 ];
 
@@ -95,7 +91,6 @@ const TAB_LABEL_KEYS: Record<AgentSettingsTab, MessageKey> = {
   usage: "settings.tab.usage",
   advanced: "settings.tab.advanced",
   account: "settings.tab.account",
-  connectors: "settings.tab.connectors",
   general: "settings.tab.general",
 };
 
@@ -223,7 +218,6 @@ export function AgentSettingsDialog({
               <AccountSettingsPage />
             </div>
           )}
-          {tab === "connectors" && <ConnectorsSettingsPage />}
           {tab === "general" && (
             <div className="max-w-3xl p-4 md:p-6">
               <GeneralSettingsPage />

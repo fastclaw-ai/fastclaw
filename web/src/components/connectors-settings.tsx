@@ -1,6 +1,6 @@
 "use client";
 
-// Settings → Connectors: the person's own third-party accounts (Notion,
+// Console → Connectors: the person's own third-party accounts (Notion,
 // GitHub, …). Their agents read these in the person's own web chats
 // (internal/connectors). Connecting opens the platform's sign-in in a new
 // tab; this pane re-reads when that tab reports back or the window regains
@@ -104,7 +104,7 @@ export function ConnectorsSettingsPage() {
 
   if (!catalog) {
     return (
-      <div className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
+      <div className="mx-auto flex max-w-5xl items-center gap-2 p-6 text-sm text-muted-foreground">
         {error || (
           <>
             <Loader2 className="size-4 animate-spin" />
@@ -116,7 +116,7 @@ export function ConnectorsSettingsPage() {
   }
   if (!catalog.configured) {
     return (
-      <div className="max-w-3xl p-4 md:p-6">
+      <div className="mx-auto max-w-5xl p-6">
         <Header />
         <p className="mt-6 text-sm text-muted-foreground">
           {tr("Connectors are not available on this server yet.", "当前服务器尚未开放连接器。")}
@@ -131,7 +131,7 @@ export function ConnectorsSettingsPage() {
   const ordered = [...shown].sort((a, b) => Number(byConnector(b.name).length > 0) - Number(byConnector(a.name).length > 0));
 
   return (
-    <div className="max-w-3xl p-4 md:p-6">
+    <div className="mx-auto max-w-5xl p-6">
       <Header />
       {catalog.categories.length > 1 && (
         <div className="mt-5 flex flex-wrap gap-1.5">
@@ -385,7 +385,7 @@ function Header() {
   const { tr } = useLocale();
   return (
     <div>
-      <h2 className="text-lg font-semibold">{tr("Connectors", "连接器")}</h2>
+      <h2 className="text-2xl font-semibold tracking-tight">{tr("Connectors", "连接器")}</h2>
       <p className="mt-1 text-sm text-muted-foreground">
         {tr(
           "Connect your own accounts so your agents can read them when you chat with them on the web. Only you can use them, and only with agents you own.",

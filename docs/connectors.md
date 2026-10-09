@@ -1,7 +1,7 @@
 # Connectors
 
 People connect their own third-party accounts (Notion, GitHub, Linear, …)
-in Settings → Connectors, and their agents read those accounts when they chat
+in Console → Connectors, and their agents read those accounts when they chat
 with them on the web. Built on the Connany
 connector service, adapted from fleet's connectors
 (`apps/web/docs/connectors-spec.md`).
@@ -22,11 +22,11 @@ Alternatively, environment variables (used when nothing is saved in the UI):
 | `FASTCLAW_CONNANY_URL` | Connany's origin. HTTPS, or HTTP on `localhost` for development. |
 | `FASTCLAW_CONNANY_API_KEY` | The project key. Scrubbed from the process environment after boot. |
 
-Neither → connectors are off: Settings shows "not available", agents get no
+Neither → connectors are off: the Connectors page shows "not available", agents get no
 tool. For `make dev`, the env vars can go in an untracked `.env.dev`.
 
-Each person then connects their own accounts in **Settings → Connectors**
-(account menu → Settings).
+Each person then connects their own accounts in **Console → Connectors**
+(below Skills in the console sidebar).
 
 ## Ownership
 
