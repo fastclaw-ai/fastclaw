@@ -152,33 +152,44 @@ export function ConnectorsSettingsPage() {
       {error && <p className="mt-4 text-sm text-destructive">{error}</p>}
       {notice && <p className="mt-4 text-sm text-emerald-600 dark:text-emerald-400">{notice}</p>}
 
-      <div className="mt-4 divide-y rounded-xl border">
+      {/* Same card grid as Skills: one column on phones, two on tablets,
+          three on desktops. */}
+      <div className="mt-4 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {ordered.map((c) => {
           const mine = byConnector(c.name);
           return (
-            <div key={c.name} className="p-4">
+            <div key={c.name} className="flex flex-col rounded-lg border border-border bg-card p-5 transition-colors hover:bg-muted/50">
               <div className="flex items-start gap-3">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={c.avatarUrl} alt="" className="mt-0.5 size-8 shrink-0 rounded-lg object-contain" />
+                <img src={c.avatarUrl} alt="" className="size-9 shrink-0 rounded-lg object-contain" />
                 <div className="min-w-0 flex-1">
-                  <div className="text-sm font-medium">{c.title}</div>
-                  {c.description && <div className="mt-0.5 text-xs text-muted-foreground">{c.description}</div>}
+                  <p className="truncate text-sm font-medium">{c.title}</p>
+                  {mine.length > 0 && (
+                    <p className="mt-0.5 flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400">
+                      <CheckCircle2 className="size-3" />
+                      {mine.length > 1
+                        ? tr("{{n}} accounts", "{{n}} 个账号", { n: mine.length })
+                        : tr("Connected", "已连接")}
+                    </p>
+                  )}
                 </div>
                 <Button
                   size="sm"
                   variant="outline"
-                  className="shrink-0"
+                  className="h-7 shrink-0 px-2 text-xs"
                   onClick={() => openConnectorAuthorization({ connector: c.name })}
+                  title={mine.length > 0 ? tr("Add another account", "再添加一个账号") : undefined}
                 >
                   <Plus className="mr-1 size-3.5" />
-                  {mine.length > 0 ? tr("Add account", "添加账号") : tr("Connect", "连接")}
+                  {mine.length > 0 ? tr("Add", "添加") : tr("Connect", "连接")}
                 </Button>
               </div>
+              {c.description && <p className="mt-3 line-clamp-2 text-sm text-muted-foreground">{c.description}</p>}
 
               {mine.length > 0 && (
-                <ul className="mt-3 space-y-1.5 pl-11">
+                <ul className="mt-3 space-y-1.5">
                   {mine.map((a) => (
-                    <li key={a.id} className="flex items-center gap-2 rounded-lg bg-muted/40 px-3 py-2 text-sm">
+                    <li key={a.id} className="flex min-w-0 items-center gap-2 rounded-md bg-muted/60 px-2.5 py-1.5 text-sm">
                       {renaming?.id === a.id ? (
                         <form
                           className="flex min-w-0 flex-1 gap-2"
