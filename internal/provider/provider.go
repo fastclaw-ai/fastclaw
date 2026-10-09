@@ -46,6 +46,7 @@ func newLLMHTTPClient() *http.Client {
 const (
 	OriginUser        = "" // default — pre-existing producers stay correct without edits
 	OriginGoalContext = "goal_context"
+	OriginConnector   = "connector"
 )
 
 // Message represents a chat message.

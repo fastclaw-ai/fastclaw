@@ -302,6 +302,8 @@ func (s *Server) Run(ctx context.Context) error {
 	// Long-lived SSE subscription so cron-fired (and other async)
 	// messages reach the open chat panel without a manual refresh.
 	mux.HandleFunc("GET /api/chat/subscribe", auth(s.handleChatSubscribe))
+	// The caller's own connected third-party accounts (handlers_connectors.go).
+	s.registerConnectorRoutes(mux, auth)
 
 	// Agents
 	mux.HandleFunc("GET /api/agents", auth(s.handleListAgents))

@@ -1156,6 +1156,8 @@ export async function steerChat(
 
 export interface ToolResultMetadata {
   sandbox?: boolean;
+  // A connect / access card the connectors tool put in the conversation.
+  connectorRequest?: { id: string; connector: string; title: string; kind: "connect" | "reconnect" | "access" };
   // Assistant message delivered privately to the human from a group.
   privateFrom?: PrivateSource;
   knowledgeSources?: KnowledgeSource[];
@@ -2527,4 +2529,113 @@ export function deleteTeamTopic(teamId: string, sessionId: string) {
 export interface TeamInboxNotice { id: string; agentId: string; sessionId: string; timestamp: number }
 export function getTeamInbox() {
   return teamRequest<{ messages: TeamInboxNotice[] }>("/api/chat/team/inbox");
+}
+
+// ── Connectors: the caller's own third-party accounts ──────────────────
+// Server routes in internal/setup/handlers_connectors.go. Errors come back
+// as a closed `code` the UI words itself (connectorErrorText).
+
+export interface ConnectorInfo {
+  name: string;
+  title: string;
+  category?: string;
+  description?: string;
+  avatarUrl: string;
+}
+
+export interface ConnectorCatalog {
+  configured: boolean;
+  categories: { name: string; title: string }[];
+  connectors: ConnectorInfo[];
+}
+
+export interface ConnectorAccount {
+  id: string;
+  connector: string;
+  status: "connected" | "reauth_required";
+  name: string;
+  accountName?: string;
+  workspaceName?: string;
+  displayName?: string;
+  needsAccess: boolean;
+  isDefault: boolean;
+}
+
+export interface ConnectorRequestView {
+  id: string;
+  connector: string;
+  kind: "connect" | "reconnect" | "access";
+  status: "requested" | "pending" | "connected" | "granted" | "error" | "expired" | "cancelled";
+  errorCode?: string;
+}
+
+export interface ConnectorAccess {
+  canAdd: boolean;
+  total: number;
+  grants: { id: string | number; type: string; name: string; selection: "all" | "selected"; suspended: boolean; manage_url: string }[];
+}
+
+export class ConnectorApiError extends Error {
+  constructor(public code: string) {
+    super(code);
+  }
+}
+
+async function connectorJSON<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await apiFetch(path, init);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ConnectorApiError((body as { code?: string }).code || "service_unavailable");
+  return body as T;
+}
+
+const jsonInit = (method: string, body?: unknown): RequestInit => ({
+  method,
+  headers: { "Content-Type": "application/json" },
+  ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+});
+
+export function getConnectorCatalog(lang: string, fresh = false) {
+  return connectorJSON<ConnectorCatalog>(`/api/connectors?${new URLSearchParams({ lang, ...(fresh ? { fresh: "1" } : {}) })}`);
+}
+
+export async function getConnectorAccounts(fresh = false) {
+  const r = await connectorJSON<{ accounts: ConnectorAccount[] }>(`/api/connector-accounts${fresh ? "?fresh=1" : ""}`);
+  return r.accounts;
+}
+
+export function updateConnectorAccount(id: string, patch: { name?: string; isDefault?: boolean }) {
+  return connectorJSON<{ ok: boolean }>(`/api/connector-accounts/${encodeURIComponent(id)}`, jsonInit("PATCH", patch));
+}
+
+export function disconnectConnectorAccount(id: string) {
+  return connectorJSON<{ ok: boolean }>(`/api/connector-accounts/${encodeURIComponent(id)}`, jsonInit("DELETE"));
+}
+
+export function checkConnectorAccount(id: string) {
+  return connectorJSON<{ toolCount: number }>(`/api/connector-accounts/${encodeURIComponent(id)}/check`, jsonInit("POST", {}));
+}
+
+export function getConnectorAccess(id: string) {
+  return connectorJSON<ConnectorAccess>(`/api/connector-accounts/${encodeURIComponent(id)}/access`);
+}
+
+/** Mints the one-use authorization link for exactly one target. */
+export function authorizeConnector(target: { requestId: string } | { connector: string } | { reconnectId: string } | { accessId: string }) {
+  return connectorJSON<{ url: string; request: ConnectorRequestView }>("/api/connector-authorizations", jsonInit("POST", target));
+}
+
+export function getConnectorRequest(id: string) {
+  return connectorJSON<ConnectorRequestView>(`/api/connector-requests/${encodeURIComponent(id)}`);
+}
+
+export function recheckConnectorRequest(id: string) {
+  return connectorJSON<ConnectorRequestView>(`/api/connector-requests/${encodeURIComponent(id)}/recheck`, jsonInit("POST", {}));
+}
+
+export function cancelConnectorRequest(id: string) {
+  return connectorJSON<ConnectorRequestView>(`/api/connector-requests/${encodeURIComponent(id)}/cancel`, jsonInit("POST", {}));
+}
+
+export function confirmConnectorReturn(providerSessionId: string) {
+  return connectorJSON<ConnectorRequestView>("/api/connector-requests/confirm", jsonInit("POST", { providerSessionId }));
 }

@@ -66,6 +66,9 @@ test:
 # the URL next dev prints for itself) and web edits hot-reload. The embedded
 # export is only built once so the binary compiles; `make build-web` refreshes it.
 #
+# Local secrets for dev (e.g. FASTCLAW_CONNANY_URL / FASTCLAW_CONNANY_API_KEY)
+# go in an untracked .env.dev at the repo root; it's sourced if present.
+#
 # Dev data is isolated from the release install: its own FASTCLAW_HOME
 # (sqlite db, workspaces, skills, pid, logs) and port, so both can run
 # side by side. Point the CLI at it with the same two env vars, e.g.
@@ -77,6 +80,7 @@ dev:
 	@test -f internal/setup/web/index.html || $(MAKE) build-web
 	@cd web && pnpm install --frozen-lockfile --silent
 	@trap 'kill 0' EXIT INT TERM; \
+	if [ -f .env.dev ]; then set -a; . ./.env.dev; set +a; fi; \
 	(cd web && pnpm exec next dev --hostname 127.0.0.1 --port $(WEB_PORT)) & \
 	(until curl -sf --noproxy '*' -o /dev/null http://127.0.0.1:$(DEV_PORT)/; do sleep 1; done; \
 	 printf '\n\033[1;32m  ➜ FastClaw dev: http://localhost:%s\033[0m  (data: %s; :%s is next dev, behind the gateway)\n\n' \

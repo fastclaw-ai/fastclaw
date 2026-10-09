@@ -19,6 +19,15 @@ type EnvConfig struct {
 	Sandbox EnvSandbox
 	Redis   EnvRedis
 	Log     EnvLog
+	Connany EnvConnany
+}
+
+// EnvConnany points at the Connany connector service, which lets people
+// connect their own third-party accounts (internal/connectors). Both
+// unset = connectors off.
+type EnvConnany struct {
+	URL    string // FASTCLAW_CONNANY_URL     — e.g. https://connany.example (HTTP only on localhost)
+	APIKey string // FASTCLAW_CONNANY_API_KEY — the project key; server-side only
 }
 
 type EnvGateway struct {
@@ -136,6 +145,9 @@ func LoadEnv() *EnvConfig {
 		cfg.Sandbox.BoxlitePrefix = v
 	}
 
+	cfg.Connany.URL = os.Getenv("FASTCLAW_CONNANY_URL")
+	cfg.Connany.APIKey = os.Getenv("FASTCLAW_CONNANY_API_KEY")
+
 	if v := os.Getenv("FASTCLAW_LOG_LEVEL"); v != "" {
 		cfg.Log.Level = v
 	}
@@ -223,6 +235,7 @@ func ScrubBootSecrets() {
 		"FASTCLAW_OBJECT_STORE_USESSL",
 		"FASTCLAW_OBJECT_STORE_ALIYUN_INTERNAL",
 		"FASTCLAW_REDIS_PASSWORD",
+		"FASTCLAW_CONNANY_API_KEY",
 		"BOXLITE_API_KEY",
 		"E2B_API_KEY",
 	}

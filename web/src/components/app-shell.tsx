@@ -29,6 +29,8 @@ function wantsSidebar(pathname: string) {
   if (BARE_PATHS.includes(pathname)) return false;
   if (pathname.startsWith("/onboard/")) return false;
   if (pathname.startsWith("/signup/")) return false;
+  // The tab a connector authorization runs in (open → platform → done).
+  if (pathname.startsWith("/connectors/")) return false;
   return true;
 }
 

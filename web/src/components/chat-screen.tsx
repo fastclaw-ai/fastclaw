@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback, useMemo, useLayoutEffect } from "react";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
+import { ConnectorRequestCard } from "@/components/connector-request-card";
 import { beginChatRun, finishChatRun, stopChatRun, useChatRunStatus, type ChatRunStatus } from "@/lib/chat-runs";
 import { useAgentIdFromURL } from "@/hooks/use-agent-id";
 import { Button } from "@/components/ui/button";
@@ -2914,6 +2915,16 @@ export function ChatScreen() {
                         />
                       </div>,
                     );
+                  }
+                  // Cards an agent put in front of the person (connect an
+                  // account), outside the collapsible tool details.
+                  for (const round of rounds) {
+                    for (const call of round.toolCalls ?? []) {
+                      const req = call.metadata?.connectorRequest;
+                      if (req?.id) {
+                        elements.push(<ConnectorRequestCard key={`connector-${req.id}`} request={req} />);
+                      }
+                    }
                   }
                   if (rounds.some((round) => round.id === todoAnchorMessageId)) {
                     elements.push(

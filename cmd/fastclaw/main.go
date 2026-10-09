@@ -15,6 +15,7 @@ import (
 	"github.com/fastclaw-ai/fastclaw/internal/api"
 	"github.com/fastclaw-ai/fastclaw/internal/auth"
 	"github.com/fastclaw-ai/fastclaw/internal/config"
+	"github.com/fastclaw-ai/fastclaw/internal/connectors"
 	"github.com/fastclaw-ai/fastclaw/internal/daemon"
 	"github.com/fastclaw-ai/fastclaw/internal/gateway"
 	coderuntime "github.com/fastclaw-ai/fastclaw/internal/runtime"
@@ -212,6 +213,14 @@ func runGateway(port int) error {
 	gw, err := gateway.New(env)
 	if err != nil {
 		return fmt.Errorf("create gateway: %w", err)
+	}
+
+	// The person's connected third-party accounts (internal/connectors).
+	// Off unless FASTCLAW_CONNANY_URL + FASTCLAW_CONNANY_API_KEY are set.
+	if db, ok := gw.Store().(connectors.DB); ok {
+		if err := connectors.Configure(context.Background(), env.Connany.URL, env.Connany.APIKey, db); err != nil {
+			slog.Error("connectors disabled", "error", err)
+		}
 	}
 
 	// Remove credential-bearing env vars from the process environment

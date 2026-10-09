@@ -30,6 +30,11 @@ const (
 	SourceHeartbeat   = "heartbeat"
 	SourceSubAgent    = "subagent"
 	SourceGoalContext = "goal_context"
+	// SourceConnector wakes a web conversation after the person connected
+	// an account the agent asked for (internal/connectors). Like
+	// goal_context, its text is runtime-authored and never shown as a
+	// user bubble.
+	SourceConnector = "connector"
 )
 
 // InboundMessage represents a message received from a channel.

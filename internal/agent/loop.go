@@ -991,8 +991,11 @@ func (a *Agent) sessionHasActiveGoal(ctx context.Context, msg bus.InboundMessage
 // empty text part — some upstreams reject content-less wire messages.
 func buildUserMessage(msg bus.InboundMessage) provider.Message {
 	origin := provider.OriginUser
-	if msg.Source == bus.SourceGoalContext {
+	switch msg.Source {
+	case bus.SourceGoalContext:
 		origin = provider.OriginGoalContext
+	case bus.SourceConnector:
+		origin = provider.OriginConnector
 	}
 	// IM DMs are not prefixed with `[SenderName]:` — there's only one
 	// chatter per DM, the sender is already surfaced as a per-turn
@@ -2428,6 +2431,9 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 	// per-turn chatter's row, not the UserSpace owner — see
 	// Registry.systemFileUserID for the routing rule.
 	a.registry.SetChatterUserID(chatterUID)
+	// The chatter's connected third-party accounts (internal/connectors):
+	// mounted only where they may be used; see mountConnectors.
+	connectorNote := a.mountConnectors(ctx, msg, chatterUID, sess.SessionKey())
 
 	// Steering: mark a turn in-flight so messages arriving mid-run are
 	// buffered onto the session (drained between tool iterations below)
@@ -2503,6 +2509,9 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 	}
 	if paramsMsg := renderClientParams(msg.Params); paramsMsg != "" {
 		messages = append(messages, provider.Message{Role: "system", Content: paramsMsg})
+	}
+	if connectorNote != "" {
+		messages = append(messages, provider.Message{Role: "system", Content: connectorNote})
 	}
 	// Persistence reminder — chatbot-only, positioned just before the
 	// session history so recency weight outranks the model's training
@@ -2811,6 +2820,11 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 		// as a 4xx/5xx HTTP error or executor error? Tracked here so
 		// the next iteration can decide whether to drop tools.
 		roundAllFailed := len(results) > 0
+		// A tool that put a card in front of the person (connectors) ends
+		// the turn after this round: nothing the model could add now is
+		// true yet. A model once carried on after such a card and claimed
+		// a change that never ran.
+		endTurn := false
 		// Process results
 		for idx, r := range results {
 			totalToolCalls++
@@ -2877,6 +2891,10 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 				a.sendMediaFiles(msg, mediaPaths)
 			}
 
+			if ends, _ := meta["endsTurn"].(bool); ends {
+				endTurn = true
+				delete(meta, "endsTurn")
+			}
 			toolMsg := provider.Message{
 				Role:       "tool",
 				Content:    resultContent,
@@ -2910,6 +2928,11 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 			allFailedRounds++
 		} else {
 			allFailedRounds = 0
+		}
+		if endTurn {
+			emitEvent(ctx, ChatEvent{Type: "done"})
+			a.runPostTurn(ctx, msg, messages, totalToolCalls, chatterMem)
+			return joinReplyParts(replyParts)
 		}
 		// First repetition only warns (polling a background job looks
 		// exactly like this); a repeat after the warning ends the turn.
@@ -3666,6 +3689,13 @@ func (a *Agent) streamFinalDeliveryAfterCap(ctx context.Context, inboundMsg bus.
 func extractToolMeta(result string) (string, map[string]any) {
 	if strings.HasPrefix(result, tools.MetaSandboxPrefix) {
 		return strings.TrimPrefix(result, tools.MetaSandboxPrefix), map[string]any{"sandbox": true}
+	}
+	if rest, ok := strings.CutPrefix(result, tools.MetaJSONPrefix); ok {
+		line, text, _ := strings.Cut(rest, "\n")
+		var meta map[string]any
+		if json.Unmarshal([]byte(line), &meta) == nil {
+			return text, meta
+		}
 	}
 	return result, nil
 }

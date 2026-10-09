@@ -171,6 +171,7 @@ const (
 	SourceBuiltin ToolSource = iota // built-in tool
 	SourceMCP                       // MCP server tool
 	SourcePlugin                    // plugin-provided tool
+	SourceConnector                 // the person's connected accounts (connectors tool)
 )
 
 // Registry holds all registered tools.
