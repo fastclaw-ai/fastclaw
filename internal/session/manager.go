@@ -512,6 +512,21 @@ func (s *Session) GetMessages() []provider.Message {
 	return msgs
 }
 
+// TurnActive reports whether a turn is in flight for the cached session
+// with this key. Read-only: it never loads or creates a session, so
+// listing endpoints can call it for every row.
+func (m *Manager) TurnActive(sessionKey string) bool {
+	m.mu.Lock()
+	s := m.sessions[sessionKey]
+	m.mu.Unlock()
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.turnDepth > 0
+}
+
 // BeginTurn marks a HandleMessage turn as in-flight for this session.
 // Paired with EndTurn. Steering messages are only accepted while at
 // least one turn is active.

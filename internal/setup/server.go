@@ -42,6 +42,8 @@ type AgentHandle interface {
 	SteerWeb(sessionId, projectIDHint, text string) bool
 	WebChatHistory(sessionId string) []map[string]any
 	WebChatSessions() []session.WebSession
+	// SessionTurnActive reports a turn in flight in that session, from any channel.
+	SessionTurnActive(sessionKey string) bool
 	DeleteWebChatSession(sessionId string) error
 	RenameWebChatSession(sessionId, title string) error
 	// MoveWebChatSession reassigns the chat to a different project (or

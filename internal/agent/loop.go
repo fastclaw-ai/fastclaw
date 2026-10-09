@@ -1212,6 +1212,12 @@ func (a *Agent) WebChatSessions() []session.WebSession {
 	return a.sessions.ListWebSessions()
 }
 
+// SessionTurnActive reports whether a turn is running in the session
+// with this key, whichever channel started it (web, IM, cron).
+func (a *Agent) SessionTurnActive(sessionKey string) bool {
+	return a.sessions.TurnActive(sessionKey)
+}
+
 // DeleteWebChatSession removes a chat session (any channel) by the URL
 // token — accepts either session_key or legacy web chat_id.
 func (a *Agent) DeleteWebChatSession(sessionId string) error {

@@ -242,7 +242,8 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
           // scope. They belong to the group row, not the Agent's direct
           // contact row; otherwise creating a group would make clicking an
           // Agent unexpectedly reopen its private group transcript.
-          const latest = list.filter((session) => !session.projectId?.startsWith("tm-")).sort(
+          const direct = list.filter((session) => !session.projectId?.startsWith("tm-"));
+          const latest = [...direct].sort(
             (a, b) =>
               (b.lastMessageAt || b.updatedAt || b.createdAt || 0) -
               (a.lastMessageAt || a.updatedAt || a.createdAt || 0),
@@ -258,6 +259,9 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
             updatedAt: latest?.lastMessageAt || latest?.updatedAt || latest?.createdAt
               || (agent.createdAt ? Date.parse(agent.createdAt) || undefined : undefined),
             sessionId: latest?.id,
+            // Any of its chats mid-turn — web, IM or cron (the server marks
+            // all of them) — shows the Agent as working in the list.
+            running: direct.some((session) => session.status === "running"),
           } satisfies ConsumerAgentItem;
         }),
       )
@@ -269,6 +273,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
               ),
             );
             setConsumerAgentsLoading(false);
+            schedule(items.some((item) => item.running));
           }
         })
         .catch(() => {
@@ -286,11 +291,27 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
         });
     };
 
+    // Poll so replies and turns that didn't start in this tab (IM
+    // channels, cron, another device) still reach the list: briskly while
+    // something is running, slowly otherwise, never while hidden.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const schedule = (busy: boolean) => {
+      clearTimeout(timer);
+      if (aborted || document.hidden) return;
+      timer = setTimeout(refresh, busy ? 4_000 : 30_000);
+    };
+    const onVisible = () => {
+      if (!document.hidden) refresh();
+    };
+
     refresh();
     window.addEventListener("fastclaw:sessions-changed", refresh);
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       aborted = true;
+      clearTimeout(timer);
       window.removeEventListener("fastclaw:sessions-changed", refresh);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [agents]);
 
@@ -309,23 +330,43 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
           // Then fill in each group's latest message for the row preview.
           return Promise.all(items.map((item) =>
             getTeamTopics(item.id)
-              .then(({ topics }) => ({ ...item, preview: topics[0]?.preview, updatedAt: topics[0]?.updatedAt }))
+              .then(({ topics }) => ({
+                ...item,
+                preview: topics[0]?.preview,
+                updatedAt: topics[0]?.updatedAt,
+                running: topics.some((topic) => topic.status === "running"),
+              }))
               .catch(() => item),
           )).then((withPreview) => {
-            if (!aborted) setConsumerTeams(withPreview);
+            if (aborted) return;
+            setConsumerTeams(withPreview);
+            schedule(withPreview.some((item) => "running" in item && item.running));
           });
         })
         .catch(() => {
           if (!aborted) setConsumerTeams([]);
         });
     };
+    // Same polling as the Agent rows above.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const schedule = (busy: boolean) => {
+      clearTimeout(timer);
+      if (aborted || document.hidden) return;
+      timer = setTimeout(refreshTeams, busy ? 4_000 : 30_000);
+    };
+    const onVisible = () => {
+      if (!document.hidden) refreshTeams();
+    };
     refreshTeams();
     window.addEventListener("fastclaw:teams-changed", refreshTeams);
     window.addEventListener("fastclaw:sessions-changed", refreshTeams);
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       aborted = true;
+      clearTimeout(timer);
       window.removeEventListener("fastclaw:teams-changed", refreshTeams);
       window.removeEventListener("fastclaw:sessions-changed", refreshTeams);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [tr]);
 

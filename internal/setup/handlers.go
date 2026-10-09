@@ -1788,6 +1788,11 @@ func (s *Server) handleChatSessions(w http.ResponseWriter, r *http.Request) {
 		}
 		if run != nil {
 			sessions[i].Status = run.status
+		} else if ag.SessionTurnActive(sessions[i].ID) {
+			// Turns the web chat didn't start (IM channels, cron) aren't
+			// in chatTurns; the session's own turn marker still shows
+			// them, so contact lists can show the agent working.
+			sessions[i].Status = "running"
 		}
 	}
 	s.chatTurnsMu.Unlock()

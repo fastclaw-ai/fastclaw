@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useRouter, usePathname } from "next/navigation";
-import { Bot, Check, ChevronDown, ImagePlus, Plus, Search, UsersRound } from "lucide-react";
+import { Bot, Check, ChevronDown, ImagePlus, LoaderCircle, Plus, Search, UsersRound } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -41,6 +41,7 @@ import { useLocale, type Locale } from "@/components/locale-provider";
 import { agentChatHref, chatHref, rememberChatTarget } from "@/lib/chat-route";
 import { apiFetch, createAgent, updateConfig, getTeamInbox, type TeamInboxNotice, type MeResponse, type TeamEntry } from "@/lib/api";
 import { rememberAgentAccess } from "@/lib/agent-access-cache";
+import { useRunningAgentIds } from "@/lib/chat-runs";
 
 export interface ConsumerAgentItem {
   id: string;
@@ -50,6 +51,8 @@ export interface ConsumerAgentItem {
   avatarUrl?: string;
   sessionId?: string;
   updatedAt?: number;
+  // A turn is in flight in one of its chats (server-reported).
+  running?: boolean;
 }
 
 export interface ConsumerTeamItem extends TeamEntry {
@@ -58,9 +61,31 @@ export interface ConsumerTeamItem extends TeamEntry {
   // Latest message in the group's most recent session.
   preview?: string;
   updatedAt?: number;
+  running?: boolean;
 }
 
 const AGENT_PAGE_SIZE = 20;
+
+// When each row was last seen ("agent:<id>" / "team:<id>" → its updatedAt
+// at the time). Per-browser by design: it only drives the unread dot.
+const SEEN_STORAGE_KEY = "fastclaw:chat-list-seen:v1";
+
+function readSeen(): Record<string, number> {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(SEEN_STORAGE_KEY) || "{}");
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeSeen(seen: Record<string, number>) {
+  try {
+    localStorage.setItem(SEEN_STORAGE_KEY, JSON.stringify(seen));
+  } catch {
+    // Private mode / blocked storage: unread dots just won't persist.
+  }
+}
 const INLINE_MARKDOWN_TOKEN = /(\*\*[^*\n]+?\*\*|__[^_\n]+?__|~~[^~\n]+?~~|`[^`\n]+?`|\[[^\]\n]+?\]\([^)]+\)|\*[^*\n]+?\*|_[^_\n]+?_)/g;
 
 // Sidebar summaries are deliberately one line, so a full block Markdown
@@ -140,6 +165,34 @@ export function ConsumerChatSidebar({
   const router = useRouter();
   const pathname = usePathname();
   const [inbox, setInbox] = React.useState<TeamInboxNotice[]>([]);
+  // Runs started in this tab show as working right away; the server's
+  // session status (agent.running) covers the rest after the next poll.
+  const runningHere = useRunningAgentIds();
+
+  // Unread: a row whose latest activity is newer than when it was last
+  // seen. The open row is seen as it updates; a row observed for the
+  // first time counts as seen, so a first visit isn't all dots.
+  const [seen, setSeen] = React.useState<Record<string, number> | null>(null);
+  React.useEffect(() => setSeen(readSeen()), []);
+  React.useEffect(() => {
+    if (!seen) return;
+    let next: Record<string, number> | null = null;
+    const mark = (key: string, at: number | undefined, open: boolean) => {
+      if (!at) return;
+      const current = (next ?? seen)[key];
+      if (current === undefined || (open && at > current)) {
+        next = { ...(next ?? seen), [key]: at };
+      }
+    };
+    for (const agent of agents) mark(`agent:${agent.id}`, agent.updatedAt, !activeTeamId && activeAgentId === agent.id);
+    for (const team of teams) mark(`team:${team.id}`, team.updatedAt, activeTeamId === team.id);
+    if (next) {
+      writeSeen(next);
+      setSeen(next);
+    }
+  }, [seen, agents, teams, activeAgentId, activeTeamId]);
+  const hasUnread = (key: string, at: number | undefined, open: boolean) =>
+    !open && !!at && seen?.[key] !== undefined && at > seen[key];
   React.useEffect(() => {
     const uid = me?.user?.id;
     if (!uid) return;
@@ -231,6 +284,7 @@ export function ConsumerChatSidebar({
           .map((id) => agents.find((agent) => agent.id === id))
           .filter((agent): agent is ConsumerAgentItem => !!agent);
         const memberLabel = members.map((member) => member.name).join("、");
+        const teamUnread = !team.running && hasUnread(`team:${team.id}`, team.updatedAt, activeTeamId === team.id);
         return (
           <SidebarMenuItem key={`team-${team.id}`}>
             <SidebarMenuButton
@@ -248,14 +302,21 @@ export function ConsumerChatSidebar({
                   <span className="shrink-0 rounded-full bg-[#e8e1eb] px-1.5 py-0.5 text-[10px] font-semibold leading-none text-[#756878] dark:bg-white/10 dark:text-[#c9bdcc]">
                     {tr("Group", "群聊")}
                   </span>
-                  <span className="ml-auto shrink-0 text-[11px] font-normal text-muted-foreground/80">
-                    {relativeSessionTime(team.updatedAt, locale)}
-                  </span>
+                  {team.running ? (
+                    <WorkingMark className="ml-auto" />
+                  ) : (
+                    <span className="ml-auto shrink-0 text-[11px] font-normal text-muted-foreground/80">
+                      {relativeSessionTime(team.updatedAt, locale)}
+                    </span>
+                  )}
                 </span>
-                <span className="truncate text-[13px] font-normal leading-5 text-muted-foreground">
-                  {team.preview
-                    ? renderInlineMarkdown(team.preview)
-                    : memberLabel || tr("No Agents", "暂无 Agent")}
+                <span className="flex min-w-0 items-center gap-2">
+                  <span className={`min-w-0 flex-1 truncate text-[13px] font-normal leading-5 ${teamUnread ? "text-foreground/80" : "text-muted-foreground"}`}>
+                    {team.preview
+                      ? renderInlineMarkdown(team.preview)
+                      : memberLabel || tr("No Agents", "暂无 Agent")}
+                  </span>
+                  {teamUnread && <UnreadDot />}
                 </span>
               </span>
             </SidebarMenuButton>
@@ -271,6 +332,8 @@ export function ConsumerChatSidebar({
         const summary = (agent.preview || agent.description || t("sidebar.greeting", { name: agent.name }))
           .replace(/\s*<\|split\|>\s*/g, " ");
         const unreadCount = inbox.filter((notice) => notice.agentId === agent.id).length;
+        const running = !!agent.running || runningHere.has(agent.id);
+        const unread = !running && hasUnread(`agent:${agent.id}`, agent.updatedAt, active);
         return (
           <SidebarMenuItem key={agent.id}>
             <SidebarMenuButton
@@ -290,24 +353,28 @@ export function ConsumerChatSidebar({
                   <span className="min-w-0 flex-1 truncate text-[15px] font-semibold leading-5 text-foreground">
                     {agent.name || t("sidebar.untitledBot")}
                   </span>
-                  <span className="shrink-0 text-[11px] font-normal text-muted-foreground/80">
-                    {relativeSessionTime(agent.updatedAt, locale)}
-                  </span>
+                  {running ? (
+                    <WorkingMark />
+                  ) : (
+                    <span className="shrink-0 text-[11px] font-normal text-muted-foreground/80">
+                      {relativeSessionTime(agent.updatedAt, locale)}
+                    </span>
+                  )}
                 </span>
                 {/* Unread count sits at the end of the preview line, under
                     the time, like a messaging app's chat list. */}
                 <span className="flex min-w-0 items-center gap-2">
-                  <span className="min-w-0 flex-1 truncate text-[13px] font-normal leading-5 text-muted-foreground">
+                  <span className={`min-w-0 flex-1 truncate text-[13px] font-normal leading-5 ${unread ? "text-foreground/80" : "text-muted-foreground"}`}>
                     {renderInlineMarkdown(summary)}
                   </span>
-                  {unreadCount > 0 && (
+                  {unreadCount > 0 ? (
                     <span
                       aria-label={tr("{{count}} unread private messages", "{{count}} 条未读私信", { count: unreadCount })}
                       className="inline-flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-red-500 px-1.5 text-[11px] font-medium tabular-nums leading-none text-white"
                     >
                       {unreadCount > 99 ? "99+" : unreadCount}
                     </span>
-                  )}
+                  ) : unread && <UnreadDot />}
                 </span>
               </span>
             </SidebarMenuButton>
@@ -828,5 +895,27 @@ function CreateBotDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// Replaces a chat row's time while one of its chats is mid-turn.
+function WorkingMark({ className = "" }: { className?: string }) {
+  const { tr } = useLocale();
+  return (
+    <span role="status" aria-label={tr("Working…", "处理中…")} className={`inline-flex shrink-0 ${className}`}>
+      <LoaderCircle className="size-3.5 animate-spin text-muted-foreground motion-reduce:animate-none" />
+    </span>
+  );
+}
+
+// New activity since the row was last opened.
+function UnreadDot() {
+  const { tr } = useLocale();
+  return (
+    <span
+      role="status"
+      aria-label={tr("New messages", "有新消息")}
+      className="size-2 shrink-0 rounded-full bg-red-500"
+    />
   );
 }

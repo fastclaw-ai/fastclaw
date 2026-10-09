@@ -1,6 +1,6 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 import { apiFetch } from "./api";
 
 export type ChatRunStatus = "running" | "completed" | "stopped" | "failed";
@@ -31,4 +31,15 @@ export function stopChatRun(agentId: string, sessionId: string) {
 }
 export function useChatRunStatus(agentId: string, sessionId: string) {
   return useSyncExternalStore(subscribe, () => runs.get(key(agentId, sessionId))?.status, () => undefined);
+}
+// Agents with a run in flight from this tab, as a stable string snapshot
+// (useSyncExternalStore compares snapshots by value) — the chat list
+// shows them as working before the server's session status catches up.
+const runningAgentsSnapshot = () =>
+  [...new Set([...runs].filter(([, run]) => run.status === "running").map(([id]) => (JSON.parse(id) as [string, string])[0]))]
+    .sort()
+    .join("\n");
+export function useRunningAgentIds(): ReadonlySet<string> {
+  const snapshot = useSyncExternalStore(subscribe, runningAgentsSnapshot, () => "");
+  return useMemo(() => new Set(snapshot ? snapshot.split("\n") : []), [snapshot]);
 }
