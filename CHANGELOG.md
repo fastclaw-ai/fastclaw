@@ -5,6 +5,39 @@ action on upgrade — read those notes before deploying.
 
 ## [Unreleased]
 
+### Added — agent configuration export / import
+
+Settings → Advanced exports an agent's identity files (SOUL.md, AGENTS.md,
+…), prompt mode and its own skills as a ZIP, and imports one — a FastClaw
+export or a plain workspace folder — to replace them after a preview.
+Model keys, MCP servers, channels, chats and personal memory are never
+included.
+
+### Changed — turns survive flaky model APIs
+
+LLM requests now retry up to 6 times (2s → 30s backoff) on timeouts,
+dropped connections, 429 and 5xx, instead of ending the turn on the first
+response-header timeout; the header timeout is raised from 60s to 180s.
+Tool output over 64 KB is trimmed in context and saved in full under
+`.tool-outputs/`. Ordinary tool calls no longer hit a fixed 20-iteration
+cap — only repeated failures and no-progress loops stop a turn.
+
+### Changed — host-mode commands run in the session workspace
+
+`exec` on the host now starts in the chat's session folder, so generated
+files show up in that chat's workspace and links. Links to files an older
+version wrote at the agent root still resolve.
+
+### Fixed
+
+- DeepSeek thinking mode no longer fails with "The reasoning_content in the
+  thinking mode must be passed back to the API" when a step had no
+  reasoning (e.g. behind a routing model).
+- Clicking Send no longer immediately stops the run it started.
+- Photos sent over IM channels are saved to the workspace, and files an
+  agent links from outside the session folder are delivered to IM chats.
+- Relative image and HTML links in replies open the workspace file.
+
 ### Changed — **BREAKING**: IM channels must be paired before they answer
 
 Connecting a bot proves you control the bot, not which chat account is
