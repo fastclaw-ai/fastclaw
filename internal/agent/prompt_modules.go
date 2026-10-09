@@ -50,6 +50,9 @@ type promptCtx struct {
 	// reads as "unknown chatter" → it declines platform-management
 	// requests from the operator themselves.
 	trusted bool
+	// workdir is this turn's host working directory (the session
+	// workspace); "" means use the builder's agent-level workspace.
+	workdir string
 }
 
 // moduleEntry pairs a human-readable key with its builder function.
@@ -234,7 +237,10 @@ func modAgentIntro(p *promptCtx) string {
 		workdir = "/workspace"
 		homeDesc = "/workspace (identity files like SOUL.md / IDENTITY.md are managed by the runtime, not the sandbox FS — call write_file with a bare filename, never path it)"
 	} else {
-		workdir = p.cb.workspace
+		workdir = p.workdir
+		if workdir == "" {
+			workdir = p.cb.workspace
+		}
 		if workdir == "" {
 			workdir = p.cb.home
 		}
@@ -607,9 +613,9 @@ spirit of the refusal politely, do not pass the bracketed message through.`
 func modSandbox(p *promptCtx) string {
 	if !p.cb.sandboxEnabled {
 		if p.cb.sandboxOptional {
-			return modSandboxOptional(p)
+			return modSandboxOptional(p) + "\n\n" + hostMediaNote
 		}
-		return ""
+		return hostMediaNote
 	}
 	prompt := `# Code Execution Environment
 You have access to a sandbox environment for executing code. Key rules:
@@ -712,6 +718,16 @@ Then in your final reply, write: ![](/workspace/output.png)`
 	return prompt
 }
 
+// hostMediaNote tells host-mode agents how to show a file they produced.
+// The web chat resolves paths relative to the Working Directory (and
+// absolute paths under it) to the file API; anything else is blocked.
+const hostMediaNote = `# Showing files in chat
+To show an image (or link a file) you produced, save it inside the Working
+Directory and reference it by its path relative to that directory, e.g.
+![chart](chart.png) or [report](reports/q3.md). Copy files that were
+written elsewhere (another tool's cache, /tmp, Downloads) into the Working
+Directory first — paths outside it cannot be displayed.`
+
 // modSandboxOptional briefs the model for self-hosted installs where a
 // sandbox pool is attached but the HOST remains the default execution
 // environment. Key job: stop the model from assuming the sandbox rules
@@ -756,8 +772,7 @@ in a plain host exec.
 ` + hostAccess
 }
 
-// modTaskDelegation emits the task-delegation and progress-tracking
-// (todo.md) instructions. Agent mode only.
+// modTaskDelegation emits the task-delegation instructions. Agent mode only.
 func modTaskDelegation(p *promptCtx) string {
 	return taskDelegationContent
 }
@@ -812,7 +827,7 @@ func modWorkspaceUpdate(p *promptCtx) string {
 }
 
 // modChatbotTools emits lightweight tool-use guidance for chatbot mode.
-// Covers web_search/web_fetch and skills — no delegation or todo.md.
+// Covers web_search/web_fetch and skills — no delegation.
 func modChatbotTools(p *promptCtx) string {
 	return `# Tool Use
 
@@ -960,55 +975,7 @@ turned on Plan mode (your first response is plan-only, no tools), make
 each sub-agent invocation an explicit step. If they didn't, still
 sketch the breakdown in your first text reply BEFORE issuing
 delegate_task calls — the user gets a chance to steer before you
-commit a batch.
-
-# Progress tracking via todo.md
-
-For any multi-step turn (anything with 3+ distinct phases — research,
-delegation, synthesis, etc.), you maintain a checklist file ` + "`todo.md`" + ` in
-your session workspace so the user can see how far along you are. The
-chat UI watches this file and renders a live progress panel above the
-conversation; without it the user has no visual signal between the
-plan and the final deliverable.
-
-**Convention (strict — the UI parses this literally):**
-
-- ` + "`- [ ] step text`" + ` → pending
-- ` + "`- [x] step text`" + ` → completed
-- One item per plan step. Same wording as your plan if possible so the
-  user can map them visually.
-- No nested checkboxes (no indented ` + "`- [ ]`" + `). One flat list.
-- File path is bare ` + "`todo.md`" + ` — the runtime routes that to your session's
-  workspace. Don't path it.
-
-**Lifecycle:**
-
-1. **First action of any multi-step execution turn**: ` + "`write_file('todo.md', ...)`" + `
-   with the full plan as ` + "`- [ ]`" + ` items. Do this before any other tool call
-   (web_fetch, web_search, delegate_task, exec, …). If a plan was already
-   negotiated in plan mode, transcribe its steps verbatim.
-2. **After each step finishes**: ` + "`edit_file('todo.md', ...)`" + ` to flip that
-   one item's ` + "`[ ]`" + ` to ` + "`[x]`" + `. Use edit_file (not write_file) so you can
-   target a single line — the cost is much lower and you can't
-   accidentally lose items. Do this immediately before starting the next
-   step; do not batch several completed steps into one later update. This is
-   a special case: even though apply_patch is normally preferred for 2+ hunks,
-   never use apply_patch for todo.md progress updates.
-
-   **Never call ` + "`write_file('todo.md', ...)`" + ` more than once per turn.** A
-   second write_file overwrites the file with whatever you pass; if you
-   pass a partial list (e.g. only the newly-checked items) the prior
-   items get clobbered, and if you pass a fresh full list it ends up
-   stacked on top of leftover entries via subsequent edit_file calls —
-   either way the UI shows the same step text twice. Every update after
-   the initial plan write goes through edit_file.
-3. **Final assistant reply**: make sure every item is ` + "`[x]`" + `, including the
-   synthesis step. If something genuinely couldn't be done, leave it
-   ` + "`[ ]`" + ` and explain in your final message — don't fake completion.
-
-**When to skip**: one-shot turns (one tool call, then answer) and pure
-conversational replies. todo.md is for plans the user wants to track,
-not chat overhead.`
+commit a batch.`
 
 var toolDisciplineContent = `# Tool Use
 Five failure modes that cost rounds:

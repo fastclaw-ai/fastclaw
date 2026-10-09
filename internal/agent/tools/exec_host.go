@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"time"
 )
@@ -43,9 +44,18 @@ const hostCommandWaitDelay = 5 * time.Second
 // killed` reads like a crash and sends the model looking for a bug in
 // its command; "timed out after 120s" tells it to narrow the command or
 // raise the timeout, which is the actual remedy.
-func runHostCommand(execCtx context.Context, command string, env []string, timeout time.Duration) (string, error) {
+//
+// dir is the working directory (the turn's session workspace, see
+// Registry.HostWorkDir); it is created if missing. "" keeps the daemon's
+// own cwd, which is never what a chatter's command should write into.
+func runHostCommand(execCtx context.Context, command, dir string, env []string, timeout time.Duration) (string, error) {
 	cmd := exec.CommandContext(execCtx, "sh", "-c", command)
 	cmd.Env = env
+	if dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err == nil {
+			cmd.Dir = dir
+		}
+	}
 
 	setProcessGroup(cmd)
 	cmd.Cancel = func() error {

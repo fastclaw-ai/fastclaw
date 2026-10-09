@@ -227,7 +227,7 @@ func makeExecToolFull(r *Registry, sbCfg *SandboxConfig, envProvider SkillEnvPro
 			skillEnv = resolveSkillEnv(args.Command, envProvider, skillDirs)
 		}
 
-		return runHostCommand(execCtx, command, buildSubprocessEnv(skillEnv), time.Duration(timeout)*time.Second)
+		return runHostCommand(execCtx, command, r.HostWorkDir(), buildSubprocessEnv(skillEnv), time.Duration(timeout)*time.Second)
 	}
 }
 
@@ -397,7 +397,7 @@ func registerHostExec(r *Registry, envProvider SkillEnvProvider, skillDirs []str
 			if envProvider != nil && skillDirs != nil {
 				skillEnv = resolveSkillEnv(args.Command, envProvider, skillDirs)
 			}
-			return runHostCommand(execCtx, command, buildSubprocessEnv(skillEnv), time.Duration(timeout)*time.Second)
+			return runHostCommand(execCtx, command, r.HostWorkDir(), buildSubprocessEnv(skillEnv), time.Duration(timeout)*time.Second)
 		})
 }
 

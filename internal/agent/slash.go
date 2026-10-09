@@ -347,7 +347,7 @@ func (a *Agent) slashStatus(msg bus.InboundMessage) slashResult {
 		"Memory:      %d lines\n"+
 		"Workspace:   %s",
 		a.name, a.model, soul,
-		a.maxTokens, a.temperature, a.maxToolIterations,
+		a.maxTokens, a.temperature, a.toolIterationLimit(),
 		len(sessionMsgs), memLines, a.homePath,
 	)
 	return slashResult{handled: true, reply: status}

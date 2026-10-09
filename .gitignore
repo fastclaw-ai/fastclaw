@@ -71,3 +71,7 @@ env.toml
 web/node_modules/
 web/pnpm-lock.yaml
 fastclaw-patched
+
+# Python bytecode from skill scripts
+__pycache__/
+*.pyc

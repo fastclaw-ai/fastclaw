@@ -1,0 +1,7 @@
+numpy>=2.0
+pillow>=11
+opencv-python-headless>=4.10
+scikit-image>=0.24
+playwright>=1.50
+rapidocr>=3.4
+onnxruntime>=1.20

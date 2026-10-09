@@ -71,7 +71,7 @@ func RegisterDelegateTask(r *Registry, runner SubagentRunner) {
 				},
 				"max_iterations": map[string]interface{}{
 					"type":        "integer",
-					"description": "Optional override for the sub-agent's tool-iteration budget. Default is the same cap as your turn (typically 20). REALISTIC BUDGETS: for browser-heavy sub-tasks (camoufox-cli — each open/snapshot/click is 1-30s real time, plus a 2-3 min cold-start on the first call), the sub-agent has a 15-minute wall-time cap, so a max_iterations of 12-18 is the practical ceiling — setting 40 just means it'll hit the wall-clock long before iteration 40 and you'll get a partial answer with a 'ran out of budget' note. For quick web_search / web_fetch sub-tasks, 20-30 is fine. For pure synthesis (no tools), 3-5 is enough.",
+					"description": "Optional override for the sub-agent's tool-iteration budget. Default is 20. REALISTIC BUDGETS: for browser-heavy sub-tasks (camoufox-cli — each open/snapshot/click is 1-30s real time, plus a 2-3 min cold-start on the first call), the sub-agent has a 15-minute wall-time cap, so a max_iterations of 12-18 is the practical ceiling — setting 40 just means it'll hit the wall-clock long before iteration 40 and you'll get a partial answer with a 'ran out of budget' note. For quick web_search / web_fetch sub-tasks, 20-30 is fine. For pure synthesis (no tools), 3-5 is enough.",
 				},
 			},
 			"required": []string{"task"},

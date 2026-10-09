@@ -174,7 +174,20 @@ func (cb *ContextBuilder) BuildSystemPromptAsWithGroup(chatterUID string, chatte
 	return cb.buildSystemPromptAs(chatterUID, chatterMem, trusted, groupCtx)
 }
 
+// BuildTurnSystemPrompt is BuildSystemPromptAsWithGroup plus the turn's
+// host working directory (Registry.HostWorkDir — the session workspace).
+// Per call for the same reason as trusted/groupCtx: one builder serves
+// every chat of the agent concurrently. Empty workdir falls back to the
+// agent-level workspace.
+func (cb *ContextBuilder) BuildTurnSystemPrompt(chatterUID string, chatterMem *Memory, trusted bool, groupCtx *GroupContext, workdir string) string {
+	return cb.buildSystemPrompt(chatterUID, chatterMem, trusted, groupCtx, workdir)
+}
+
 func (cb *ContextBuilder) buildSystemPromptAs(chatterUID string, chatterMem *Memory, trusted bool, groupCtx *GroupContext) string {
+	return cb.buildSystemPrompt(chatterUID, chatterMem, trusted, groupCtx, "")
+}
+
+func (cb *ContextBuilder) buildSystemPrompt(chatterUID string, chatterMem *Memory, trusted bool, groupCtx *GroupContext, workdir string) string {
 	if chatterUID == "" {
 		chatterUID = cb.userID
 	}
@@ -196,6 +209,7 @@ func (cb *ContextBuilder) buildSystemPromptAs(chatterUID string, chatterMem *Mem
 		loc:        loc,
 		dateLine:   buildDateLine(now, tzExplicit),
 		trusted:    trusted,
+		workdir:    workdir,
 	}
 
 	var parts []string

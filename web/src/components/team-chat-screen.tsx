@@ -517,6 +517,7 @@ function TeamConversation({ teamId, sessionId, panelOpen, onPanelChange }: {
     }
   };
 
+  const stopPressRef = React.useRef(false);
   const stop = async () => {
     try { await stopTeamRun(teamId, sessionId); }
     catch (cause) { setActionError(cause instanceof Error ? cause.message : String(cause)); }
@@ -860,15 +861,27 @@ function TeamConversation({ teamId, sessionId, panelOpen, onPanelChange }: {
                   className="block min-w-0 flex-1 resize-none bg-transparent px-1 py-1 text-[15px] leading-6 placeholder:text-muted-foreground/45 outline-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
                   style={{ maxHeight: 180, minHeight: 32 }}
                 />
+                {/* Send fires on mousedown and flips `sending` before mouseup;
+                    see chat-screen's composer — distinct keys plus a press
+                    that must start on Stop keep that mouseup from stopping
+                    the run it just started. */}
                 {sending ? (
-                  <Button disabled={submitting} onClick={() => void stop()} size="icon" aria-label={t("composer.stop")}
+                  <Button key="composer-stop" disabled={submitting}
+                    onPointerDown={() => { stopPressRef.current = true; }}
+                    onPointerLeave={() => { stopPressRef.current = false; }}
+                    onClick={(event) => {
+                      const pressed = stopPressRef.current || event.detail === 0;
+                      stopPressRef.current = false;
+                      if (pressed) void stop();
+                    }}
+                    size="icon" aria-label={t("composer.stop")}
                     className="size-8 shrink-0 rounded-full bg-[#111] text-white hover:bg-black disabled:bg-[#111] dark:bg-white dark:text-black dark:hover:bg-white/90">
                     <Square className="size-3 fill-current" />
                   </Button>
                 ) : (
                   // Always present so the composer reads as sendable; it
                   // stays dimmed until there's something to send.
-                  <Button onMouseDown={(event) => { event.preventDefault(); void send(); }}
+                  <Button key="composer-send" onMouseDown={(event) => { event.preventDefault(); void send(); }}
                     disabled={!(input.trim() || images.length || attachments.length)} size="icon" aria-label={t("composer.send")}
                     className="size-8 shrink-0 rounded-full bg-[#111] text-white hover:bg-black disabled:bg-black/15 disabled:text-white disabled:opacity-100 dark:bg-white dark:text-black dark:hover:bg-white/90 dark:disabled:bg-white/20 dark:disabled:text-black/60">
                     <ArrowUp className="size-[17px] stroke-[2.25]" />

@@ -1165,6 +1165,9 @@ export interface ToolResultMetadata {
   // under-budget and may be incomplete.
   iterationCapReached?: boolean;
   iterationCapValue?: number;
+  // Why the tool loop was cut off: "cap" (budget used up) or "loop"
+  // (kept repeating an identical call after a warning). Absent = "cap".
+  iterationStopReason?: "cap" | "loop";
   // Stamped on assistant messages produced by plan mode (composer toggle).
   // The bubble is a plan, not an execution result — UI shows a distinct
   // badge so the user knows to review it and reply with "go" (or edits).
@@ -1188,7 +1191,8 @@ export interface ChatStreamEvent {
     | "steer"
     | "error"
     | "done"
-    | "subagent_progress";
+    | "subagent_progress"
+    | "status";
   // Per-session monotonic sequence assigned by chat_events. Lets the
   // chat page dedupe events arriving on both the active POST stream
   // and the parallel /api/chat/subscribe SSE connection. -1 means
@@ -1214,8 +1218,12 @@ export interface ChatStreamEvent {
     // subagent_progress payload — only populated when type === "subagent_progress".
     iteration?: number;
     max?: number;
-    phase?: "thinking" | "running" | "final-delivery" | "done";
+    phase?: "thinking" | "running" | "final-delivery" | "done" | "retrying" | "wrap_up";
     tools?: string[];
+    // status payload (type === "status", phase "retrying"): the model call
+    // failed and the backend is retrying it.
+    attempt?: number;
+    maxAttempts?: number;
   };
 }
 
@@ -2421,6 +2429,22 @@ export function fileUrl(agentId: string, path: string, download = false): string
   if (download) params.set("download", "1");
   const qs = params.toString();
   return `/api/agents/${agentId}/files/${encoded}${qs ? "?" + qs : ""}`;
+}
+
+// Editable designs (skills/image-to-editable-html): the page runs in a
+// sandboxed iframe and posts the user's manual edits up; they are saved to
+// <design>/scene/edits.json next to the page, where the skill merges them
+// before its next change. htmlPath is the page's workspace path.
+export async function saveSceneEdits(agentId: string, htmlPath: string, edits: unknown): Promise<void> {
+  const dir = htmlPath.split("/").slice(0, -1).join("/");
+  const rel = `${dir ? dir + "/" : ""}scene/edits.json`;
+  const encoded = rel.split("/").map(encodeURIComponent).join("/");
+  const res = await apiFetch(`/api/agents/${encodeURIComponent(agentId)}/scene-edits/${encoded}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(edits),
+  });
+  if (!res.ok) throw new Error(`save failed: ${res.status}`);
 }
 
 // Workspace version history (per-session git snapshots taken after each

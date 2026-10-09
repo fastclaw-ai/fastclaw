@@ -4,6 +4,7 @@ package tools
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +26,7 @@ func TestRunHostCommand_TimeoutKillsGrandchildren(t *testing.T) {
 		// `sh` forks a subshell that outlives a naive kill of `sh` and
 		// keeps the CombinedOutput pipe open for 30s.
 		"(sleep 30; echo late) | cat",
+		"",
 		buildSubprocessEnv(nil),
 		1*time.Second,
 	)
@@ -46,7 +48,7 @@ func TestRunHostCommand_TimeoutKillsGrandchildren(t *testing.T) {
 // actually reads. A bare `signal: killed` reads like a crash and sends
 // the model debugging its command instead of narrowing it.
 func TestRunHostCommand_TimeoutErrorIsActionable(t *testing.T) {
-	_, err := runHostCommand(mustDeadline(t, 500*time.Millisecond), "sleep 30", buildSubprocessEnv(nil), 500*time.Millisecond)
+	_, err := runHostCommand(mustDeadline(t, 500*time.Millisecond), "sleep 30", "", buildSubprocessEnv(nil), 500*time.Millisecond)
 	if err == nil {
 		t.Fatal("expected a timeout error, got nil")
 	}
@@ -64,7 +66,7 @@ func TestRunHostCommand_TimeoutErrorIsActionable(t *testing.T) {
 // TestRunHostCommand_SuccessAndFailurePassThrough keeps the happy path
 // and ordinary non-zero exits behaving exactly as before the rewrite.
 func TestRunHostCommand_SuccessAndFailurePassThrough(t *testing.T) {
-	out, err := runHostCommand(mustDeadline(t, 10*time.Second), "echo hello", buildSubprocessEnv(nil), 10*time.Second)
+	out, err := runHostCommand(mustDeadline(t, 10*time.Second), "echo hello", "", buildSubprocessEnv(nil), 10*time.Second)
 	if err != nil {
 		t.Fatalf("echo failed: %v (%q)", err, out)
 	}
@@ -72,7 +74,7 @@ func TestRunHostCommand_SuccessAndFailurePassThrough(t *testing.T) {
 		t.Errorf("stdout not captured: %q", out)
 	}
 
-	out, err = runHostCommand(mustDeadline(t, 10*time.Second), "echo oops >&2; exit 3", buildSubprocessEnv(nil), 10*time.Second)
+	out, err = runHostCommand(mustDeadline(t, 10*time.Second), "echo oops >&2; exit 3", "", buildSubprocessEnv(nil), 10*time.Second)
 	if err == nil {
 		t.Fatal("expected a non-zero exit to surface as an error")
 	}
@@ -89,4 +91,18 @@ func mustDeadline(t *testing.T, d time.Duration) context.Context {
 	ctx, cancel := context.WithTimeout(context.Background(), d)
 	t.Cleanup(cancel)
 	return ctx
+}
+
+// The host shell runs in the session workspace (created on demand), so
+// "./out.png" lands where write_file and the chat's file links look.
+func TestRunHostCommandUsesWorkDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "sessions", "s-1")
+	out, err := runHostCommand(mustDeadline(t, 10*time.Second), "pwd -P", dir, buildSubprocessEnv(nil), 10*time.Second)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	want, _ := filepath.EvalSymlinks(dir)
+	if strings.TrimSpace(out) != want {
+		t.Fatalf("pwd = %q, want %q", strings.TrimSpace(out), want)
+	}
 }

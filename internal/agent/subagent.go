@@ -181,6 +181,7 @@ func (a *Agent) runSubagentLoop(ctx context.Context, task string, maxIterations 
 		for idx, r := range results {
 			tc := resp.ToolCalls[idx]
 			resultContent, _ := extractToolMeta(r.result)
+			resultContent = capToolResult(resultContent, a.registry.HostWorkDir(), tc.ID)
 			if !isFailedToolResult(r.err, resultContent) {
 				roundAllFailed = false
 			}

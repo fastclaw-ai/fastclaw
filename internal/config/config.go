@@ -744,9 +744,10 @@ func ApplyDefaults(cfg *Config) {
 	if cfg.Agents.Defaults.Temperature == 0 {
 		cfg.Agents.Defaults.Temperature = 0.7
 	}
-	if cfg.Agents.Defaults.MaxToolIterations == 0 {
-		cfg.Agents.Defaults.MaxToolIterations = 20
-	}
+	// MaxToolIterations deliberately has no default: 0 means no fixed
+	// per-turn tool budget (see agent.toolIterationLimit). Failure
+	// guards and the turn deadline stop stuck turns; a fixed 20 cut
+	// off healthy long tasks mid-way.
 }
 
 // MergedAgentConfig merges defaults with an agent entry to produce a fully
@@ -905,7 +906,7 @@ func (cfg *Config) MergedAgentConfig(entry AgentEntry) ResolvedAgent {
 	// user wait too long.
 	if resolved.PromptMode == PromptModeChatbot && entry.MaxToolIterations == 0 {
 		const chatbotDefaultIter = 5
-		if resolved.MaxToolIterations > chatbotDefaultIter {
+		if resolved.MaxToolIterations == 0 || resolved.MaxToolIterations > chatbotDefaultIter {
 			resolved.MaxToolIterations = chatbotDefaultIter
 		}
 	}

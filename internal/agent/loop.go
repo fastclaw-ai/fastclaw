@@ -5,10 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -1793,11 +1794,6 @@ func planModeNudge() string {
 		"That's the only way the execution turn stays inside its " +
 		"iteration budget; trying to do all of it directly will burn the " +
 		"cap on exploration and never reach synthesis.\n\n" +
-		"Your VERY FIRST execution action (next turn) should be " +
-		"`write_file('todo.md', <plan as - [ ] items>)` so the user sees " +
-		"a live progress panel as you work. Mention this in the plan as " +
-		"an explicit Step 0 (or fold it into Step 1) — the UI requires " +
-		"the file to render anything.\n\n" +
 		"Output a numbered plan with 3-7 steps. Each step is one or two " +
 		"sentences describing the action plus the tool you'll use, e.g. " +
 		"\"Step 3: Use `delegate_task` to find 10 solo insurance agents in " +
@@ -1983,14 +1979,25 @@ func (a *Agent) flushLeftoverSteer(sess *session.Session) {
 	}
 }
 
-// llmRetry wraps an LLM call with retry logic for transient errors (network
-// glitches, server 5xx, EOF). Context cancellation / deadline exceeded are
-// treated as terminal — there's no point retrying when the caller has gone
-// away or the deadline has passed. Uses exponential backoff (1s, 4s, 9s)
-// across up to wechatLLMRetryAttempts calls.
+// llmRetry wraps an LLM call with retry logic for transient failures:
+// network errors, upstream timeouts, 408/409/425/429 and 5xx. Permanent
+// failures (bad request, auth, model not found, payload too large) fail
+// fast — repeating them cannot succeed.
+//
+// Only the CALLER's context ending (Stop, shutdown, the turn deadline)
+// is terminal. Checking errors.Is(err, context.DeadlineExceeded) is not
+// enough: net/http's "timeout awaiting response headers" also matches
+// it, and treating that as terminal ended whole turns on one slow
+// upstream response instead of retrying it.
+//
+// Backoff doubles from 2s up to 30s across llmRetryAttempts calls
+// (≈2 minutes of waiting in total), so a provider blip or a restarting
+// local gateway is ridden out without the user having to type
+// "continue". onRetry, when non-nil, is told about each retry so the
+// caller can surface it.
 //
 // The label argument is used for structured logging (typically a.name).
-const llmRetryAttempts = 3
+const llmRetryAttempts = 6
 
 func llmRetry(ctx context.Context, label string, fn func(context.Context) (*provider.Response, error)) (*provider.Response, error) {
 	var lastErr error
@@ -2005,16 +2012,27 @@ func llmRetry(ctx context.Context, label string, fn func(context.Context) (*prov
 		}
 		lastErr = err
 
-		// Context errors are terminal — don't retry.
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		// The caller gave up (Stop / shutdown / turn deadline): terminal.
+		if ctx.Err() != nil {
+			return nil, err
+		}
+		if !isRetryableLLMError(err) {
+			slog.Warn("LLM call failed with a permanent error, not retrying",
+				"agent", label, "attempt", attempt, "error", err)
 			return nil, err
 		}
 
 		if attempt < llmRetryAttempts {
-			backoff := time.Duration(attempt*attempt) * time.Second // 1s, 4s, 9s
+			backoff := llmRetryBackoff(attempt)
 			slog.Warn("LLM call failed, retrying",
 				"agent", label, "attempt", attempt,
 				"max", llmRetryAttempts, "backoff", backoff, "error", err)
+			emitEvent(ctx, ChatEvent{Type: "status", Data: map[string]any{
+				"phase":       "retrying",
+				"attempt":     attempt + 1,
+				"maxAttempts": llmRetryAttempts,
+				"error":       err.Error(),
+			}})
 			select {
 			case <-time.After(backoff):
 			case <-ctx.Done():
@@ -2025,6 +2043,40 @@ func llmRetry(ctx context.Context, label string, fn func(context.Context) (*prov
 	slog.Error("LLM call failed after all retries",
 		"agent", label, "attempts", llmRetryAttempts, "error", lastErr)
 	return nil, lastErr
+}
+
+// llmRetryBackoff is 2s, 4s, 8s, 16s, 30s, 30s… for attempt 1, 2, 3, …
+// A var so tests can shrink it.
+var llmRetryBackoff = func(attempt int) time.Duration {
+	d := time.Duration(1<<attempt) * time.Second
+	if d > 30*time.Second {
+		d = 30 * time.Second
+	}
+	return d
+}
+
+// apiErrorStatusRe pulls the HTTP status out of the providers'
+// "API error <status>: <body>" errors.
+var apiErrorStatusRe = regexp.MustCompile(`API error (\d{3})\b`)
+
+// isRetryableLLMError reports whether an LLM call error is worth
+// retrying. Errors without an HTTP status (connection refused/reset,
+// EOF, header or read timeouts, a stream that died mid-way) are
+// transient by nature; with a status, only 408/409/425/429 and 5xx are.
+func isRetryableLLMError(err error) bool {
+	m := apiErrorStatusRe.FindStringSubmatch(err.Error())
+	if m == nil {
+		return true
+	}
+	status, _ := strconv.Atoi(m[1])
+	switch {
+	case status >= 500:
+		return true
+	case status == 408, status == 409, status == 425, status == 429:
+		return true
+	default:
+		return false
+	}
 }
 
 // sameToolFailStreakLimit and softDeadlineFraction gate the two stall-
@@ -2161,67 +2213,24 @@ func maybeInjectSoftDeadlineWarning(ctx context.Context, turnStart time.Time, me
 	return append(messages, warnMsg), true
 }
 
-// pendingTodoItems returns the unchecked items in this session's
-// todo.md, or nil when there is no todo file (the common case — most
-// turns never write one).
-//
-// Reads through the workspace store rather than the filesystem so it
-// sees the same bytes write_file wrote, in every deployment.
-func (a *Agent) pendingTodoItems(ctx context.Context) []string {
-	if a.workspaceStore == nil || a.agentID == "" || a.registry == nil {
-		return nil
-	}
-	rc, err := a.workspaceStore.Get(ctx, a.agentID, a.registry.ProjectID(), a.registry.SessionID(), "todo.md")
-	if err != nil {
-		return nil
-	}
-	defer rc.Close()
-	body, err := io.ReadAll(io.LimitReader(rc, 64<<10))
-	if err != nil {
-		return nil
-	}
-	return uncheckedTodoItems(string(body))
-}
+// hardToolIterationCeiling bounds a turn when no explicit
+// maxToolIterations is configured. Healthy progress — tool calls that
+// succeed — is not what this budget is for: long tasks (driving a CLI,
+// polling a background job, multi-file edits) legitimately need dozens
+// of rounds. Stuck turns are stopped by the failure guards instead
+// (same-tool fail streak, all-failed rounds, identical-call loop
+// detection) and by the turn's wall-clock deadline. The ceiling is only
+// a backstop against a model that loops forever on "successful" calls.
+const hardToolIterationCeiling = 200
 
-// uncheckedTodoItems parses the "- [ ] step" convention the UI renders.
-// Anything that isn't a checkbox line is prose and ignored, matching the
-// panel's own parser.
-func uncheckedTodoItems(body string) []string {
-	var out []string
-	for _, line := range strings.Split(body, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if rest, ok := strings.CutPrefix(trimmed, "- [ ]"); ok {
-			if item := strings.TrimSpace(rest); item != "" {
-				out = append(out, item)
-			}
-		}
+// toolIterationLimit is the turn's tool-round budget: the agent's
+// explicit maxToolIterations when set (chatbot mode defaults to 5),
+// otherwise hardToolIterationCeiling.
+func (a *Agent) toolIterationLimit() int {
+	if a.maxToolIterations > 0 {
+		return a.maxToolIterations
 	}
-	return out
-}
-
-// todoReconcileNudge asks for one more pass when a turn is about to end
-// with its own checklist still showing unfinished work.
-//
-// The checklist is a promise rendered in the UI, and it drifts for a
-// mundane reason: something goes wrong mid-turn, the model firefights,
-// and never returns to the file. What the user then sees is a reply
-// saying "all done" beside a progress panel reading 1/5 — and there is
-// no way to tell from the outside which one is lying.
-//
-// Fires at most once per turn, and accepts "I did not finish these" as a
-// valid resolution — leaving an item unchecked is correct when the work
-// genuinely did not happen. What is not acceptable is the mismatch.
-func todoReconcileNudge(pending []string) provider.Message {
-	return provider.Message{
-		Role: "system",
-		Content: fmt.Sprintf(
-			"Before this reply goes out: todo.md still has %d unchecked item(s) — %s. "+
-				"The user sees that checklist as a live progress panel next to your answer, so it must not contradict what you are about to say. "+
-				"Resolve it one of two ways: edit_file('todo.md', …) to flip the items you actually completed, "+
-				"or keep them unchecked and say plainly in your reply which steps did not get done and why. "+
-				"Do not claim the task is complete while its own checklist says otherwise.",
-			len(pending), strings.Join(pending, "; ")),
-	}
+	return hardToolIterationCeiling
 }
 
 // softIterationFraction is the share of the tool-call budget left when
@@ -2447,7 +2456,7 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 	a.hooks.Run(ctx, &HookContext{AgentName: a.name, Point: BeforeSystemPrompt, UserID: a.ownerUserID})
 
 	chatterMem := a.memory.WithUserID(chatterUID)
-	systemPrompt := a.ctxBuilder.BuildSystemPromptAsWithGroup(chatterUID, chatterMem, a.isTrustedTurn(msg), groupContextFromParams(msg.Params))
+	systemPrompt := a.ctxBuilder.BuildTurnSystemPrompt(chatterUID, chatterMem, a.isTrustedTurn(msg), groupContextFromParams(msg.Params), a.registry.HostWorkDir())
 	knowledgeMeta := knowledgeMetadata(extractKnowledgeCitationSources(systemPrompt))
 	a.logSystemPromptFingerprint(msg.Channel, msg.ChatID, chatterUID, systemPrompt)
 
@@ -2532,7 +2541,6 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 	turnStart := time.Now()
 	softDeadlineFired := false
 	iterBudgetWarned := false
-	todoReconciled := false
 
 	// replyParts accumulates every non-empty assistant text segment
 	// emitted across iterations (preamble lines before tool calls + the
@@ -2543,8 +2551,12 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 	// splits on it (AllowSplit=true) or collapses to newlines otherwise.
 	var replyParts []string
 
+	stop := turnStop{reason: stopReasonCap, limit: a.toolIterationLimit()}
+	loopWarned := false
+	totalFailedCalls := 0
+
 	// ReAct loop
-	for i := 0; i < a.maxToolIterations; i++ {
+	for i := 0; i < a.toolIterationLimit(); i++ {
 		slog.Info("agent loop iteration",
 			"agent", a.name,
 			"iteration", i+1,
@@ -2553,7 +2565,7 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 		)
 
 		messages, softDeadlineFired = maybeInjectSoftDeadlineWarning(ctx, turnStart, messages, softDeadlineFired)
-		messages, iterBudgetWarned = maybeInjectIterationBudgetWarning(ctx, i, a.maxToolIterations, messages, iterBudgetWarned)
+		messages, iterBudgetWarned = maybeInjectIterationBudgetWarning(ctx, i, a.toolIterationLimit(), messages, iterBudgetWarned)
 
 		// Hook: BeforeModelCall
 		hcBefore := &HookContext{AgentName: a.name, Point: BeforeModelCall, Messages: messages, Channel: msg.Channel, AccountID: msg.AccountID, ChatID: msg.ChatID, UserID: a.ownerUserID}
@@ -2609,6 +2621,11 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 					allFailedRounds,
 				),
 			})
+		} else if totalFailedCalls >= maxFailedToolCallsPerTurn {
+			slog.Warn("disabling tools after too many failed calls this turn",
+				"agent", a.name, "failed_calls", totalFailedCalls)
+			callTools = nil
+			llmMessages = append(llmMessages, failedCallsBudgetMessage(totalFailedCalls))
 		}
 		dumpLLMRequest(a.name, a.model, llmMessages, callTools)
 		resp, err := llmRetry(ctx, a.name, func(ctx context.Context) (*provider.Response, error) {
@@ -2646,19 +2663,6 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 				return emptyMsg
 			}
 			asst := provider.Message{Role: "assistant", Content: resp.Content, Thinking: resp.Thinking, Metadata: knowledgeMeta, Timestamp: time.Now().UnixMilli(), RawAssistant: resp.RawAssistant}
-
-			// Reconcile the checklist BEFORE the answer is emitted — once
-			// the user has read "all done", a corrected todo panel is just
-			// a second contradiction. Firing once per turn bounds this to
-			// one extra round and cannot loop.
-			if !todoReconciled {
-				if pending := a.pendingTodoItems(ctx); len(pending) > 0 {
-					todoReconciled = true
-					messages = append(messages, asst, todoReconcileNudge(pending))
-					continue
-				}
-				todoReconciled = true
-			}
 
 			sess.Append(asst)
 			emitEvent(ctx, ChatEvent{Type: "content", Data: map[string]any{"content": resp.Content, "metadata": knowledgeMeta}})
@@ -2806,6 +2810,7 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 			totalToolCalls++
 			tc := resp.ToolCalls[idx]
 			resultContent, meta := extractToolMeta(r.result)
+			resultContent = capToolResult(resultContent, a.registry.HostWorkDir(), tc.ID)
 
 			// Hook: AfterToolCall
 			a.hooks.Run(ctx, &HookContext{
@@ -2842,6 +2847,7 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 					summary = firstNonEmptyLine(resultContent)
 				}
 				a.registry.RecordToolFailure(r.toolName, tc.Function.Arguments, summary)
+				totalFailedCalls++
 				// Same-tool-fail-streak tracking (P0.1): counts
 				// consecutive failures of THIS tool regardless of
 				// arguments, independent of roundAllFailed (which
@@ -2890,11 +2896,6 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 				loopDetected = true
 			}
 		}
-		if loopDetected {
-			warnMsg := repeatedToolCallWarning("Loop detected: you called the same tool with the same arguments and received the same result 3 times. Please try a different approach.")
-			sess.Append(warnMsg)
-			messages = append(messages, warnMsg)
-		}
 		// Update consecutive-failed-rounds tally now that the whole
 		// round's results have been processed. A single non-failure
 		// resets it — the model just got useful info, give it room
@@ -2904,8 +2905,18 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 		} else {
 			allFailedRounds = 0
 		}
+		// First repetition only warns (polling a background job looks
+		// exactly like this); a repeat after the warning ends the turn.
 		if loopDetected {
-			break
+			if loopWarned {
+				stop.reason = stopReasonLoop
+				break
+			}
+			loopWarned = true
+			loopDetector.Reset()
+			warnMsg := repeatedToolCallWarning(loopWarningText)
+			sess.Append(warnMsg)
+			messages = append(messages, warnMsg)
 		}
 
 		// Steering: messages that arrived while this tool round ran are
@@ -2916,12 +2927,12 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 		}
 	}
 
-	slog.Warn("max tool iterations reached — forcing final delivery", "agent", a.name, "max", a.maxToolIterations)
+	slog.Warn("tool loop cut off — forcing final delivery", "agent", a.name, "reason", stop.reason, "max", stop.limit)
 	// Forced final delivery: one more LLM call with tools disabled and a
 	// nudge that tells the model to synthesize what it has. Replaces the
 	// old behavior of just returning a canned warning, which left users
 	// with zero deliverable after a full iteration budget got burned.
-	finalMessages := append(messages, capReachedNudge(a.maxToolIterations))
+	finalMessages := append(messages, stop.nudge())
 	if a.piiScrubEnabled {
 		finalMessages = privacy.ScrubMessages(finalMessages)
 	}
@@ -2935,10 +2946,10 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 		// Synthesis call itself failed or returned empty — fall back to
 		// the canned line so the user still gets *something* with the
 		// badge attached.
-		finalContent = fmt.Sprintf("I've reached the maximum number of tool iterations (%d) and couldn't synthesize a final response. The work above represents what I gathered before hitting the limit.", a.maxToolIterations)
+		finalContent = stop.fallback()
 	}
-	finalContent += iterationCapNotice(msg.Channel, a.maxToolIterations)
-	capMeta := mergeMetadata(iterationCapMetadata(a.maxToolIterations), knowledgeMeta)
+	finalContent += stop.notice(msg.Channel)
+	capMeta := mergeMetadata(stop.metadata(), knowledgeMeta)
 	sess.Append(provider.Message{
 		Role:      "assistant",
 		Content:   finalContent,
@@ -3263,7 +3274,7 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 
 	a.hooks.Run(ctx, &HookContext{AgentName: a.name, Point: BeforeSystemPrompt, UserID: a.ownerUserID})
 	chatterMem := a.memory.WithUserID(chatterUID)
-	systemPrompt := a.ctxBuilder.BuildSystemPromptAsWithGroup(chatterUID, chatterMem, a.isTrustedTurn(msg), groupContextFromParams(msg.Params))
+	systemPrompt := a.ctxBuilder.BuildTurnSystemPrompt(chatterUID, chatterMem, a.isTrustedTurn(msg), groupContextFromParams(msg.Params), a.registry.HostWorkDir())
 	knowledgeMeta := knowledgeMetadata(extractKnowledgeCitationSources(systemPrompt))
 	a.logSystemPromptFingerprint(msg.Channel, msg.ChatID, chatterUID, systemPrompt)
 	a.hooks.Run(ctx, &HookContext{AgentName: a.name, Point: AfterSystemPrompt, UserID: a.ownerUserID})
@@ -3315,12 +3326,15 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 	turnStart := time.Now()
 	softDeadlineFired := false
 	iterBudgetWarned := false
-	todoReconciled := false
+
+	stop := turnStop{reason: stopReasonCap, limit: a.toolIterationLimit()}
+	loopWarned := false
+	totalFailedCalls := 0
 
 	// ReAct loop - use Chat for tool iterations
-	for i := 0; i < a.maxToolIterations; i++ {
+	for i := 0; i < a.toolIterationLimit(); i++ {
 		messages, softDeadlineFired = maybeInjectSoftDeadlineWarning(ctx, turnStart, messages, softDeadlineFired)
-		messages, iterBudgetWarned = maybeInjectIterationBudgetWarning(ctx, i, a.maxToolIterations, messages, iterBudgetWarned)
+		messages, iterBudgetWarned = maybeInjectIterationBudgetWarning(ctx, i, a.toolIterationLimit(), messages, iterBudgetWarned)
 
 		hcBefore := &HookContext{AgentName: a.name, Point: BeforeModelCall, Messages: messages, Channel: msg.Channel, AccountID: msg.AccountID, ChatID: msg.ChatID, UserID: a.ownerUserID}
 		a.hooks.Run(ctx, hcBefore)
@@ -3342,6 +3356,11 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 					streakState.lastFailedTool, streakState.streak,
 				),
 			})
+		} else if totalFailedCalls >= maxFailedToolCallsPerTurn {
+			slog.Warn("disabling tools after too many failed calls this turn",
+				"agent", a.name, "failed_calls", totalFailedCalls)
+			callTools = nil
+			messages = append(messages, failedCallsBudgetMessage(totalFailedCalls))
 		}
 
 		dumpLLMRequest(a.name, a.model, messages, callTools)
@@ -3360,22 +3379,6 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 		a.maybeRecoverToolCalls(resp)
 
 		if !resp.HasToolCalls() {
-			// Reconcile the checklist before re-issuing as a stream. This
-			// path decides tool-calls-or-not with a non-streaming call
-			// first, which is the last moment nothing has been sent to the
-			// user yet — and this is the path the web UI uses, where the
-			// todo panel the answer would contradict is actually rendered.
-			if !todoReconciled {
-				if pending := a.pendingTodoItems(ctx); len(pending) > 0 {
-					todoReconciled = true
-					messages = append(messages,
-						provider.Message{Role: "assistant", Content: resp.Content, Thinking: resp.Thinking, RawAssistant: resp.RawAssistant},
-						todoReconcileNudge(pending))
-					continue
-				}
-				todoReconciled = true
-			}
-
 			// Final response - use streaming
 			sr, err := a.provider.ChatStream(ctx, messages, toolDefs, a.model, a.maxTokens, a.temperature)
 			if err != nil {
@@ -3486,6 +3489,7 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 		for idx, r := range results {
 			tc := resp.ToolCalls[idx]
 			resultContent, meta := extractToolMeta(r.result)
+			resultContent = capToolResult(resultContent, a.registry.HostWorkDir(), tc.ID)
 			a.hooks.Run(ctx, &HookContext{AgentName: a.name, Point: AfterToolCall, ToolName: r.toolName, ToolResult: resultContent, Error: r.err, Channel: msg.Channel, AccountID: msg.AccountID, ChatID: msg.ChatID, UserID: a.ownerUserID, GoalSessionKey: a.registry.GoalSessionKey(), IsPlanMode: isPlanMode(msg.Params), Source: msg.Source})
 
 			if r.err != nil {
@@ -3505,6 +3509,7 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 					summary = firstNonEmptyLine(resultContent)
 				}
 				streakState = updateSameToolFailStreak(streakState, r.toolName, true, summary)
+				totalFailedCalls++
 			} else {
 				streakState = updateSameToolFailStreak(streakState, r.toolName, false, "")
 			}
@@ -3522,18 +3527,23 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 				loopDetected = true
 			}
 		}
+		// First repetition only warns; a repeat after the warning ends
+		// the turn (see the HandleMessage loop).
 		if loopDetected {
-			warnMsg := repeatedToolCallWarning("Loop detected: you called the same tool with the same arguments and received the same result 3 times. Please try a different approach.")
+			if loopWarned {
+				stop.reason = stopReasonLoop
+				break
+			}
+			loopWarned = true
+			loopDetector.Reset()
+			warnMsg := repeatedToolCallWarning(loopWarningText)
 			sess.Append(warnMsg)
 			messages = append(messages, warnMsg)
 		}
-		if loopDetected {
-			break
-		}
 	}
 
-	slog.Warn("max tool iterations reached — streaming forced final delivery", "agent", a.name, "max", a.maxToolIterations)
-	return a.streamFinalDeliveryAfterCap(ctx, msg, messages, sess, totalToolCalls, chatterMem)
+	slog.Warn("tool loop cut off — streaming forced final delivery", "agent", a.name, "reason", stop.reason, "max", stop.limit)
+	return a.streamFinalDeliveryAfterCap(ctx, msg, messages, sess, totalToolCalls, chatterMem, stop)
 }
 
 // streamFinalDeliveryAfterCap runs one extra ChatStream with tools
@@ -3541,15 +3551,14 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 // with iteration-cap metadata so the chat UI can badge the bubble.
 // Returned StreamReader matches the contract of the normal "final
 // response" branch above so callers don't need a special case.
-func (a *Agent) streamFinalDeliveryAfterCap(ctx context.Context, inboundMsg bus.InboundMessage, messages []provider.Message, sess *session.Session, toolCallCount int, chatterMem *Memory) *provider.StreamReader {
-	capMeta := mergeMetadata(iterationCapMetadata(a.maxToolIterations), knowledgeMetadata(extractKnowledgeCitationSources(firstSystemContent(messages))))
-	finalMessages := append(messages, capReachedNudge(a.maxToolIterations))
+func (a *Agent) streamFinalDeliveryAfterCap(ctx context.Context, inboundMsg bus.InboundMessage, messages []provider.Message, sess *session.Session, toolCallCount int, chatterMem *Memory, stop turnStop) *provider.StreamReader {
+	capMeta := mergeMetadata(stop.metadata(), knowledgeMetadata(extractKnowledgeCitationSources(firstSystemContent(messages))))
+	finalMessages := append(messages, stop.nudge())
 	sr, err := a.provider.ChatStream(ctx, finalMessages, nil, a.model, a.maxTokens, a.temperature)
 	if err != nil {
 		// Streaming endpoint failed — persist+emit a fallback line
 		// with the badge so the user still gets the signal.
-		fallback := fmt.Sprintf("I've reached the maximum number of tool iterations (%d) and couldn't synthesize a final response. The work above represents what I gathered before hitting the limit.", a.maxToolIterations) +
-			iterationCapNotice(inboundMsg.Channel, a.maxToolIterations)
+		fallback := stop.fallback() + stop.notice(inboundMsg.Channel)
 		fallbackMsg := provider.Message{Role: "assistant", Content: fallback, Metadata: capMeta, Timestamp: time.Now().UnixMilli()}
 		sess.Append(fallbackMsg)
 		emitEvent(ctx, ChatEvent{Type: "content", Data: map[string]any{"content": fallback, "metadata": capMeta}})
@@ -3595,13 +3604,13 @@ func (a *Agent) streamFinalDeliveryAfterCap(ctx context.Context, inboundMsg bus.
 		a.meterTokens(ctx, sess.Key(), streamUsage, 0)
 		content := full.String()
 		if content == "" {
-			content = fmt.Sprintf("I've reached the maximum number of tool iterations (%d) and couldn't synthesize a final response. The work above represents what I gathered before hitting the limit.", a.maxToolIterations)
+			content = stop.fallback()
 		}
 		// Emit the truncation notice as a trailing chunk too, not just in
 		// the persisted message: a streaming consumer renders what it
 		// received, so a notice added only to the stored copy would never
 		// reach the person actually reading the reply.
-		if notice := iterationCapNotice(inboundMsg.Channel, a.maxToolIterations); notice != "" {
+		if notice := stop.notice(inboundMsg.Channel); notice != "" {
 			content += notice
 			select {
 			case outCh <- provider.StreamChunk{Content: notice}:
@@ -3678,6 +3687,73 @@ func capReachedNudge(maxIterations int) provider.Message {
 		),
 	}
 }
+
+// Why a turn's tool loop ended without the model finishing on its own.
+const (
+	stopReasonCap  = "cap"  // used the whole tool-round budget
+	stopReasonLoop = "loop" // kept repeating an identical call after a warning
+)
+
+// maxFailedToolCallsPerTurn caps error retries across the whole turn.
+// The consecutive-failure guards (sameToolFailStreakLimit,
+// failedRoundsLimit) miss a model that alternates a failing call with
+// unrelated successful ones; once this many calls have failed in total,
+// tools are dropped and the model must answer with what it has.
+// Successful calls never count against any budget except the backstop
+// ceiling.
+const maxFailedToolCallsPerTurn = 10
+
+// turnStop records why a turn's tool loop was cut off, so the forced
+// final delivery tells the user (and the model) what actually happened
+// instead of always blaming the iteration budget.
+type turnStop struct {
+	reason string
+	limit  int
+}
+
+func (t turnStop) nudge() provider.Message {
+	if t.reason == stopReasonLoop {
+		return provider.Message{
+			Role: "system",
+			Content: "You kept repeating the same tool call with the same arguments and got the same result, even after being warned, so the turn was stopped. " +
+				"Tools are now disabled for this final response — do not attempt to call any. " +
+				"Tell the user plainly where things stand: what you did, what you were waiting on or retrying, and that it had not changed. " +
+				"Report ONLY what tool results actually showed; do not claim a step finished unless a result confirms it. " +
+				"If something is still running in the background, say so and tell the user they can ask you to check again.",
+		}
+	}
+	return capReachedNudge(t.limit)
+}
+
+func (t turnStop) notice(channel string) string {
+	if t.reason == stopReasonLoop {
+		if channel == "web" {
+			return ""
+		}
+		return "\n\n---\n⚠️ This turn was stopped because the same step kept returning the same result — the answer above may be incomplete. Reply to continue."
+	}
+	return iterationCapNotice(channel, t.limit)
+}
+
+func (t turnStop) metadata() map[string]any {
+	m := iterationCapMetadata(t.limit)
+	m["iterationStopReason"] = t.reason
+	return m
+}
+
+func (t turnStop) fallback() string {
+	if t.reason == stopReasonLoop {
+		return "I stopped because the same step kept returning the same result and couldn't synthesize a final response. The work above is what I gathered so far."
+	}
+	return fmt.Sprintf("I've reached the maximum number of tool iterations (%d) and couldn't synthesize a final response. The work above represents what I gathered before hitting the limit.", t.limit)
+}
+
+// loopWarningText is injected the first time identical-call repetition is
+// detected. The detector is then reset; repeating three more times ends
+// the turn (stopReasonLoop).
+const loopWarningText = "Loop detected: you called the same tool with the same arguments and received the same result 3 times. " +
+	"If you are waiting on something that runs in the background, wait before checking again (e.g. a sleep in the same command) " +
+	"instead of re-polling immediately; otherwise try a different approach. Repeating the identical call again will end this turn."
 
 // iterationCapNotice is the in-band truncation marker for channels that
 // cannot render the iterationCapReached badge.
