@@ -304,7 +304,13 @@ html.theme-transition *::after {
   /* Wipe typography's <pre> defaults (a hardcoded dark bg that buries Shiki's
      theme); keep ad-hoc <pre>/<img> bounded. */
   .chat-md pre { @apply !bg-transparent !text-inherit !p-0 !my-0 !rounded-none max-w-full overflow-x-auto; }
-  .chat-md img { @apply max-w-full h-auto; }
+  .chat-md img { @apply h-auto max-h-96 w-auto max-w-[min(100%,28rem)] cursor-zoom-in rounded-lg; }
+  .chat-md a img { @apply cursor-pointer; }
+  /* Streamdown wraps images with a hover tint over the whole wrapper; prose
+     margins on the <img> made the wrapper taller, so the tint showed as grey
+     bands above and below the picture. Keep only the download button. */
+  .chat-md [data-streamdown="image"] { @apply my-0 block; }
+  .chat-md [data-streamdown="image-wrapper"] > div.pointer-events-none { @apply !hidden; }
 
   /* Code block — strip card, bound width, anchor the floating pill. */
   .chat-md [data-streamdown="code-block"] {

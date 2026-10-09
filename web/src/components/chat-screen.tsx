@@ -89,7 +89,7 @@ function renderContentWithDataImages(
           if (suppressAllInlineImages || surfacedSrcs?.has(p.src)) return null;
           return (
             // eslint-disable-next-line @next/next/no-img-element
-            <img key={i} src={p.src} alt={p.alt} className="rounded-lg max-w-full h-auto my-2" />
+            <img key={i} src={p.src} alt={p.alt} className="my-2 h-auto max-h-96 w-auto max-w-[min(100%,28rem)] cursor-zoom-in rounded-lg" />
           );
         }
         return (
@@ -860,6 +860,12 @@ export function ChatScreen() {
   // Lightbox for clicking either an attachment thumbnail (compose box)
   // or an inline image in a sent message bubble. `null` = closed.
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  useEffect(() => {
+    if (!lightboxSrc) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setLightboxSrc(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [lightboxSrc]);
   // Object URLs for image attachments in the compose box. Keyed by file
   // index so we can revoke on remove without re-computing for every
   // chip on every keystroke. Re-derived whenever `attachments` changes.
@@ -3072,6 +3078,14 @@ export function ChatScreen() {
                           ? `user-chat-bubble rounded-2xl rounded-br-md border border-[#ded5e2] bg-[#eee9f0] px-4 py-2.5 text-[#29252a] dark:border-[#4b404e] dark:bg-[#342d36] dark:text-[#f8f5f9] ${msg.content.trim() ? "" : "hidden"}`
                           : "py-0.5 text-[#202020] dark:text-foreground"
                       }`}
+                      // Every picture in a message opens full size; images
+                      // inside a link keep the link.
+                      onClick={(e) => {
+                        const img = (e.target as HTMLElement).closest("img");
+                        if (!img || img.closest("a, button") || !img.currentSrc) return;
+                        e.preventDefault();
+                        setLightboxSrc(img.currentSrc);
+                      }}
                     >
                       {(() => {
                         const attached = attachedImages.get(msg.id);
@@ -3083,7 +3097,7 @@ export function ChatScreen() {
                                 key={i}
                                 src={img.src}
                                 alt={img.alt}
-                                className="rounded-lg max-w-full h-auto"
+                                className="h-auto max-h-96 w-auto max-w-[min(100%,28rem)] cursor-zoom-in rounded-lg"
                               />
                             ))}
                           </div>
@@ -5380,7 +5394,7 @@ export function ToolActivity({ items, subagentProgress }: { items: ToolActivityI
   const activeDelegateId = tools.find((tc) => tc.name === "delegate_task" && tc.result == null)?.id ?? null;
 
   return (
-    <div className="max-w-full text-sm leading-6 text-muted-foreground">
+    <div className="max-w-full text-sm md:max-w-xl leading-6 text-muted-foreground">
       <button
         type="button"
         onClick={() => {
