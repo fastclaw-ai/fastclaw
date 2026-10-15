@@ -28,14 +28,46 @@ import (
 // Sandbox creation: POST https://api.e2b.dev/sandboxes
 // Command execution: Connect protocol via envd on the sandbox
 
-const e2bBaseURL = "https://api.e2b.dev"
-const e2bEnvdPort = "49983"
+const (
+	e2bDefaultAPIURL = "https://api.e2b.dev"
+	e2bDefaultDomain = "e2b.app"
+	e2bEnvdPort      = "49983"
+)
+
+type E2BOption func(*e2bOptions)
+
+type e2bOptions struct {
+	apiURL string
+	domain string
+}
+
+func defaultE2BOptions() e2bOptions {
+	return e2bOptions{
+		apiURL: e2bDefaultAPIURL,
+		domain: e2bDefaultDomain,
+	}
+}
+
+// WithAPIURL overrides the E2B control-plane base URL (default
+// https://api.e2b.dev). Used for self-hosted E2B infrastructure or
+// E2B-compatible endpoints such as Aliyun FC cloud sandbox.
+func WithAPIURL(u string) E2BOption {
+	return func(o *e2bOptions) { o.apiURL = u }
+}
+
+// WithDomain overrides the E2B data-plane domain (default e2b.app) used
+// to construct per-sandbox envd and exposed-port URLs.
+func WithDomain(d string) E2BOption {
+	return func(o *e2bOptions) { o.domain = d }
+}
 
 // E2BExecutor implements Executor using E2B hosted sandboxes.
 type E2BExecutor struct {
 	apiKey      string
 	sandboxID   string
 	accessToken string
+	apiURL      string
+	domain      string
 	client      *http.Client
 	template    string        // remembered for recreate() so the new sandbox uses the same template
 	timeout     time.Duration // remembered for recreate()
@@ -49,7 +81,11 @@ type E2BExecutor struct {
 	sessionID string
 }
 
-func newE2BExecutor(ctx context.Context, apiKey, template string, timeout time.Duration) (*E2BExecutor, error) {
+func newE2BExecutor(ctx context.Context, apiKey, template string, timeout time.Duration, opts ...E2BOption) (*E2BExecutor, error) {
+	o := defaultE2BOptions()
+	for _, opt := range opts {
+		opt(&o)
+	}
 	if template == "" {
 		template = "base"
 	}
@@ -81,7 +117,7 @@ func newE2BExecutor(ctx context.Context, apiKey, template string, timeout time.D
 	// indefinitely on a request that inherits no deadline from ctx.
 	createCtx, cancelCreate := context.WithTimeout(ctx, 60*time.Second)
 	defer cancelCreate()
-	req, err := http.NewRequestWithContext(createCtx, "POST", e2bBaseURL+"/sandboxes", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(createCtx, "POST", o.apiURL+"/sandboxes", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -113,6 +149,8 @@ func newE2BExecutor(ctx context.Context, apiKey, template string, timeout time.D
 		apiKey:      apiKey,
 		sandboxID:   result.SandboxID,
 		accessToken: result.EnvdAccessToken,
+		apiURL:      o.apiURL,
+		domain:      o.domain,
 		client:      client,
 		template:    template,
 		timeout:     timeout,
@@ -120,7 +158,7 @@ func newE2BExecutor(ctx context.Context, apiKey, template string, timeout time.D
 }
 
 func (e *E2BExecutor) envdURL() string {
-	return fmt.Sprintf("https://%s-%s.e2b.app", e2bEnvdPort, e.sandboxID)
+	return fmt.Sprintf("https://%s-%s.%s", e2bEnvdPort, e.sandboxID, e.domain)
 }
 
 // recreate destroys the current sandbox and creates a new one. The same
@@ -130,7 +168,8 @@ func (e *E2BExecutor) envdURL() string {
 // /skills/<name>/ and /workspace/ stay populated across recreations.
 func (e *E2BExecutor) recreate(ctx context.Context) error {
 	slog.Info("e2b sandbox expired, recreating", "oldSandboxID", e.sandboxID)
-	newEx, err := newE2BExecutor(ctx, e.apiKey, e.template, e.timeout)
+	newEx, err := newE2BExecutor(ctx, e.apiKey, e.template, e.timeout,
+		WithAPIURL(e.apiURL), WithDomain(e.domain))
 	if err != nil {
 		return err
 	}
@@ -713,14 +752,15 @@ func (e *E2BExecutor) ListDir(ctx context.Context, path string) (string, error) 
 func (e *E2BExecutor) IsRemoteWorkspace() {}
 
 // ExposePort implements PortExposer. E2B serves every sandbox port at
-// https://<port>-<sandboxID>.e2b.app with no publish step (same scheme
-// envdURL uses for the control port), so the dev server bound to 0.0.0.0
-// is reachable the moment it listens.
+// https://<port>-<sandboxID>.<domain> (domain defaults to e2b.app, see
+// WithDomain) with no publish step (same scheme envdURL uses for the
+// control port), so the dev server bound to 0.0.0.0 is reachable the
+// moment it listens.
 func (e *E2BExecutor) ExposePort(_ context.Context, port int) (string, error) {
 	if e.sandboxID == "" {
 		return "", fmt.Errorf("e2b: sandbox not created")
 	}
-	return fmt.Sprintf("https://%d-%s.e2b.app", port, e.sandboxID), nil
+	return fmt.Sprintf("https://%d-%s.%s", port, e.sandboxID, e.domain), nil
 }
 
 // ProvisionDir implements TemplateProvisioner: tar localDir (skipping the
@@ -898,7 +938,7 @@ func verifyWorkspaceWritable(ctx context.Context, ex *E2BExecutor) error {
 
 func (e *E2BExecutor) Close() error {
 	req, _ := http.NewRequest("DELETE",
-		fmt.Sprintf("%s/sandboxes/%s", e2bBaseURL, e.sandboxID), nil)
+		fmt.Sprintf("%s/sandboxes/%s", e.apiURL, e.sandboxID), nil)
 	req.Header.Set("X-API-Key", e.apiKey)
 	resp, err := e.client.Do(req)
 	if err != nil {
@@ -926,18 +966,22 @@ type E2BExecutorPool struct {
 	timeout   time.Duration
 	home      string          // workspace root used to resolve per-agent skill dirs
 	workspace workspace.Store // optional — when set, /workspace is hydrated alongside /skills
+	opts      []E2BOption
 }
 
 // NewE2BExecutorPool — `home` is the FASTCLAW_HOME the docker backend
 // would have used for `-v` mounts; the pool uses it to resolve which
-// skill dirs to push into each fresh sandbox.
-func NewE2BExecutorPool(apiKey, template, home string, timeout time.Duration) *E2BExecutorPool {
+// skill dirs to push into each fresh sandbox. opts is optional — pass
+// WithAPIURL / WithDomain to target a self-hosted or E2B-compatible
+// endpoint; with no opts, the pool targets the official E2B cloud.
+func NewE2BExecutorPool(apiKey, template, home string, timeout time.Duration, opts ...E2BOption) *E2BExecutorPool {
 	return &E2BExecutorPool{
 		executors: make(map[string]*E2BExecutor),
 		apiKey:    apiKey,
 		template:  template,
 		timeout:   timeout,
 		home:      home,
+		opts:      opts,
 	}
 }
 
@@ -959,7 +1003,7 @@ func (p *E2BExecutorPool) Get(ctx context.Context, agentID, projectID, sessionID
 	if ex, ok := p.executors[key]; ok {
 		return ex, nil
 	}
-	ex, err := newE2BExecutor(ctx, p.apiKey, p.template, p.timeout)
+	ex, err := newE2BExecutor(ctx, p.apiKey, p.template, p.timeout, p.opts...)
 	if err != nil {
 		return nil, err
 	}
