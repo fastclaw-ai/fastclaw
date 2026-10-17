@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -1811,7 +1812,23 @@ func (s *Server) handleChatSessions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.chatTurnsMu.Unlock()
-	jsonResponse(w, http.StatusOK, map[string]any{"sessions": sessions})
+	// The sidebar polls this every few seconds; answer an unchanged list
+	// with a bodiless 304 so an open tab doesn't re-download it each time.
+	body, err := json.Marshal(map[string]any{"sessions": sessions})
+	if err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	sum := sha256.Sum256(body)
+	etag := `"` + hex.EncodeToString(sum[:16]) + `"`
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Cache-Control", "private, no-cache")
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(body)
 }
 
 // handleChats returns chat sessions scoped by the caller's API key type:

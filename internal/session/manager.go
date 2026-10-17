@@ -904,7 +904,7 @@ func (m *Manager) ListWebSessions() []WebSession {
 			Preview:       preview,
 			LastMessage:   lastMessage,
 			LastMessageAt: lastMessageAt,
-			ThumbnailURL:  thumb,
+			ThumbnailURL:  listThumbnail(thumb),
 			CreatedAt:     info.ModTime().UnixMilli(),
 			UpdatedAt:     info.ModTime().UnixMilli(),
 		})

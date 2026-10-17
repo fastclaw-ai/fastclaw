@@ -386,7 +386,7 @@ func (a *StoreAdapter) BuildWebSession(ctx context.Context, m store.SessionMeta)
 		Preview:       preview,
 		LastMessage:   lastMessage,
 		LastMessageAt: lastMessageAt,
-		ThumbnailURL:  thumb,
+		ThumbnailURL:  listThumbnail(thumb),
 		CreatedAt:     m.UpdatedAt.UnixMilli(),
 		UpdatedAt:     m.UpdatedAt.UnixMilli(),
 		ChatterUserID: m.ChatterUserID,

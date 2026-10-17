@@ -1153,8 +1153,19 @@ export function ChatScreen() {
   useEffect(() => {
     if (!selectedAgent) return;
     loadSessions(selectedAgent);
-    const timer = setInterval(() => loadSessions(selectedAgent), 2500);
-    return () => clearInterval(timer);
+    // Only while the tab is visible: a backgrounded tab left open all day
+    // would otherwise keep polling. Coming back refreshes at once.
+    const timer = setInterval(() => {
+      if (!document.hidden) loadSessions(selectedAgent);
+    }, 2500);
+    const onVisible = () => {
+      if (!document.hidden) loadSessions(selectedAgent);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [selectedAgent, loadSessions]);
 
   // Live + replay subscription. Two job:

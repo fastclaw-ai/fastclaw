@@ -21,6 +21,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	go.mau.fi/whatsmeow v0.0.0-20260821131652-72f22e67194f
 	golang.org/x/crypto v0.55.0
+	golang.org/x/image v0.27.0
 	golang.org/x/text v0.41.0
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
