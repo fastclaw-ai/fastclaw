@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/fastclaw-ai/fastclaw/internal/auth"
 	"github.com/fastclaw-ai/fastclaw/internal/config"
@@ -303,7 +304,58 @@ func (s *Server) handleDeleteProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.invalidateScope(rec.LegacyScope(), rec.LegacyScopeID())
+	if err := s.clearDanglingDefaultModels(r.Context(), rec.Name); err != nil {
+		slog.Warn("provider delete: clear dangling default models", "provider", rec.Name, "err", err)
+	}
 	jsonResponse(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// clearDanglingDefaultModels drops agents.defaults.model from every
+// system- and user-scope settings row whose "<provider>/<model>" value
+// names a provider that no longer resolves for that row's owner. The
+// default model and the provider rows are separate config records, so
+// deleting a provider would otherwise leave the default pointing at
+// nothing — the console keeps showing it and chat fails with "no usable
+// LLM provider". A system delete can orphan user overrides too, hence
+// the sweep instead of only touching the deleted row's own scope.
+// Agent-scoped rows are left alone: their provider chain also depends
+// on the agent owner's layer, which this check can't see.
+func (s *Server) clearDanglingDefaultModels(ctx context.Context, providerName string) error {
+	if providerName == "" {
+		return nil
+	}
+	rows, err := s.dataStore.QueryAllConfigs(ctx, store.KindSetting)
+	if err != nil {
+		return err
+	}
+	prefix := providerName + "/"
+	for _, row := range rows {
+		if row.Name != "agents.defaults" || row.AgentID != "" {
+			continue
+		}
+		model, _ := row.Data["model"].(string)
+		if !strings.HasPrefix(model, prefix) {
+			continue
+		}
+		provs, err := scope.Providers(ctx, s.dataStore, row.UserID, "")
+		if err != nil {
+			return err
+		}
+		if _, ok := provs[providerName]; ok {
+			continue // still served (e.g. the user has their own row with this name)
+		}
+		data := make(map[string]interface{}, len(row.Data))
+		for k, v := range row.Data {
+			if k != "model" {
+				data[k] = v
+			}
+		}
+		if err := scope.SaveSetting(ctx, s.dataStore, row.UserID, "", "agents.defaults", data); err != nil {
+			return err
+		}
+		s.invalidateScope(row.LegacyScope(), row.LegacyScopeID())
+	}
+	return nil
 }
 
 // --- Channels ---

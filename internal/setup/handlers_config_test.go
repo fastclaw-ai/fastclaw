@@ -288,3 +288,67 @@ func configTestRequest(t *testing.T, ctx context.Context, resolver *auth.Resolve
 	req.AddCookie(cookie)
 	return req
 }
+
+// Deleting a provider must not leave agents.defaults.model pointing at
+// it — the default and the provider are separate rows, and a dangling
+// default kept showing in the console after the provider was gone.
+func TestDeleteProviderClearsDanglingDefaultModel(t *testing.T) {
+	ctx := context.Background()
+	s, resolver, adminUser, regularUser := newAuthTestServer(t, ctx)
+
+	saveDefaults := func(uid, model string) {
+		t.Helper()
+		if err := s.dataStore.SaveConfig(ctx, &store.ConfigRecord{
+			Kind: store.KindSetting, UserID: uid, Name: "agents.defaults", Enabled: true,
+			Data: map[string]interface{}{"model": model, "maxTokens": float64(8192)},
+		}); err != nil {
+			t.Fatalf("save defaults: %v", err)
+		}
+	}
+	saveProvider := func(uid, name string) string {
+		t.Helper()
+		if err := s.dataStore.SaveConfig(ctx, &store.ConfigRecord{
+			Kind: store.KindProvider, UserID: uid, Name: name, Enabled: true,
+			Data: map[string]interface{}{"apiBase": "http://x"},
+		}); err != nil {
+			t.Fatalf("save provider: %v", err)
+		}
+		rec, err := s.dataStore.GetConfigByName(ctx, store.KindProvider, uid, "", name)
+		if err != nil || rec == nil {
+			t.Fatalf("get provider: %v", err)
+		}
+		return rec.ID
+	}
+	defaults := func(uid string) map[string]interface{} {
+		t.Helper()
+		rec, err := s.dataStore.GetConfigByName(ctx, store.KindSetting, uid, "", "agents.defaults")
+		if err != nil || rec == nil {
+			t.Fatalf("get defaults(%q): rec=%v err=%v", uid, rec, err)
+		}
+		return rec.Data
+	}
+
+	sysID := saveProvider("", "acme")
+	saveProvider(regularUser.ID, "acme") // user still serves "acme" on their own
+	saveDefaults("", "acme/fast")
+	saveDefaults(adminUser.ID, "acme/fast")
+	saveDefaults(regularUser.ID, "acme/fast")
+
+	rr := httptest.NewRecorder()
+	req := configTestRequest(t, ctx, resolver, http.MethodDelete, "/api/providers/"+sysID, adminUser.ID, nil)
+	req.SetPathValue("id", sysID)
+	s.authMiddleware(s.handleDeleteProvider)(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("DELETE status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+
+	if d := defaults(""); d["model"] != nil || d["maxTokens"] != float64(8192) {
+		t.Fatalf("system defaults = %v, want model cleared and other keys kept", d)
+	}
+	if d := defaults(adminUser.ID); d["model"] != nil {
+		t.Fatalf("admin user defaults = %v, want model cleared", d)
+	}
+	if d := defaults(regularUser.ID); d["model"] != "acme/fast" {
+		t.Fatalf("regular user defaults = %v, want model kept (own provider)", d)
+	}
+}
