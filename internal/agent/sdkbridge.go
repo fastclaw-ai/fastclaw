@@ -205,11 +205,17 @@ func (e *sdkEngine) executeToolsConcurrently(ctx context.Context, fcRegistry *to
 			resultText = strings.Join(parts, "\n")
 		}
 		if resp.Error != nil {
+			// Defensive: resp.Error may be a typed-nil error (non-nil
+			// interface wrapping a nil concrete pointer). Assigning it
+			// directly preserves the typed nil, which makes err != nil
+			// true but err.Error() panic. Use fmt.Sprintf("%v") which
+			// handles typed nil safely (prints "<nil>") instead of
+			// calling .Error() directly.
 			results[i] = toolCallResult{
 				toolCallID: resp.ToolUseID,
 				toolName:   toolCalls[i].Function.Name,
 				result:     resultText,
-				err:        resp.Error,
+				err:        fmt.Errorf("tool error: %v", resp.Error),
 			}
 		} else {
 			results[i] = toolCallResult{
