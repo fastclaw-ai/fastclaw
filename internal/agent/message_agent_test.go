@@ -11,7 +11,7 @@ import (
 
 func TestMessageAgentRefusesSelfAndDeepChains(t *testing.T) {
 	a := &Agent{agentID: "agt_a", name: "a"}
-	resolveSelf := func(context.Context, string) (*Agent, error) { return a, nil }
+	resolveSelf := func(context.Context, string, string) (*Agent, error) { return a, nil }
 	if _, err := a.messageAgent(context.Background(), resolveSelf, "u", "a", "hi"); err == nil || !strings.Contains(err.Error(), "yourself") {
 		t.Fatalf("self message err = %v", err)
 	}

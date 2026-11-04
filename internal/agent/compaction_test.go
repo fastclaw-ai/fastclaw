@@ -49,7 +49,7 @@ func TestCompactionDropsGoalContextFromSummary(t *testing.T) {
 	}
 
 	f := &fakeSummarizer{}
-	out, err := compressOlderMessages(msgs, f, "fake-model")
+	out, _, err := compressOlderMessages(msgs, f, "fake-model")
 	if err != nil {
 		t.Fatalf("compress: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestCompactionPreservesContentWhenShortCircuits(t *testing.T) {
 		{Role: "user", Content: "hi"},
 		{Role: "assistant", Content: "hello"},
 	}
-	out, err := compressOlderMessages(in, nil, "")
+	out, _, err := compressOlderMessages(in, nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -210,7 +210,7 @@ func TestCompressOlderMessagesNeverStartsTailWithTool(t *testing.T) {
 	}
 
 	f := &fakeSummarizer{}
-	out, err := compressOlderMessages(msgs, f, "fake-model")
+	out, _, err := compressOlderMessages(msgs, f, "fake-model")
 	if err != nil {
 		t.Fatalf("compress: %v", err)
 	}

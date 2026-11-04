@@ -12,6 +12,10 @@ type Collector struct {
 	mu     sync.Mutex
 	tokens Tokens
 	calls  int
+	// costUSD sums the priced calls; costUnknown latches once any call's
+	// model had no price, making the whole request's cost unknown.
+	costUSD     float64
+	costUnknown bool
 }
 
 type collectorKey struct{}
@@ -30,12 +34,18 @@ func CollectorFrom(ctx context.Context) *Collector {
 	return c
 }
 
-// Add records one model call.
-func (c *Collector) Add(t Tokens) {
+// Add records one model call and its USD cost; known is false when the
+// call's model has no price.
+func (c *Collector) Add(t Tokens, costUSD float64, known bool) {
 	if c == nil {
 		return
 	}
 	c.mu.Lock()
+	if known {
+		c.costUSD += costUSD
+	} else {
+		c.costUnknown = true
+	}
 	c.tokens.Input += t.Input
 	c.tokens.Output += t.Output
 	c.tokens.CacheRead += t.CacheRead
@@ -52,4 +62,19 @@ func (c *Collector) Totals() (Tokens, int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.tokens, c.calls
+}
+
+// CostUSD returns the summed USD cost of the recorded calls, or nil when
+// any call's model had no price — an unknown cost is never reported as 0.
+func (c *Collector) CostUSD() *float64 {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.costUnknown {
+		return nil
+	}
+	v := c.costUSD
+	return &v
 }

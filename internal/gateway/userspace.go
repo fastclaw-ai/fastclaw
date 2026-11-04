@@ -910,24 +910,8 @@ func loadUserSpace(ctx context.Context, userID string, mb *bus.MessageBus, st st
 		agent.WithToolAvailability(func(_ context.Context, agentID string) (map[string]bool, error) {
 			return agentToolAvailability(cfg, agentID), nil
 		}),
-		// message_agent's lookup: another agent of this account by id or
-		// display name, loaded on demand (agents may be evicted when idle).
-		agent.WithAgentResolver(func(ctx context.Context, ref string) (*agent.Agent, error) {
-			if space == nil {
-				return nil, fmt.Errorf("user space is still loading")
-			}
-			id, err := resolveOwnedAgentRef(ctx, st, userID, ref)
-			if err != nil {
-				return nil, err
-			}
-			if err := space.EnsureOwnedAgent(ctx, st, mb, ws, id); err != nil {
-				return nil, err
-			}
-			if ag := space.Agents.AgentByID(id); ag != nil {
-				return ag, nil
-			}
-			return nil, fmt.Errorf("agent %q is not available", ref)
-		}),
+		// message_agent's lookup, scoped to this space's owner.
+		agent.WithAgentResolver(messageAgentResolver(func() *UserSpace { return space }, st, mb, ws, userID, appOwner)),
 	}
 	if ws != nil {
 		managerOpts = append(managerOpts, agent.WithWorkspaceStore(ws))
@@ -1443,6 +1427,36 @@ func backgroundAgents(ctx context.Context, st store.Store, userID string, bindin
 		}
 	}
 	return out
+}
+
+// messageAgentResolver is message_agent's lookup for the space of userID:
+// another agent by id or display name, loaded on demand (agents may be
+// evicted when idle). The target is always owned by userID. In an
+// end-user's (app_user, appOwner != "") space the calling agent must be
+// owned by userID too: a private agent reaches only its owner's other
+// agents, and the account's platform agents running there for the
+// end-user reach none of them.
+func messageAgentResolver(space func() *UserSpace, st store.Store, mb *bus.MessageBus, ws workspace.Store, userID, appOwner string) agent.AgentResolver {
+	return func(ctx context.Context, callerOwner, ref string) (*agent.Agent, error) {
+		sp := space()
+		if sp == nil {
+			return nil, fmt.Errorf("user space is still loading")
+		}
+		if appOwner != "" && callerOwner != userID {
+			return nil, fmt.Errorf("no agent named %q exists", ref)
+		}
+		id, err := resolveOwnedAgentRef(ctx, st, userID, ref)
+		if err != nil {
+			return nil, err
+		}
+		if err := sp.EnsureOwnedAgent(ctx, st, mb, ws, id); err != nil {
+			return nil, err
+		}
+		if ag := sp.Agents.AgentByID(id); ag != nil {
+			return ag, nil
+		}
+		return nil, fmt.Errorf("agent %q is not available", ref)
+	}
 }
 
 // resolveOwnedAgentRef maps a message_agent target — an agent id or a

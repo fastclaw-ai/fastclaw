@@ -5,6 +5,24 @@ action on upgrade — read those notes before deploying.
 
 ## [Unreleased]
 
+### Added — per-turn cost in USD
+
+Each model call is now costed at the unit price of the model it actually
+ran on (USD per 1M tokens: input, output, cache read, cache write).
+`/v1/chat/completions` reports the turn's total as `usage.cost_usd` on the
+non-streaming response and the final stream chunk, and
+`GET /api/admin/usage/events` carries `cost_usd` on every event (a new
+`token_usage_log.cost_usd` column, added on upgrade). When any call's model
+has no price the cost is `null` — unknown, never 0; rows from before the
+upgrade read as `null` too. Set prices per model in Console → Models →
+provider; well-known Anthropic and OpenAI models fall back to built-in list
+prices when left blank, and a price you enter always wins. FastClaw still
+only reports cost — it doesn't hold balances or convert to credits.
+
+Context compaction, sub-agent (`delegate_task`) calls, memory extraction
+and skill learning are now metered too; before, only the main loop's calls
+were recorded.
+
 ### Changed — API streams the turn as it runs
 
 `stream: true` on `/v1/chat/completions` now runs the same agent loop as the

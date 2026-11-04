@@ -135,7 +135,11 @@ func (a *Agent) runSubagentLoop(ctx context.Context, task string, maxIterations 
 			})
 		}
 
+		started := time.Now()
 		resp, err := a.provider.Chat(ctx, llmMsgs, callTools, a.model, a.maxTokens, a.temperature)
+		if err == nil && resp != nil {
+			a.meterTokens(ctx, meterSessionFrom(ctx), a.model, resp.Usage, time.Since(started).Milliseconds())
+		}
 		if err != nil {
 			// If the ctx itself expired, the parent caller has more
 			// useful framing than "context deadline exceeded" mid-
@@ -219,7 +223,11 @@ func (a *Agent) runSubagentLoop(ctx context.Context, task string, maxIterations 
 		"phase":     "final-delivery",
 	}})
 	finalMessages := append(messages, capReachedNudge(maxIterations))
+	started := time.Now()
 	finalResp, err := a.provider.Chat(ctx, finalMessages, nil, a.model, a.maxTokens, a.temperature)
+	if err == nil && finalResp != nil {
+		a.meterTokens(ctx, meterSessionFrom(ctx), a.model, finalResp.Usage, time.Since(started).Milliseconds())
+	}
 	if err != nil {
 		return "", fmt.Errorf("subagent forced final delivery failed: %w", err)
 	}

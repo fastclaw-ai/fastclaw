@@ -103,3 +103,34 @@ func TestBillingHoldAndLoginTokens(t *testing.T) {
 		t.Fatalf("expired token: %v", err)
 	}
 }
+
+// A token_usage_log created before cost tracking gains a nullable
+// cost_usd column; existing rows read back as unknown (null), not 0.
+func TestMigrateAddsTokenUsageCost(t *testing.T) {
+	ctx := context.Background()
+	st, err := NewDBStore("sqlite", "file:"+filepath.Join(t.TempDir(), "old.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	if _, err := st.DB().ExecContext(ctx, `CREATE TABLE token_usage_log (
+		user_id TEXT NOT NULL DEFAULT '', agent_id TEXT NOT NULL DEFAULT '',
+		session_key TEXT NOT NULL DEFAULT '', provider TEXT NOT NULL DEFAULT '',
+		model TEXT NOT NULL DEFAULT '', input_tokens BIGINT NOT NULL DEFAULT 0,
+		output_tokens BIGINT NOT NULL DEFAULT 0, cache_read_tokens BIGINT NOT NULL DEFAULT 0,
+		cache_create_tokens BIGINT NOT NULL DEFAULT 0, duration_ms BIGINT NOT NULL DEFAULT 0,
+		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)`); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().UTC().Add(-time.Minute).Format("2006-01-02 15:04:05")
+	if _, err := st.DB().ExecContext(ctx, `INSERT INTO token_usage_log (user_id, model, input_tokens, created_at) VALUES ('u', 'm', 1, ?)`, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	events, err := st.ListUsageEvents(ctx, 0, 10)
+	if err != nil || len(events) != 1 || events[0].CostUSD != nil {
+		t.Fatalf("old row after migration: %+v %v", events, err)
+	}
+}

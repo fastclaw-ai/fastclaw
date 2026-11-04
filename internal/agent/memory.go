@@ -290,7 +290,8 @@ func (m *Memory) LoadUserFile() string {
 
 // AutoPersistMemory uses an LLM to extract facts from recent messages and
 // append them to MEMORY.md and USER.md. Called every N turns.
-func AutoPersistMemory(ctx context.Context, mem *Memory, prov provider.Provider, model string, messages []provider.Message) {
+// onUsage, when set, meters the extraction call.
+func AutoPersistMemory(ctx context.Context, mem *Memory, prov provider.Provider, model string, messages []provider.Message, onUsage func(context.Context, provider.Usage, int64)) {
 	// Build a summary of recent messages for the LLM
 	var sb strings.Builder
 	// Only look at last 20 messages to keep prompt small
@@ -333,9 +334,13 @@ If nothing worth saving, output: {"memory_facts": [], "user_notes": []}`,
 		sb.String(),
 	)
 
+	started := time.Now()
 	resp, err := prov.Chat(ctx, []provider.Message{
 		{Role: "user", Content: extractPrompt},
 	}, nil, model, 200, 0.3)
+	if err == nil && resp != nil && onUsage != nil {
+		onUsage(ctx, resp.Usage, time.Since(started).Milliseconds())
+	}
 	if err != nil {
 		// Warn (not Debug) — invisible failures here are exactly
 		// the "I turned the switch on but nothing got persisted"

@@ -297,6 +297,9 @@ type completionUsage struct {
 	CacheReadTokens     int                  `json:"cache_read_tokens"`
 	CacheCreationTokens int                  `json:"cache_creation_tokens"`
 	ModelCalls          int                  `json:"model_calls"`
+	// CostUSD is the turn's cost in USD at each called model's unit
+	// price; null when any call's model has no price. Never omitted.
+	CostUSD *float64 `json:"cost_usd"`
 }
 
 type promptTokensDetails struct {
@@ -315,6 +318,7 @@ func usageFromCollector(c *usage.Collector) completionUsage {
 		CacheReadTokens:     t.CacheRead,
 		CacheCreationTokens: t.CacheCreation,
 		ModelCalls:          calls,
+		CostUSD:             c.CostUSD(),
 	}
 }
 
@@ -371,6 +375,10 @@ func (s *Server) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, errAgentNotFound) {
 			writeAgentNotFound(w)
+			return
+		}
+		if errors.Is(err, errPrivateAgentNeedsOwner) {
+			writeBadRequest(w, err.Error())
 			return
 		}
 		writeUnauth(w, err.Error())
@@ -470,9 +478,20 @@ func (s *Server) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		"stream", req.Stream != nil && *req.Stream,
 	)
 
+	// The request's `model` runs this turn when the agent can reach it
+	// ("<provider>/<model>" with that provider configured). Anything else
+	// — e.g. the placeholder names OpenAI SDKs require — is ignored and
+	// the agent's own model answers. The response always names the model
+	// that actually ran.
 	model := ag.Model()
-	if req.Model != "" {
-		model = req.Model
+	if req.Model != "" && req.Model != model {
+		if _, ok := ag.ResolveTurnModel(req.Model); ok {
+			model = strings.TrimSpace(req.Model)
+			r = r.WithContext(agent.WithTurnModel(r.Context(), model))
+		} else {
+			slog.Info("chat completion: ignoring unusable request model",
+				"agent", ag.Name(), "requested", req.Model, "using", model)
+		}
 	}
 	chatID := fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano())
 	now := time.Now().Unix()

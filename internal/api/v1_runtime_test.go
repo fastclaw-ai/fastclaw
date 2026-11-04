@@ -3,9 +3,11 @@ package api
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -44,6 +46,8 @@ type recordingProvider struct {
 	script []provider.Response
 	// err, when set, fails every model call with it.
 	err error
+	// model is the model id of the latest call.
+	model string
 }
 
 func (p *recordingProvider) next() provider.Response {
@@ -99,13 +103,26 @@ func (p *recordingProvider) lastSystem() string {
 	return p.system
 }
 
-func (p *recordingProvider) Chat(_ context.Context, messages []provider.Message, _ []provider.Tool, _ string, _ int, _ float64) (*provider.Response, error) {
+func (p *recordingProvider) Chat(_ context.Context, messages []provider.Message, _ []provider.Tool, model string, _ int, _ float64) (*provider.Response, error) {
 	p.record(messages)
+	p.setModel(model)
 	if err := p.failure(); err != nil {
 		return nil, err
 	}
 	r := p.next()
 	return &r, nil
+}
+
+func (p *recordingProvider) setModel(m string) {
+	p.mu.Lock()
+	p.model = m
+	p.mu.Unlock()
+}
+
+func (p *recordingProvider) lastModel() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.model
 }
 
 func (p *recordingProvider) failure() error {
@@ -114,8 +131,9 @@ func (p *recordingProvider) failure() error {
 	return p.err
 }
 
-func (p *recordingProvider) ChatStream(_ context.Context, messages []provider.Message, _ []provider.Tool, _ string, _ int, _ float64) (*provider.StreamReader, error) {
+func (p *recordingProvider) ChatStream(_ context.Context, messages []provider.Message, _ []provider.Tool, model string, _ int, _ float64) (*provider.StreamReader, error) {
 	p.record(messages)
+	p.setModel(model)
 	if err := p.failure(); err != nil {
 		return nil, err
 	}
@@ -138,6 +156,10 @@ type fakeRuntime struct {
 	spaces map[string]*agent.Manager
 	// ensured records "<namespace user>/<agent>" for every attach.
 	ensured []string
+	// providers are handed to every attached agent (model prices).
+	providers map[string]config.ProviderConfig
+	// meter, when set, meters every attached agent's model calls.
+	meter usage.Meter
 }
 
 func (f *fakeRuntime) manager(uid string) *agent.Manager {
@@ -146,7 +168,11 @@ func (f *fakeRuntime) manager(uid string) *agent.Manager {
 	if m, ok := f.spaces[uid]; ok {
 		return m
 	}
-	m, err := agent.NewManager(nil, f.prov, f.mb, agent.WithUserID(uid))
+	opts := []agent.ManagerOption{agent.WithUserID(uid)}
+	if f.meter != nil {
+		opts = append(opts, agent.WithMeter(f.meter))
+	}
+	m, err := agent.NewManager(nil, f.prov, f.mb, opts...)
 	if err != nil {
 		f.t.Fatalf("NewManager: %v", err)
 	}
@@ -176,6 +202,7 @@ func (f *fakeRuntime) EnsureAgent(ctx context.Context, uid, agentID string) erro
 	return mgr.AddAgent(config.ResolvedAgent{
 		ID: rec.ID, Home: dir, Workspace: filepath.Join(dir, "workspace"),
 		Model: "test/model", MaxTokens: 256, MaxToolIterations: 2,
+		Providers: f.providers,
 	}, f.prov, f.mb)
 }
 
@@ -869,6 +896,87 @@ func TestChatReportsTurnUsage(t *testing.T) {
 	}
 	// Streaming runs the same loop: one model call.
 	check(u, 1)
+}
+
+// The response's usage carries the turn's USD cost at the model's unit
+// price — on the non-streaming body and the final stream chunk — and each
+// token_usage_log row stores its call's cost so pulled events agree.
+func TestChatReportsTurnCost(t *testing.T) {
+	h := newV1Harness(t)
+	h.rt.meter = usage.NewSQLMeter(h.st.DB(), "sqlite")
+	h.rt.providers = map[string]config.ProviderConfig{
+		"test": {Models: []config.ModelEntry{
+			{ID: "model", Cost: config.ModelCost{Input: 3, Output: 15, CacheRead: 0.3, CacheWrite: 3.75}},
+			{ID: "bigger"}, // no price
+		}},
+	}
+	id := h.createAgent(h.keyA, "Costed", nil)
+	h.rt.prov.mu.Lock()
+	h.rt.prov.usage = provider.Usage{InputTokens: 1000, OutputTokens: 200, CacheReadTokens: 4000, CacheCreationTokens: 100}
+	h.rt.prov.mu.Unlock()
+	want := (1000*3.0 + 200*15.0 + 4000*0.3 + 100*3.75) / 1e6
+
+	body := map[string]any{"agent_id": id, "messages": []map[string]string{{"role": "user", "content": "hi"}}}
+	code, out := h.do("POST", "/v1/chat/completions", h.keyA, body)
+	if code != http.StatusOK {
+		t.Fatalf("chat: %d %v", code, out)
+	}
+	if got, ok := out["usage"].(map[string]any)["cost_usd"].(float64); !ok || math.Abs(got-want) > 1e-12 {
+		t.Fatalf("cost_usd = %v, want %v", out["usage"], want)
+	}
+
+	body["stream"] = true
+	blob, _ := json.Marshal(body)
+	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewReader(blob))
+	req.Header.Set("Authorization", "Bearer "+h.keyA)
+	rec := httptest.NewRecorder()
+	h.mux.ServeHTTP(rec, req)
+	var final map[string]any
+	for _, line := range strings.Split(rec.Body.String(), "\n") {
+		if strings.HasPrefix(line, "data: {") && strings.Contains(line, `"usage"`) {
+			_ = json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &final)
+		}
+	}
+	u, _ := final["usage"].(map[string]any)
+	if got, ok := u["cost_usd"].(float64); !ok || math.Abs(got-want) > 1e-12 {
+		t.Fatalf("stream cost_usd = %v, want %v", u, want)
+	}
+
+	// The unpriced model reports null — present, never 0, never omitted.
+	delete(body, "stream")
+	body["model"] = "test/bigger"
+	code, out = h.do("POST", "/v1/chat/completions", h.keyA, body)
+	if code != http.StatusOK {
+		t.Fatalf("chat: %d %v", code, out)
+	}
+	if v, present := out["usage"].(map[string]any)["cost_usd"]; !present || v != nil {
+		t.Fatalf("unpriced model: cost_usd = %v (present=%v), want null", v, present)
+	}
+
+	rows, err := h.st.DB().Query(`SELECT model, cost_usd FROM token_usage_log ORDER BY rowid`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var model string
+		var cost sql.NullFloat64
+		if err := rows.Scan(&model, &cost); err != nil {
+			t.Fatal(err)
+		}
+		switch {
+		case !cost.Valid:
+			got = append(got, model+"=null")
+		case math.Abs(cost.Float64-want) < 1e-12:
+			got = append(got, model+"=want")
+		default:
+			got = append(got, fmt.Sprintf("%s=%v", model, cost.Float64))
+		}
+	}
+	if strings.Join(got, ",") != "model=want,model=want,bigger=null" {
+		t.Fatalf("token_usage_log costs: %v", got)
+	}
 }
 
 func TestChatRefusedOnBillingHold(t *testing.T) {

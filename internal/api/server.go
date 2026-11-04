@@ -83,10 +83,11 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 			s.authMiddleware(rateLimitMiddleware(s.limiter, getUserID, s.HandleChatCompletions)))
 	}
 	if s.gatewayCfg == nil || s.gatewayCfg.HTTP.Endpoints.Agents.Enabled {
-		// Agent management for integrating apps. Agents created here
-		// belong to the api key's app, never to an
-		// end-user, so X-Fastclaw-End-User does not change what these
-		// endpoints see.
+		// Agent management for integrating apps. Agents belong to the
+		// api key's account (platform agents) or, when created for an
+		// end-user, to that end-user (private agents). A request naming
+		// an end-user sees the platform agents plus that end-user's
+		// private ones — see agentAccessible.
 		for pattern, h := range map[string]http.HandlerFunc{
 			"GET /v1/agents":                                         s.HandleListAgents,
 			"POST /v1/agents":                                        s.HandleCreateAgent,

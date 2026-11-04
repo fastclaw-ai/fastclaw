@@ -118,6 +118,9 @@ func (d *DBStore) Migrate(ctx context.Context) error {
 	if err := d.migrateAgentsAddIsPublic(ctx); err != nil {
 		return fmt.Errorf("migrate agents.is_public: %w", err)
 	}
+	if err := d.migrateAgentsAddExternalRef(ctx); err != nil {
+		return fmt.Errorf("migrate agents.external_ref: %w", err)
+	}
 	if err := d.migrateDropAgentGrants(ctx); err != nil {
 		return fmt.Errorf("migrate drop agent_grants: %w", err)
 	}
@@ -159,6 +162,9 @@ func (d *DBStore) Migrate(ctx context.Context) error {
 	}
 	if err := d.migrateTokenUsageAddChannelChatter(ctx); err != nil {
 		return fmt.Errorf("migrate token_usage channel/chatter: %w", err)
+	}
+	if err := d.migrateTokenUsageAddCost(ctx); err != nil {
+		return fmt.Errorf("migrate token_usage_log.cost_usd: %w", err)
 	}
 	if err := d.migrateUsersAddOwnerUserID(ctx); err != nil {
 		return fmt.Errorf("migrate users.owner_user_id: %w", err)
@@ -296,7 +302,7 @@ func (d *DBStore) ListUsageEvents(ctx context.Context, afterID int64, limit int)
 			COALESCE(CASE WHEN u.role = 'app_user' THEN u.external_id END, ''),
 			t.agent_id, t.session_key, t.provider, t.model,
 			t.input_tokens, t.output_tokens, t.cache_read_tokens, t.cache_create_tokens,
-			t.duration_ms, t.channel, t.chatter_user_id, t.created_at
+			t.duration_ms, t.channel, t.chatter_user_id, t.cost_usd, t.created_at
 		FROM token_usage_log t
 		LEFT JOIN users u ON u.id = t.user_id
 		LEFT JOIN users u2 ON u2.id = u.owner_user_id
@@ -313,7 +319,7 @@ func (d *DBStore) ListUsageEvents(ctx context.Context, afterID int64, limit int)
 		var e UsageEvent
 		if err := rows.Scan(&e.ID, &e.UserID, &e.AccountID, &e.EndUser, &e.AgentID, &e.SessionKey,
 			&e.Provider, &e.Model, &e.InputTokens, &e.OutputTokens, &e.CacheReadTokens, &e.CacheCreationTokens,
-			&e.DurationMs, &e.Channel, &e.ChatterUserID, &e.CreatedAt); err != nil {
+			&e.DurationMs, &e.Channel, &e.ChatterUserID, &e.CostUSD, &e.CreatedAt); err != nil {
 			return nil, err
 		}
 		if e.AccountID == "" {
@@ -547,6 +553,24 @@ func (d *DBStore) migrateTokenUsageAddProvider(ctx context.Context) error {
 	if _, err := d.db.ExecContext(ctx,
 		`CREATE INDEX IF NOT EXISTS idx_token_usage_user ON token_usage_daily (user_id, day)`); err != nil {
 		return err
+	}
+	return nil
+}
+
+// migrateTokenUsageAddCost adds token_usage_log.cost_usd: each call's USD
+// cost at the model's unit price. Nullable — NULL means the model had no
+// price (and every row written before this column existed).
+func (d *DBStore) migrateTokenUsageAddCost(ctx context.Context) error {
+	exists, err := d.tableExists(ctx, "token_usage_log")
+	if err != nil || !exists {
+		return err
+	}
+	has, err := d.tableHasColumn(ctx, "token_usage_log", "cost_usd")
+	if err != nil || has {
+		return err
+	}
+	if _, err := d.db.ExecContext(ctx, `ALTER TABLE token_usage_log ADD COLUMN cost_usd DOUBLE PRECISION`); err != nil {
+		return fmt.Errorf("add token_usage_log.cost_usd: %w", err)
 	}
 	return nil
 }
@@ -1127,6 +1151,27 @@ func (d *DBStore) migrateUsersAddAgentQuota(ctx context.Context) error {
 	if _, err := d.db.ExecContext(ctx,
 		`ALTER TABLE users ADD COLUMN agent_quota INTEGER NOT NULL DEFAULT -1`); err != nil {
 		return fmt.Errorf("add agent_quota: %w", err)
+	}
+	return nil
+}
+
+// migrateAgentsAddExternalRef adds the caller-chosen idempotency key for
+// POST /v1/agents. NULL for every existing agent; the partial unique index
+// only constrains rows that set one, so (owner, ref) names at most one
+// agent and concurrent creates with the same ref collapse to one row.
+func (d *DBStore) migrateAgentsAddExternalRef(ctx context.Context) error {
+	has, err := d.tableHasColumn(ctx, "agents", "external_ref")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := d.db.ExecContext(ctx, `ALTER TABLE agents ADD COLUMN external_ref TEXT`); err != nil {
+			return fmt.Errorf("add external_ref: %w", err)
+		}
+	}
+	if _, err := d.db.ExecContext(ctx,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_external_ref ON agents (user_id, external_ref) WHERE external_ref IS NOT NULL`); err != nil {
+		return fmt.Errorf("index external_ref: %w", err)
 	}
 	return nil
 }
@@ -2143,6 +2188,7 @@ func (d *DBStore) migrationSQL() []string {
 			duration_ms BIGINT NOT NULL DEFAULT 0,
 			channel TEXT NOT NULL DEFAULT '',
 			chatter_user_id TEXT NOT NULL DEFAULT '',
+			cost_usd DOUBLE PRECISION,
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_token_usage_log_user ON token_usage_log (user_id, created_at)`,
@@ -2631,7 +2677,7 @@ func (d *DBStore) APIKeyCanAccessAgent(ctx context.Context, apikeyID, agentID st
 
 // --- Agents ---
 
-const agentSelectCols = `id, user_id, name, config, is_public, created_at, updated_at`
+const agentSelectCols = `id, user_id, name, config, is_public, COALESCE(external_ref, ''), created_at, updated_at`
 
 func (d *DBStore) ListAgents(ctx context.Context, ownerUserID string) ([]AgentRecord, error) {
 	rows, err := d.db.QueryContext(ctx,
@@ -2677,7 +2723,7 @@ func (d *DBStore) GetAgent(ctx context.Context, agentID string) (*AgentRecord, e
 		fmt.Sprintf(`SELECT `+agentSelectCols+` FROM agents WHERE id = %s`, d.ph(1)), agentID)
 	var ag AgentRecord
 	var cfgStr string
-	if err := row.Scan(&ag.ID, &ag.UserID, &ag.Name, &cfgStr, &ag.IsPublic, &ag.CreatedAt, &ag.UpdatedAt); err != nil {
+	if err := row.Scan(&ag.ID, &ag.UserID, &ag.Name, &cfgStr, &ag.IsPublic, &ag.ExternalRef, &ag.CreatedAt, &ag.UpdatedAt); err != nil {
 		return nil, scanErr(err)
 	}
 	json.Unmarshal([]byte(cfgStr), &ag.Config)
@@ -2715,6 +2761,84 @@ func (d *DBStore) SaveAgent(ctx context.Context, agent *AgentRecord) error {
 			  updated_at=excluded.updated_at`,
 		agent.ID, agent.UserID, agent.Name, string(cfgData), agent.IsPublic, agent.CreatedAt, agent.UpdatedAt)
 	return err
+}
+
+// CreateAgent inserts a new agent. Unlike SaveAgent it never updates an
+// existing row: a duplicate id or (owner, external_ref) returns
+// ErrConflict, which callers resolve with GetAgentByExternalRef.
+func (d *DBStore) CreateAgent(ctx context.Context, agent *AgentRecord) error {
+	if agent.ID == "" {
+		return errors.New("store: agent.id is required")
+	}
+	if agent.UserID == "" {
+		return errors.New("store: agent.user_id is required")
+	}
+	cfgData, _ := json.Marshal(agent.Config)
+	now := time.Now().UTC()
+	if agent.CreatedAt.IsZero() {
+		agent.CreatedAt = now
+	}
+	agent.UpdatedAt = now
+	var ref interface{}
+	if agent.ExternalRef != "" {
+		ref = agent.ExternalRef
+	}
+	res, err := d.db.ExecContext(ctx,
+		fmt.Sprintf(`INSERT INTO agents (id, user_id, name, config, is_public, external_ref, created_at, updated_at)
+			VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING`,
+			d.ph(1), d.ph(2), d.ph(3), d.ph(4), d.ph(5), d.ph(6), d.ph(7), d.ph(8)),
+		agent.ID, agent.UserID, agent.Name, string(cfgData), agent.IsPublic, ref, agent.CreatedAt, agent.UpdatedAt)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return ErrConflict
+	}
+	return nil
+}
+
+// GetAgentByExternalRef returns ownerUserID's agent created with ref.
+func (d *DBStore) GetAgentByExternalRef(ctx context.Context, ownerUserID, ref string) (*AgentRecord, error) {
+	if ownerUserID == "" || ref == "" {
+		return nil, ErrNotFound
+	}
+	row := d.db.QueryRowContext(ctx,
+		fmt.Sprintf(`SELECT `+agentSelectCols+` FROM agents WHERE user_id = %s AND external_ref = %s`, d.ph(1), d.ph(2)),
+		ownerUserID, ref)
+	var ag AgentRecord
+	var cfgStr string
+	if err := row.Scan(&ag.ID, &ag.UserID, &ag.Name, &cfgStr, &ag.IsPublic, &ag.ExternalRef, &ag.CreatedAt, &ag.UpdatedAt); err != nil {
+		return nil, scanErr(err)
+	}
+	json.Unmarshal([]byte(cfgStr), &ag.Config)
+	return &ag, nil
+}
+
+// ListAccountPrivateAgents returns every agent owned by an app_user of
+// accountID (the account's end-users' private agents), newest first.
+func (d *DBStore) ListAccountPrivateAgents(ctx context.Context, accountID string) ([]AgentRecord, error) {
+	rows, err := d.db.QueryContext(ctx,
+		fmt.Sprintf(`SELECT `+agentSelectCols+` FROM agents
+			WHERE user_id IN (SELECT id FROM users WHERE owner_user_id = %s AND role = 'app_user')
+			ORDER BY created_at DESC`, d.ph(1)),
+		accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanAgents(rows)
+}
+
+// CountAccountAgents counts the account's own agents plus every private
+// agent of its app_users — what the account's agent_quota caps.
+func (d *DBStore) CountAccountAgents(ctx context.Context, accountID string) (int64, error) {
+	var n int64
+	err := d.db.QueryRowContext(ctx,
+		fmt.Sprintf(`SELECT COUNT(*) FROM agents
+			WHERE user_id = %s
+			   OR user_id IN (SELECT id FROM users WHERE owner_user_id = %s AND role = 'app_user')`, d.ph(1), d.ph(2)),
+		accountID, accountID).Scan(&n)
+	return n, err
 }
 
 func (d *DBStore) DeleteAgent(ctx context.Context, agentID string) error {
@@ -2772,7 +2896,7 @@ func scanAgents(rows *sql.Rows) ([]AgentRecord, error) {
 	for rows.Next() {
 		var ag AgentRecord
 		var cfgStr string
-		if err := rows.Scan(&ag.ID, &ag.UserID, &ag.Name, &cfgStr, &ag.IsPublic, &ag.CreatedAt, &ag.UpdatedAt); err != nil {
+		if err := rows.Scan(&ag.ID, &ag.UserID, &ag.Name, &cfgStr, &ag.IsPublic, &ag.ExternalRef, &ag.CreatedAt, &ag.UpdatedAt); err != nil {
 			return nil, err
 		}
 		json.Unmarshal([]byte(cfgStr), &ag.Config)

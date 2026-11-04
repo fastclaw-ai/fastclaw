@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/fastclaw-ai/fastclaw/internal/provider"
 )
@@ -17,8 +18,10 @@ type SkillsLearner struct {
 	workspace    string
 	provider     provider.Provider
 	model        string
-	minToolCalls int    // minimum tool calls to consider extracting (default: 3)
+	minToolCalls int      // minimum tool calls to consider extracting (default: 3)
 	skillDirs    []string // directories to search for the skill-learner skill
+	// onUsage, when set, meters the extraction call (model is sl.model).
+	onUsage func(ctx context.Context, model string, u provider.Usage, durationMs int64)
 }
 
 // NewSkillsLearner creates a new SkillsLearner.
@@ -141,9 +144,13 @@ func (sl *SkillsLearner) extractSkill(ctx context.Context, messages []provider.M
 		{Role: "user", Content: sb.String()},
 	}
 
+	started := time.Now()
 	resp, err := sl.provider.Chat(ctx, extractMsgs, nil, sl.model, 1024, 0.3)
 	if err != nil {
 		return nil, err
+	}
+	if sl.onUsage != nil && resp != nil {
+		sl.onUsage(ctx, sl.model, resp.Usage, time.Since(started).Milliseconds())
 	}
 
 	var result extractionResponse

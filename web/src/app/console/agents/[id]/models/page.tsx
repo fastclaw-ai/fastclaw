@@ -42,10 +42,12 @@ import {
   testStoredProvider,
   updateAgent,
   type ModelEntry,
+  type ModelCost,
   type ProviderRow,
 } from "@/lib/api";
 import { useAgentIdFromURL } from "@/hooks/use-agent-id";
 import { useLocale } from "@/components/locale-provider";
+import { ModelPriceFields } from "@/components/model-price-fields";
 import { useAgentName } from "@/hooks/use-agent-name";
 
 // Per-agent Models page — same UI/UX as the admin /models page, but
@@ -390,6 +392,7 @@ export default function AgentModelsPage() {
       else if (field === "reasoning") m.reasoning = value as boolean;
       else if (field === "contextWindow") m.contextWindow = Number(value) || 0;
       else if (field === "maxTokens") m.maxTokens = Number(value) || 0;
+      else if (field === "cost") m.cost = value as ModelCost;
       updated[index] = m;
       return updated;
     });
@@ -955,6 +958,10 @@ export default function AgentModelsPage() {
                       />
                     </div>
                   </div>
+                  <ModelPriceFields
+                    cost={m.cost}
+                    onChange={(cost) => handleUpdateModel(idx, "cost", cost)}
+                  />
                 </div>
                 );
               })}

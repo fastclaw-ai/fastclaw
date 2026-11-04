@@ -313,6 +313,9 @@ func (a *Agent) slashCompact(msg bus.InboundMessage) slashResult {
 	}
 
 	result, err := CompactMessages(sessionMsgs, a.homePath, a.provider, a.model)
+	if result != nil && result.Usage != nil {
+		a.meterTokens(context.Background(), sess.Key(), a.model, *result.Usage, 0)
+	}
 	if err != nil {
 		return slashResult{handled: true, reply: fmt.Sprintf("Compaction error: %v", err)}
 	}

@@ -113,8 +113,9 @@ type Meter interface {
 	// RecordTokenLog appends one row per LLM call to token_usage_log.
 	// Unlike RecordTokens (which UPSERTs into daily buckets), this is
 	// append-only so every call is individually auditable. durationMs
-	// is the wall-clock time of the provider.Chat call.
-	RecordTokenLog(ctx context.Context, userID, agentID, sessionKey, provider, model string, t Tokens, durationMs int64) error
+	// is the wall-clock time of the provider.Chat call. costUSD is the
+	// call's cost at the model's unit price, nil when the model has none.
+	RecordTokenLog(ctx context.Context, userID, agentID, sessionKey, provider, model string, t Tokens, costUSD *float64, durationMs int64) error
 	Close() error
 }
 
@@ -394,7 +395,7 @@ func (m *MemMeter) Query(_ context.Context, q Query) ([]DailyUsage, Totals, erro
 	return out, tot, nil
 }
 
-func (m *MemMeter) RecordTokenLog(_ context.Context, _, _, _, _, _ string, _ Tokens, _ int64) error {
+func (m *MemMeter) RecordTokenLog(_ context.Context, _, _, _, _, _ string, _ Tokens, _ *float64, _ int64) error {
 	return nil // MemMeter doesn't persist logs
 }
 
@@ -693,19 +694,23 @@ func (s *SQLMeter) Query(ctx context.Context, q Query) ([]DailyUsage, Totals, er
 	return out, tot, rows.Err()
 }
 
-func (s *SQLMeter) RecordTokenLog(ctx context.Context, userID, agentID, sessionKey, prov, model string, t Tokens, durationMs int64) error {
+func (s *SQLMeter) RecordTokenLog(ctx context.Context, userID, agentID, sessionKey, prov, model string, t Tokens, costUSD *float64, durationMs int64) error {
 	channel := store.ChannelFromContext(ctx)
 	chatterUID := store.ChatterUserIDFromContext(ctx)
 	q := s.rebind(`
 		INSERT INTO token_usage_log
 			(user_id, agent_id, session_key, provider, model,
 			 input_tokens, output_tokens, cache_read_tokens, cache_create_tokens,
-			 duration_ms, channel, chatter_user_id, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`)
+			 cost_usd, duration_ms, channel, chatter_user_id, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`)
+	var cost any // NULL when the model has no price
+	if costUSD != nil {
+		cost = *costUSD
+	}
 	_, err := s.db.ExecContext(ctx, q,
 		userID, agentID, sessionKey, prov, model,
 		t.Input, t.Output, t.CacheRead, t.CacheCreation,
-		durationMs, channel, chatterUID,
+		cost, durationMs, channel, chatterUID,
 	)
 	return err
 }

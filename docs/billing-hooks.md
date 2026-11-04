@@ -1,6 +1,8 @@
 # Billing hooks
 
-FastClaw doesn't know about prices, balances or payments. A hosted
+FastClaw doesn't hold balances or take payments. It reports what each
+model call **cost** in USD at the model's unit price; what to **charge**
+(credits, markup, plans) is the billing system's call. A hosted
 deployment that charges for usage runs its own billing system next to
 FastClaw and connects through four primitives. All admin routes take a
 platform-admin credential: a `super_admin` session or an **admin** API key
@@ -11,8 +13,12 @@ platform-admin credential: a `super_admin` session or an **admin** API key
 - One FastClaw **account** (user) per paying customer. Create it with
   `POST /api/users`, and issue its API keys with
   `POST /api/users/{id}/apikeys`.
-- The billing system keeps the mapping customer ↔ FastClaw account id, the
-  price table and the balance.
+- The billing system keeps the mapping customer ↔ FastClaw account id, its
+  own price list (what it charges) and the balance.
+- Unit prices (USD per 1M tokens: input, output, cache read, cache write)
+  are set on each provider model in Console → Models. Well-known models
+  fall back to a built-in list price when left blank; a model with no
+  price reports `cost_usd: null`.
 
 ## 1. Pull usage — `GET /api/admin/usage/events`
 
@@ -36,6 +42,7 @@ Query: `after` (cursor, default 0), `limit` (1–1000, default 500).
       "cache_creation_tokens": 0,
       "duration_ms": 0,
       "channel": "",
+      "cost_usd": 0.01284,          // null when the model has no price
       "created_at": "2026-10-05T08:00:00Z"
     }
   ],
@@ -44,11 +51,15 @@ Query: `after` (cursor, default 0), `limit` (1–1000, default 500).
 }
 ```
 
-Poll on a schedule: price each event, debit `account_id`, then store
+Poll on a schedule: price each event (from `cost_usd`, or from the tokens
+if you price them yourself), debit `account_id`, then store
 `next_after` as the cursor — in the same transaction as the debits, so a
 crash replays rather than skips. `id` is unique, so it also works as an
 idempotency key. Events show up a few seconds after the call; polling never
 skips one.
+
+`cost_usd` is null for a model with no unit price and for rows recorded
+before cost tracking — treat it as unknown, never as free.
 
 `account_id` rolls end-users (`X-Fastclaw-End-User`) and IM chatters up to
 the account that owns them.

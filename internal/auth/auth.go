@@ -71,15 +71,16 @@ type Identity struct {
 	// SwitchToAppUser rebound UserID to that end-user's app_user record.
 	// AppUserID is the api_key owner — the account that owns the agents.
 	// EndUser is the caller's external id for the end-user. UserID then
-	// only names the data namespace (sessions, USER.md, personal memory);
-	// agents are always resolved against AppUserID.
+	// names the data namespace (sessions, USER.md, personal memory) and the
+	// owner of the end-user's private agents; the account's platform
+	// agents are resolved against AppUserID.
 	AppUserID string
 	EndUser   string
 }
 
 // AccountID returns the account this request acts for — the tenant: the
 // api_key owner, even when UserID was switched to an end-user namespace.
-// Agents are resolved against it.
+// It owns the platform agents and pays for every turn.
 func (i Identity) AccountID() string {
 	if i.AppUserID != "" {
 		return i.AppUserID

@@ -83,9 +83,25 @@ other.
 
 ## 4. Scenario B — manage agents
 
-Agents created with the API belong to the key's FastClaw account. FastClaw
-does not record which of your users an agent is for — keep that mapping in
-your database (and mirror it into `metadata` if you want to filter by it).
+An agent belongs either to the key's FastClaw account or to one of your
+users:
+
+| | Platform agent | Private agent |
+|---|---|---|
+| Owner | The account | One end-user (your user id, see `user` in section 5) |
+| Create with | No end-user (or `"owner": "account"`) | `"user": "<your user id>"` in the body, or `"owner": "end_user"` with the `X-Fastclaw-End-User` header |
+| Who may chat | Every end-user of the account; each gets private history and memory | Its owner only |
+| Reached by requests naming end-user X | Yes | Only when X is the owner; any other end-user gets `404 agent_not_found` |
+| Talks to (agent-to-agent messages, groups) | The account's other platform agents | Only its owner's other private agents |
+
+Make an agent private when your user edits it themselves, it acts for them
+outside a chat (schedules, IM), or it must work with their other agents.
+Otherwise keep users on a platform agent: their data is already separate.
+FastClaw enforces who owns a private agent; you still decide which of your
+users may use which platform agent.
+
+The header alone never makes an agent private, so a backend that sends
+`X-Fastclaw-End-User` on every call keeps creating platform agents.
 
 ### Create — `POST /v1/agents`
 
@@ -111,12 +127,27 @@ curl -s "$FASTCLAW_BASE_URL/v1/agents" \
   characters, values ≤ 512. Stored and filterable, never used for
   authorization.
 - Show `display_name` to people. `name` equals `id` (kept for old clients).
+- `user` + `owner` choose the owner (table above). `owner` is `"account"` or
+  `"end_user"`; with `user` set it defaults to `"end_user"`.
+  `"owner": "end_user"` without an end-user is `400`.
+- `external_ref` (≤ 255 characters, unique per owner) makes create
+  idempotent: creating again with the same ref returns the existing agent,
+  unchanged, with `"created": false` — even when two requests race. Use it to
+  create a user's agent lazily on first use, e.g. `myapp:bot:<user id>`.
+- Every agent view carries `owner` (`"account"` | `"end_user"`), and
+  `end_user` (your user id) on private agents, plus `external_ref` when set.
 
 ### List — `GET /v1/agents`
 
 Newest first. Query: `limit` (1–100; omit for all), `cursor` (the previous
 page's `next_cursor`), `metadata[key]=value` filters (ANDed; also
-`metadata.key=value`).
+`metadata.key=value`), `owner`:
+
+- With an end-user (`X-Fastclaw-End-User`): the platform agents plus that
+  user's private agents by default; `owner=end_user` lists only theirs,
+  `owner=account` only the platform agents.
+- Without one: the platform agents by default; `owner=end_user` lists every
+  private agent of all your users, `owner=all` both.
 
 ```bash
 curl -s "$FASTCLAW_BASE_URL/v1/agents?limit=20&metadata%5Bapp_user%5D=user-123" \
@@ -142,8 +173,14 @@ Body `{"content": "..."}`. `name` is one of `SOUL.md`, `IDENTITY.md`,
 A second delete returns `404 agent_not_found`; treat it as "already deleted".
 Also remove your own mapping.
 
+Read, update, identity files and delete work on a private agent with the
+owner's `X-Fastclaw-End-User`, or with no end-user at all: the account's key
+manages every private agent (support, migrations). Another end-user gets
+`404 agent_not_found`.
+
 Agent keys may also read and update (PATCH, identity files) the agents granted
-to them; only user keys create and delete.
+to them; only user keys create and delete. Agent keys never reach private
+agents.
 
 ## 5. Chat (both scenarios) — `POST /v1/chat/completions`
 
@@ -164,7 +201,9 @@ curl -sN "$FASTCLAW_BASE_URL/v1/chat/completions" \
 - **`agent_id`** (or header `X-Fastclaw-Agent-ID`; the body wins) picks the
   agent and is strict: an agent the key may not use is `404 agent_not_found`
   — never a different agent. Omitted, FastClaw uses the key's only agent (or
-  the account's only agent).
+  the account's only agent). A private agent only chats with its owner as
+  `user`; without an end-user the call is `400 invalid_request`, with another
+  end-user `404 agent_not_found`.
 - **`X-Fastclaw-Session-Key`** selects the conversation history. Always send
   it, deterministic per conversation and prefixed with your app:
   `myapp:<conversation>[:<topic>]`. Omitted, every call starts a new session.
@@ -191,8 +230,12 @@ curl -sN "$FASTCLAW_BASE_URL/v1/chat/completions" \
 Streaming returns OpenAI SSE chunks
 (`data: {"choices":[{"delta":{"content":"..."}}]}` … `data: [DONE]`);
 non-streaming returns an OpenAI `chat.completion` (`choices[0].message.content`).
-The request's `model` field doesn't change the agent's model — the agent's
-configuration decides it.
+The request's `model` (`<provider>/<model>`) runs this turn on that model
+when the agent can reach its provider — a provider configured for the
+account or the agent. Anything else (a bare name such as `gpt-4o`, which
+OpenAI SDKs require, or an unknown provider) is ignored and the agent's own
+model answers. The response's `model` names the model that actually ran.
+To change an agent's model for every turn, `PATCH` it instead.
 
 A stream follows the turn as it runs: the agent's text arrives while it is
 written, including what it says between steps, and each tool call is
@@ -217,8 +260,15 @@ model call the agent made for this turn, tool loops included:
 `prompt_tokens` / `completion_tokens` / `total_tokens` as in OpenAI
 (`prompt_tokens` includes cached input, also in
 `prompt_tokens_details.cached_tokens`), plus `input_tokens` (uncached),
-`cache_read_tokens`, `cache_creation_tokens` and `model_calls`. Use it to
-attribute cost to your users per turn.
+`cache_read_tokens`, `cache_creation_tokens` and `model_calls`, and
+`cost_usd`: what the turn cost in USD, each model call priced at the unit
+price of the model it actually ran on (a turn can call several — a
+per-request `model`, context compaction, sub-agents). `cost_usd` is always
+present; it is `null` when any call's model has no price set — treat that
+as unknown, never as 0. FastClaw reports cost only: what you charge your
+users (credits, markup, plans) is up to you. Background work that finishes
+after the reply (memory extraction, skill learning) isn't in the turn's
+`usage`; it shows up as its own usage events.
 
 API conversations are never trusted with the FastClaw host: the agent's
 tools (shell, scripts) run in FastClaw's sandbox. If the FastClaw operator
@@ -272,11 +322,11 @@ Every `/v1` error is `{"error": {"type", "code", "message"}}`. Branch on
 
 | Status | `code` | Meaning |
 |---|---|---|
-| 400 | `invalid_request` | Bad body, missing messages, metadata over limits, bad cursor. |
+| 400 | `invalid_request` | Bad body, missing messages, metadata over limits, bad cursor, a private agent chatted with without its owner as `user`. |
 | 401 | `unauthorized` | Missing or invalid API key. |
 | 403 | `forbidden` | The key may not do this (e.g. an agent key creating agents). |
 | 403 | `agent_quota_exceeded` | The account reached its agent quota. |
-| 404 | `agent_not_found` | No such agent for this key. |
+| 404 | `agent_not_found` | No such agent for this key — or another end-user's private agent. |
 | 402 | `payment_required` | The FastClaw account is on billing hold (its balance ran out). Tell your user the service is paused; retrying won't help until it's topped up. |
 | 404 | `project_not_found` | Unknown `project_id`. |
 | 429 | `rate_limited` | Slow down and retry with backoff. |
@@ -292,6 +342,8 @@ Every `/v1` error is `{"error": {"type", "code", "message"}}`. Branch on
 - [ ] The app checks the user's access to an agent before every call.
 - [ ] Deterministic `X-Fastclaw-Session-Key` per conversation; `user` set when
       a user's history must stay private.
+- [ ] Per-user agents created as private agents (`user` on create) with an
+      `external_ref`, and chatted with as their owner.
 - [ ] Streaming parsed as SSE; errors handled by `error.code`.
 - [ ] Produced files taken from `files` (download `url` or `return_files: "inline"`).
 - [ ] No FastClaw key or URL in client-side code.

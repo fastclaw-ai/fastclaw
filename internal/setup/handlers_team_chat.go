@@ -7,7 +7,10 @@ import (
 	"time"
 
 	"github.com/fastclaw-ai/fastclaw/internal/agent"
+	"github.com/fastclaw-ai/fastclaw/internal/auth"
 	"github.com/fastclaw-ai/fastclaw/internal/bus"
+	"github.com/fastclaw-ai/fastclaw/internal/store"
+	"github.com/fastclaw-ai/fastclaw/internal/users"
 )
 
 type teamChatRequest struct {
@@ -53,7 +56,11 @@ func (s *Server) resolveTeamMembers(r *http.Request, req teamChatRequest) []reso
 		name := agentID
 		description := ""
 		if s.dataStore != nil {
-			if rec, err := s.dataStore.GetAgent(r.Context(), agentID); err == nil && rec != nil {
+			rec, err := s.dataStore.GetAgent(r.Context(), agentID)
+			if err == nil && rec != nil && !s.privateAgentMemberAllowed(r, rec) {
+				continue
+			}
+			if err == nil && rec != nil {
 				if strings.TrimSpace(rec.Name) != "" {
 					name = strings.TrimSpace(rec.Name)
 				}
@@ -66,6 +73,21 @@ func (s *Server) resolveTeamMembers(r *http.Request, req teamChatRequest) []reso
 		out = append(out, resolvedTeamMember{AgentID: agentID, SessionID: sessionID, Handle: ag, Name: name, Description: description})
 	}
 	return out
+}
+
+// privateAgentMemberAllowed keeps an end-user's private agent (one owned
+// by an app_user) out of every group but its owner's own: groups and team
+// topics only connect agents of one owner.
+func (s *Server) privateAgentMemberAllowed(r *http.Request, rec *store.AgentRecord) bool {
+	ident, ok := auth.FromContext(r.Context())
+	if !ok {
+		return false
+	}
+	if rec.UserID == ident.EffectiveUserID() {
+		return true
+	}
+	owner, err := s.dataStore.GetUser(r.Context(), rec.UserID)
+	return err == nil && owner != nil && owner.Role != users.RoleAppUser
 }
 
 func teamAgentSessionID(baseSessionID, teamID, agentID string) string {

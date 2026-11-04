@@ -92,6 +92,32 @@ func TestUsageEventsEndpoint(t *testing.T) {
 	}
 }
 
+// Each pulled usage event carries cost_usd: the stored per-call cost, or
+// null when the model had no price.
+func TestUsageEventsCarryCost(t *testing.T) {
+	_, st, acct, mux := billingHookServer(t)
+	old := time.Now().UTC().Add(-time.Minute).Format("2006-01-02 15:04:05")
+	for _, cost := range []any{0.0123, nil} {
+		if _, err := st.DB().Exec(`INSERT INTO token_usage_log (user_id, agent_id, model, input_tokens, cost_usd, created_at) VALUES (?, 'agt', 'm', 7, ?, ?)`, acct.ID, cost, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rec := serve(mux, "GET", "/api/admin/usage/events", nil)
+	var page struct {
+		Events []map[string]any `json:"events"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &page)
+	if len(page.Events) != 2 {
+		t.Fatalf("events: %s", rec.Body.String())
+	}
+	if page.Events[0]["cost_usd"] != 0.0123 {
+		t.Fatalf("priced event: %v", page.Events[0])
+	}
+	if v, present := page.Events[1]["cost_usd"]; !present || v != nil {
+		t.Fatalf("unpriced event must carry cost_usd: null, got %v (present=%v)", v, present)
+	}
+}
+
 func jsonInt(n int64) string { b, _ := json.Marshal(n); return string(b) }
 
 func TestLoginLink(t *testing.T) {

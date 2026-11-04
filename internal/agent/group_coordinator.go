@@ -23,7 +23,7 @@ func (a *Agent) DecideGroup(ctx context.Context, scope, prompt string) (string, 
 	if response == nil {
 		return "", fmt.Errorf("empty coordination response")
 	}
-	a.meterTokens(ctx, scope, response.Usage, time.Since(started).Milliseconds())
+	a.meterTokens(ctx, scope, a.model, response.Usage, time.Since(started).Milliseconds())
 	if len(response.ToolCalls) > 0 {
 		return "", fmt.Errorf("coordination must not call tools")
 	}

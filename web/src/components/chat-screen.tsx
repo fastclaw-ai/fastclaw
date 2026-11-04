@@ -174,6 +174,9 @@ interface ChatMessage {
   // "steer" echo. Used only to dedup against that echo (cleared on
   // match) — not rendered differently.
   pendingSteer?: boolean;
+  // Local error bubble for "no usable LLM provider" — renders a button
+  // that reopens the agent's model settings.
+  needsModelConfig?: boolean;
   // Assistant-side metadata (e.g. iteration-cap badge). Stamped from
   // either the live content event's `metadata` payload or the
   // ChatHistoryMessage.metadata on a refresh.
@@ -1341,6 +1344,7 @@ export function ChatScreen() {
                   ? tr("Configure an LLM provider before chatting.", "请先配置可用的模型服务商，再继续聊天。")
                   : tr("Error: {{error}}", "错误：{{error}}", { error: msg }),
                 timestamp: Date.now(),
+                needsModelConfig: needsModelConfiguration || undefined,
               },
             ]);
             break;
@@ -2403,6 +2407,7 @@ export function ChatScreen() {
                   ? tr("Configure an LLM provider before chatting.", "请先配置可用的模型服务商，再继续聊天。")
                   : tr("Error: {{error}}", "错误：{{error}}", { error: msg }),
                 timestamp: Date.now(),
+                needsModelConfig: needsModelConfiguration || undefined,
               },
             ]);
             break;
@@ -2533,6 +2538,7 @@ export function ChatScreen() {
               role: "agent",
               content: errMsg,
               timestamp: Date.now(),
+              needsModelConfig: needsModelConfiguration || undefined,
             },
           ];
         });
@@ -3134,6 +3140,19 @@ export function ChatScreen() {
                             onWorkspaceFileClick={openWorkspaceFile}
                           />
                         )
+                      )}
+                      {msg.role === "agent" && msg.needsModelConfig && (
+                        <div className="mt-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => openAgentModelsSettings(selectedAgent)}
+                            className="h-8 gap-1.5"
+                          >
+                            <Settings className="h-3.5 w-3.5" />
+                            {tr("Configure models", "配置模型")}
+                          </Button>
+                        </div>
                       )}
                       {msg.role === "agent" && msg.metadata?.iterationCapReached && (
                         <div className="mt-2 flex items-start gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-900 dark:text-amber-200">

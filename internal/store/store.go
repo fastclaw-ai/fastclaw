@@ -15,6 +15,10 @@ import (
 // errors.Is(err, store.ErrNotFound) at call sites.
 var ErrNotFound = errors.New("store: not found")
 
+// ErrConflict is returned by Create* methods when a row with the same
+// unique key already exists.
+var ErrConflict = errors.New("store: conflict")
+
 // Store is the unified interface for all persistent data.
 //
 // Tables fall into three buckets:
@@ -69,6 +73,17 @@ type Store interface {
 	GetAgent(ctx context.Context, agentID string) (*AgentRecord, error)
 	SaveAgent(ctx context.Context, agent *AgentRecord) error
 	DeleteAgent(ctx context.Context, agentID string) error
+	// CreateAgent inserts a new agent and never overwrites one: an id or
+	// (owner, external_ref) that already exists returns ErrConflict.
+	CreateAgent(ctx context.Context, agent *AgentRecord) error
+	// GetAgentByExternalRef finds ownerUserID's agent created with ref.
+	GetAgentByExternalRef(ctx context.Context, ownerUserID, ref string) (*AgentRecord, error)
+	// ListAccountPrivateAgents lists the agents owned by accountID's
+	// app_users (its end-users' private agents).
+	ListAccountPrivateAgents(ctx context.Context, accountID string) ([]AgentRecord, error)
+	// CountAccountAgents counts accountID's own agents plus its
+	// app_users' private agents.
+	CountAccountAgents(ctx context.Context, accountID string) (int64, error)
 	ListAllAgents(ctx context.Context) ([]AgentRecord, error)
 
 	// --- Sessions (per user, per agent — chat history is private) ---
@@ -432,18 +447,23 @@ type APIKeyRecord struct {
 // into their own UserSpace; sessions/memory/agent_files still
 // partition per chatter, so only the agent identity is shared.
 type AgentRecord struct {
-	ID        string                 `json:"id"`
-	UserID    string                 `json:"userId"`
-	Name      string                 `json:"name"`
-	Config    map[string]interface{} `json:"config,omitempty"`
-	IsPublic  bool                   `json:"isPublic"`
-	CreatedAt time.Time              `json:"createdAt"`
-	UpdatedAt time.Time              `json:"updatedAt"`
+	ID       string                 `json:"id"`
+	UserID   string                 `json:"userId"`
+	Name     string                 `json:"name"`
+	Config   map[string]interface{} `json:"config,omitempty"`
+	IsPublic bool                   `json:"isPublic"`
+	// ExternalRef is the caller's idempotency key from POST /v1/agents
+	// ("" when none). Unique per owner.
+	ExternalRef string    `json:"externalRef,omitempty"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
 }
 
 // UsageEvent is one model call from token_usage_log, for billing export.
 // AccountID is the account that pays: UserID itself, or the account that
-// owns UserID when it is an end-user (app_user) or IM chatter.
+// owns UserID when it is an end-user (app_user) or IM chatter. CostUSD is
+// the call's cost at the model's unit price; null when the model had no
+// price (or the row predates cost tracking).
 type UsageEvent struct {
 	ID                  int64     `json:"id"`
 	AccountID           string    `json:"account_id"`
@@ -460,6 +480,7 @@ type UsageEvent struct {
 	DurationMs          int64     `json:"duration_ms"`
 	Channel             string    `json:"channel"`
 	ChatterUserID       string    `json:"chatter_user_id,omitempty"`
+	CostUSD             *float64  `json:"cost_usd"`
 	CreatedAt           time.Time `json:"created_at"`
 }
 

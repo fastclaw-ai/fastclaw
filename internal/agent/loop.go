@@ -37,15 +37,19 @@ import (
 
 // Agent is the ReAct agent loop.
 type Agent struct {
-	name                 string
-	provider             provider.Provider
-	registry             *tools.Registry
-	sessions             *session.Manager
-	memory               *Memory
-	ctxBuilder           *ContextBuilder
-	mcpMgr               *mcp.Manager
-	hooks                *HookRegistry
-	model                string
+	name       string
+	provider   provider.Provider
+	registry   *tools.Registry
+	sessions   *session.Manager
+	memory     *Memory
+	ctxBuilder *ContextBuilder
+	mcpMgr     *mcp.Manager
+	hooks      *HookRegistry
+	model      string
+	// providers are the LLM provider credentials visible to this agent
+	// (system + owner + agent scope), kept so a per-turn model override
+	// (WithTurnModel) can reach a provider other than the default one.
+	providers            map[string]config.ProviderConfig
 	maxTokens            int
 	temperature          float64
 	maxToolIterations    int
@@ -302,6 +306,7 @@ func NewAgentWithFullCfg(rc config.ResolvedAgent, prov provider.Provider, mb *bu
 		learnerLoader := NewSkillsLoaderWithGlobal(homeDir, rc.Home, "", rc.Skills, fullCfg.Skills)
 		learnerLoader.agentID = rc.ID
 		ag.skillsLearner = NewSkillsLearner(rc.Home, prov, model, learnerLoader.AllSkillDirs()...)
+		ag.skillsLearner.onUsage = ag.meterBackground
 		if fullCfg.SkillsLearner.MinToolCalls > 0 {
 			ag.skillsLearner.minToolCalls = fullCfg.SkillsLearner.MinToolCalls
 		}
@@ -389,6 +394,7 @@ func NewAgentWithSkillsCfg(rc config.ResolvedAgent, prov provider.Provider, mb *
 		ctxBuilder:           newContextBuilderWithSandbox(rc.Home, workspace, memory, skillsSummary, rc.Thinking, sandboxEnforced, rc.Sandbox.Backend, rc.PromptMode),
 		hooks:                hooks,
 		model:                rc.Model,
+		providers:            rc.Providers,
 		maxTokens:            rc.MaxTokens,
 		temperature:          rc.Temperature,
 		maxToolIterations:    rc.MaxToolIterations,
@@ -676,6 +682,7 @@ func (a *Agent) SetGroupContext(gc *GroupContext) {
 // understood markdown source.
 func (a *Agent) InjectGroupMessage(ctx context.Context, msg bus.InboundMessage) {
 	sess := a.sessions.Get(sessionTriple(msg, msg.ProjectID))
+	ctx = withMeterSession(ctx, sess.Key())
 	label := msg.SenderName
 	if label == "" {
 		label = "Bot"
@@ -759,35 +766,6 @@ func (a *Agent) checkQuota(ctx context.Context) string {
 		status.TokensUsed, status.MonthlyTokenLimit,
 		status.RequestsUsed, status.MonthlyRequestLimit,
 		status.ResetsAt)
-}
-
-// meterTokens records one Chat call's token counts. Safe to call with
-// zero usage (still bumps request_count). Errors are logged but never
-// propagated — metering must not break the chat path. The agent's
-// configured model string carries the provider prefix when a per-agent
-// override is set; we split it so the meter stores provider and model
-// in their own columns rather than mashing them together.
-// durationMs is the wall-clock time of the LLM call; pass 0 when not
-// measured (the daily bucket doesn't use it, only the log table).
-func (a *Agent) meterTokens(ctx context.Context, sessionKey string, u provider.Usage, durationMs int64) {
-	t := usage.Tokens{
-		Input:         u.InputTokens,
-		Output:        u.OutputTokens,
-		CacheRead:     u.CacheReadTokens,
-		CacheCreation: u.CacheCreationTokens,
-	}
-	// The API reports a turn's usage in its response.
-	usage.CollectorFrom(ctx).Add(t)
-	if a.meter == nil {
-		return
-	}
-	prov, mdl := provider.SplitProviderModel(a.model)
-	if err := a.meter.RecordTokens(ctx, a.ownerUserID, a.agentID, sessionKey, prov, mdl, t); err != nil {
-		slog.Warn("meter record failed", "agent", a.name, "error", err)
-	}
-	if err := a.meter.RecordTokenLog(ctx, a.ownerUserID, a.agentID, sessionKey, prov, mdl, t, durationMs); err != nil {
-		slog.Warn("meter log failed", "agent", a.name, "error", err)
-	}
 }
 
 // streamChatToResponse is a drop-in replacement for provider.Chat that
@@ -976,6 +954,7 @@ func (a *Agent) sessionHasActiveGoal(ctx context.Context, msg bus.InboundMessage
 		return false
 	}
 	sess := a.sessions.Get(sessionTriple(msg, msg.ProjectID))
+	ctx = withMeterSession(ctx, sess.Key())
 	if sess == nil {
 		return false
 	}
@@ -1890,6 +1869,7 @@ func (a *Agent) handlePlanMode(ctx context.Context, msg bus.InboundMessage) stri
 	ctx = store.WithChatterUserID(ctx, chatterUID)
 	ctx = store.WithChannel(ctx, msg.Channel)
 	sess := a.sessions.Get(sessionTriple(msg, msg.ProjectID))
+	ctx = withMeterSession(ctx, sess.Key())
 	// Session.ctx() builds its OWN context from session-held fields
 	// rather than inheriting the caller's ctx — without binding the
 	// chatter onto sess itself, the WithChatterUserID we just stamped
@@ -1963,7 +1943,7 @@ func (a *Agent) handlePlanMode(ctx context.Context, msg bus.InboundMessage) stri
 		emitEvent(ctx, ChatEvent{Type: "done"})
 		return "Sorry, I couldn't draft the plan — the LLM call failed."
 	}
-	a.meterTokens(ctx, sess.Key(), resp.Usage, 0)
+	a.meterTokens(ctx, sess.Key(), a.model, resp.Usage, 0)
 
 	planMeta := mergeMetadata(map[string]any{"planMode": true}, knowledgeMeta)
 	sess.Append(provider.Message{
@@ -2374,6 +2354,7 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 	}
 
 	a = a.forkTurn()
+	a.applyTurnModel(ctx)
 
 	// Quota gate: reject the turn early when the agent owner has
 	// exceeded their billing ceiling. Checked before plan-mode and
@@ -2429,6 +2410,7 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 		"agent", a.name, "channel", msg.Channel, "chat_id", msg.ChatID, "user", chatterUID)
 	a.refreshSkillsFromStore(chatterUID)
 	sess := a.sessions.Get(sessionTriple(msg, msg.ProjectID))
+	ctx = withMeterSession(ctx, sess.Key())
 	// Bind chatter onto sess. Session.ctx() builds its own
 	// context.Background-rooted ctx for store calls, so the
 	// WithChatterUserID we stamped onto the caller ctx above does NOT
@@ -2518,6 +2500,9 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 	compactResult, err := CompactMessages(sessionMsgs, a.homePath, a.provider, a.model)
 	if err != nil {
 		slog.Warn("compaction error", "agent", a.name, "error", err)
+	}
+	if compactResult != nil && compactResult.Usage != nil {
+		a.meterTokens(ctx, sess.Key(), a.model, *compactResult.Usage, 0)
 	}
 	if compactResult != nil && compactResult.Pruned {
 		// Replace session messages with compacted version
@@ -2696,7 +2681,7 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 			emitEvent(ctx, ChatEvent{Type: "done"})
 			return fallback
 		}
-		a.meterTokens(ctx, sess.Key(), resp.Usage, 0)
+		a.meterTokens(ctx, sess.Key(), a.model, resp.Usage, 0)
 		a.maybeRecoverToolCalls(resp)
 
 		// A reply cut off at the output limit (typically one huge tool
@@ -3015,7 +3000,7 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 	finalResp, finalErr := a.streamChatToResponseQuiet(ctx, finalMessages, nil)
 	if finalErr == nil {
 		finalContent = scrubLeakedToolCallContent(finalResp.Content)
-		a.meterTokens(ctx, sess.Key(), finalResp.Usage, 0)
+		a.meterTokens(ctx, sess.Key(), a.model, finalResp.Usage, 0)
 	}
 	if finalContent == "" {
 		// Synthesis call itself failed or returned empty — fall back to
@@ -3251,13 +3236,17 @@ func (a *Agent) runPostTurn(ctx context.Context, msg bus.InboundMessage, message
 			model = a.model
 		}
 		slog.Info("auto-persist firing", "agent", a.name, "chatter", chatterUID, "model", model, "chatter_turns", chatterTurns, "messages", len(messages))
-		go AutoPersistMemory(ctx, chatterMem, a.provider, model, messages)
+		sessionKey := meterSessionFrom(ctx)
+		go AutoPersistMemory(detachCollector(ctx), chatterMem, a.provider, model, messages,
+			func(bctx context.Context, u provider.Usage, durationMs int64) {
+				a.meterTokens(bctx, sessionKey, model, u, durationMs)
+			})
 	}
 
 	// Skills learner
 	if a.skillsLearner != nil {
 		go func() {
-			if err := a.skillsLearner.MaybeExtract(ctx, messages, toolCallCount); err != nil {
+			if err := a.skillsLearner.MaybeExtract(detachCollector(ctx), messages, toolCallCount); err != nil {
 				slog.Debug("skills learner error", "error", err)
 			}
 		}()
@@ -3305,6 +3294,7 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 	}
 
 	a = a.forkTurn()
+	a.applyTurnModel(ctx)
 
 	// Quota gate — mirrors the check in HandleMessage.
 	if rejection := a.checkQuota(ctx); rejection != "" {
@@ -3321,6 +3311,7 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 		"agent", a.name, "channel", msg.Channel, "chat_id", msg.ChatID, "user", chatterUID)
 	a.refreshSkillsFromStore(chatterUID)
 	sess := a.sessions.Get(sessionTriple(msg, msg.ProjectID))
+	ctx = withMeterSession(ctx, sess.Key())
 	// Bind chatter onto sess so its ctx() embeds WithChatterUserID
 	// for DBStore session writes — Session.ctx() rebuilds ctx from its
 	// own fields, so the chatter has to live on sess itself.
@@ -3365,6 +3356,9 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 	compactResult, err := CompactMessages(sessionMsgs, a.homePath, a.provider, a.model)
 	if err != nil {
 		slog.Warn("compaction error", "agent", a.name, "error", err)
+	}
+	if compactResult != nil && compactResult.Usage != nil {
+		a.meterTokens(ctx, sess.Key(), a.model, *compactResult.Usage, 0)
 	}
 	if compactResult != nil && compactResult.Pruned {
 		sess.ReplaceMessages(compactResult.Messages)
@@ -3450,7 +3444,7 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 			slog.Error("LLM chat failed after retries", "agent", a.name, "error", err)
 			return a.stringStream(buildFallbackReply(err, nil, streakState.lastFailedTool, streakState.lastFailureText))
 		}
-		a.meterTokens(ctx, sess.Key(), resp.Usage, 0)
+		a.meterTokens(ctx, sess.Key(), a.model, resp.Usage, 0)
 		a.maybeRecoverToolCalls(resp)
 
 		if !resp.HasToolCalls() {
@@ -3507,7 +3501,7 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 						return
 					}
 				}
-				a.meterTokens(ctx, sess.Key(), streamUsage, 0)
+				a.meterTokens(ctx, sess.Key(), a.model, streamUsage, 0)
 				msg := provider.Message{Role: "assistant", Content: full.String(), Thinking: thinking, Metadata: knowledgeMeta}
 				switch {
 				case len(rawAssistant) > 0:
@@ -3676,7 +3670,7 @@ func (a *Agent) streamFinalDeliveryAfterCap(ctx context.Context, inboundMsg bus.
 				return
 			}
 		}
-		a.meterTokens(ctx, sess.Key(), streamUsage, 0)
+		a.meterTokens(ctx, sess.Key(), a.model, streamUsage, 0)
 		content := full.String()
 		if content == "" {
 			content = stop.fallback()
@@ -4098,6 +4092,7 @@ func formatConversationGap(gap time.Duration) string {
 // UpdateConfig updates the agent's runtime config (model, temperature, etc.)
 func (a *Agent) UpdateConfig(rc config.ResolvedAgent) {
 	a.model = rc.Model
+	a.providers = rc.Providers
 	a.maxTokens = rc.MaxTokens
 	a.temperature = rc.Temperature
 	a.maxToolIterations = rc.MaxToolIterations

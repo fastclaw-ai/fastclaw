@@ -23,9 +23,12 @@ const maxMessageAgentDepth = 2
 
 type messageAgentDepthKey struct{}
 
-// AgentResolver finds (and if needed loads) an agent owned by the same
-// account, by exact id or case-insensitive display name.
-type AgentResolver func(ctx context.Context, ref string) (*Agent, error)
+// AgentResolver finds (and if needed loads) another agent owned by
+// ownerUserID — the calling agent's owner — by exact id or
+// case-insensitive display name. Agents of any other owner must not
+// resolve: an end-user's private agents only reach that end-user's other
+// agents, never the account's platform agents or another end-user's.
+type AgentResolver func(ctx context.Context, ownerUserID, ref string) (*Agent, error)
 
 // registerMessageAgent wires message_agent for this agent: a real private
 // message to another of the owner's agents, run in that agent's direct
@@ -48,7 +51,7 @@ func (a *Agent) messageAgent(ctx context.Context, resolve AgentResolver, ownerUs
 	if depth >= maxMessageAgentDepth {
 		return "", fmt.Errorf("handoff depth reached; continue with the context already available")
 	}
-	target, err := resolve(ctx, strings.TrimSpace(ref))
+	target, err := resolve(ctx, ownerUserID, strings.TrimSpace(ref))
 	if err != nil || target == nil {
 		return "", fmt.Errorf("no agent named %q exists. message_agent only reaches the user's FastClaw agents; if %q is a program on the host (e.g. the codex or claude CLI), run it with exec instead", ref, ref)
 	}
