@@ -14,7 +14,17 @@ import (
 const (
 	LocalAgentsToolName   = "local_agents"
 	RunLocalAgentToolName = "run_local_agent"
+	SendLocalFileToolName = "send_local_file"
 )
+
+// LocalFileFetcher reads a file from the person's computer (*agl.Tools).
+type LocalFileFetcher interface {
+	Fetch(ctx context.Context, r agl.FetchRun) (agl.FetchedFile, error)
+}
+
+// SaveFileFunc stores fetched bytes in this turn's session workspace and
+// returns the /workspace-relative name.
+type SaveFileFunc func(ctx context.Context, f agl.FetchedFile) (string, error)
 
 // LocalAgentRunner is what the tools need from internal/agl (*agl.Tools).
 type LocalAgentRunner interface {
@@ -53,6 +63,65 @@ func RegisterLocalAgents(r *Registry, svc LocalAgentRunner, userID string, chat 
 		},
 		"required": []string{"agent", "task"},
 	}, t.run, SourceLocalAgent)
+}
+
+// RegisterSendLocalFile mounts send_local_file: fetch a file a coding
+// agent produced on the person's computer into the workspace, so the
+// reply can show it (image) or attach it (document) in this chat.
+func RegisterSendLocalFile(r *Registry, svc LocalFileFetcher, save SaveFileFunc, userID string) {
+	t := &sendLocalFileTool{svc: svc, save: save, userID: userID}
+	r.RegisterSerialFrom(SendLocalFileToolName, strings.Join([]string{
+		"Fetch a file from the PERSON'S OWN computer (one a coding agent created or that they ask for) so you can show or send it in this chat.",
+		"Use it after run_local_agent made an image, chart, PDF or document the person wants to see: the chat can display images and attach files, the person can't open paths on their computer from here.",
+		"Allowed: png, jpg, gif, webp, pdf, docx, xlsx, pptx, txt, md, csv, zip, mp4, mp3 (max 20 MB), not files in hidden folders. SVG can't be shown: ask the coding agent to export a PNG first.",
+		"It returns a workspace path. To show an image, put ![](/workspace/<name>) in your reply; to attach any other file, put [<name>](/workspace/<name>). Don't describe the path to the person.",
+	}, "\n"), map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"path":    map[string]any{"type": "string", "description": `File path on the computer, e.g. "~/Downloads/cat.png" (absolute, ~/…, or relative to the computer's default folder).`},
+			"machine": map[string]any{"type": "string", "description": "Computer name or id; omit for the first online computer."},
+		},
+		"required": []string{"path"},
+	}, t.run, SourceLocalAgent)
+}
+
+type sendLocalFileTool struct {
+	svc    LocalFileFetcher
+	save   SaveFileFunc
+	userID string
+}
+
+func (t *sendLocalFileTool) run(ctx context.Context, raw json.RawMessage) (string, error) {
+	var a struct {
+		Path    string `json:"path"`
+		Machine string `json:"machine"`
+	}
+	if err := json.Unmarshal(raw, &a); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+	f, err := t.svc.Fetch(ctx, agl.FetchRun{UserID: t.userID, Machine: a.Machine, Path: a.Path})
+	if err != nil {
+		var te *agl.ToolError
+		if errors.As(err, &te) {
+			return "", te
+		}
+		return "", fmt.Errorf("send_local_file: %w", err)
+	}
+	name, err := t.save(ctx, f)
+	if err != nil {
+		return "", fmt.Errorf("send_local_file: could not store %s: %w", f.Name, err)
+	}
+	ref := fmt.Sprintf("[%s](/workspace/%s)", name, name)
+	if f.IsImage() {
+		ref = fmt.Sprintf("![](/workspace/%s)", name)
+	}
+	blob, _ := json.Marshal(map[string]any{
+		"workspacePath": "/workspace/" + name,
+		"bytes":         len(f.Bytes),
+		"contentType":   f.ContentType,
+		"putInReply":    ref,
+	})
+	return string(blob), nil
 }
 
 type localAgentsTool struct {
@@ -130,5 +199,6 @@ func LocalAgentsNote(machines []agl.LocalMachine) string {
 		parts = append(parts, fmt.Sprintf("%s (%s: %s)", m.Name, state, agents))
 	}
 	return "The person has linked their own computer(s): " + strings.Join(parts, "; ") +
-		". When a request needs their computer (code, files, repos, running commands), use run_local_agent; answer everything else yourself."
+		". When a request needs their computer (code, files, repos, running commands), use run_local_agent; answer everything else yourself." +
+		" When the result is an image or file the person should see, fetch it with send_local_file and put it in your reply (ask for PNG instead of SVG)."
 }

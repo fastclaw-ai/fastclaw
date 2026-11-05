@@ -70,6 +70,8 @@ func (f *fakeLink) Request(_ context.Context, _ string, method string, params an
 		return json.RawMessage(`{"id":"s1","access":"ask","features":["steer"]}`), nil
 	case "session.prompt":
 		return json.RawMessage(`{"session_id":"s1"}`), nil
+	case "fs.read":
+		return json.RawMessage(`{"content_base64":"aGk=","size":2}`), nil
 	case "session.history":
 		f.mu.Lock()
 		h := f.history

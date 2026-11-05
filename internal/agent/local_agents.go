@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"encoding/base64"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -59,5 +61,17 @@ func (a *Agent) mountLocalAgents(ctx context.Context, msg bus.InboundMessage) st
 	tools.RegisterLocalAgents(a.registry, svc, uid, agl.ToolChat{
 		Channel: msg.Channel, AccountID: msg.AccountID, ChatID: msg.ChatID, AgentID: a.name,
 	})
+	if fetcher, ok := svc.(tools.LocalFileFetcher); ok {
+		// Same session key the gateway resolves reply media from.
+		sessionID, projectID := msg.ChatID, msg.ProjectID
+		tools.RegisterSendLocalFile(a.registry, fetcher, func(ctx context.Context, f agl.FetchedFile) (string, error) {
+			url := "data:" + f.ContentType + ";base64," + base64.StdEncoding.EncodeToString(f.Bytes)
+			names := a.WriteSessionAttachments(ctx, sessionID, projectID, []Attachment{{URL: url, Name: f.Name}})
+			if len(names) == 0 {
+				return "", errors.New("workspace write failed")
+			}
+			return names[0], nil
+		}, uid)
+	}
 	return tools.LocalAgentsNote(machines)
 }

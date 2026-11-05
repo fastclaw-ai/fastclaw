@@ -158,6 +158,22 @@ turn that is blocked in the tool call. Anything else routes as usual.
 Requests live in memory (one per chat); after a restart the run's turn is
 gone anyway.
 
+### Sending files back (`send_local_file`)
+
+Mounted with the two tools above. `send_local_file {path, machine?}` reads
+one file from the chatter's machine with agl `fs.read` (allowed on any hub
+link access), stores it in the turn's session workspace and returns
+`/workspace/<name>`. The reply then carries `![](/workspace/<name>)`
+(image → photo) or `[name](/workspace/<name>)` (document → attachment),
+which the gateway already uploads to the IM channel.
+
+- Only deliverable kinds: png/jpg/gif/webp, pdf, docx/xlsx/pptx,
+  txt/md/csv, zip, mp4, mp3; at most 20 MB.
+- Never a path with a segment starting with `.` (`~/.ssh`, `.git`, …).
+- SVG is refused with a hint: chat apps don't render it, so the model asks
+  the coding agent to export a PNG first.
+- Relative paths resolve against the machine's default cwd.
+
 ## IM turn semantics (passthrough agents)
 
 - agl session name `fc:<agentId>:<chatId>`, created/resumed with the
