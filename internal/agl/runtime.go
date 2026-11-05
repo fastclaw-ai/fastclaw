@@ -32,6 +32,12 @@ type RuntimeConfig struct {
 	Access    string `json:"access"`
 }
 
+// ValidCwd reports whether cwd may be sent to agl as a working
+// directory ("" = agl's default; "~/" is expanded by agl).
+func ValidCwd(cwd string) bool {
+	return len(cwd) <= maxCwdLen && !strings.ContainsRune(cwd, 0) && utf8.ValidString(cwd)
+}
+
 // RuntimeOf returns an agent config's runtime ("" = the LLM loop).
 func RuntimeOf(cfg map[string]interface{}) string {
 	s, _ := cfg["runtime"].(string)
@@ -91,7 +97,7 @@ func ValidateRuntimeConfig(ctx context.Context, st store.MachineStore, ownerID s
 	if len(rc.AglAgent) > 64 {
 		return invalid("runtimeConfig.aglAgent is too long")
 	}
-	if len(rc.Cwd) > maxCwdLen || strings.ContainsRune(rc.Cwd, 0) || !utf8.ValidString(rc.Cwd) {
+	if !ValidCwd(rc.Cwd) {
 		return invalid("runtimeConfig.cwd is invalid")
 	}
 	switch rc.Access {

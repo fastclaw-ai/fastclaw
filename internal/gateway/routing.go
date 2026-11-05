@@ -292,6 +292,11 @@ func groupSteerText(msg bus.InboundMessage) string {
 }
 
 func (g *Gateway) routeDM(ctx context.Context, msg bus.InboundMessage) {
+	// A 1/2/3 answering a running run_local_agent's permission request
+	// is consumed here, before any agent routing, queueing or steering.
+	if g.interceptToolApproval(ctx, msg) {
+		return
+	}
 	space, err := g.users.getOrLoad(ctx, msg.OwnerUserID)
 	if err != nil {
 		slog.Warn("user space load failed", "user", msg.OwnerUserID, "error", err)
@@ -300,6 +305,7 @@ func (g *Gateway) routeDM(ctx context.Context, msg bus.InboundMessage) {
 	if g.routeAgl(ctx, space, msg) {
 		return
 	}
+	msg.MachineUserID = g.machineUserFor(ctx, msg)
 	ag := g.matchAgent(ctx, space, msg)
 	if ag == nil {
 		slog.Warn("no agent matched for DM, dropping",

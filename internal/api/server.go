@@ -131,6 +131,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 			"POST /v1/machines/pairing":        s.HandleCreateMachinePairing,
 			"POST /v1/machines/pairing/status": s.HandleMachinePairingStatus,
 			"GET /v1/machines":                 s.HandleListMachines,
+			"PATCH /v1/machines/{id}":          s.HandleUpdateMachine,
 			"DELETE /v1/machines/{id}":         s.HandleDeleteMachine,
 		} {
 			mux.HandleFunc(pattern, s.authMiddleware(rateLimitMiddleware(s.limiter, getUserID, h)))

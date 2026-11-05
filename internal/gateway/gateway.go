@@ -242,8 +242,11 @@ type Gateway struct {
 	// aglBridge runs IM turns of runtime "agl" agents on the owner's
 	// linked computer instead of the LLM (agl.go). Nil = off.
 	aglBridge *agl.Bridge
-	mu        sync.RWMutex
-	dedup     sync.Map
+	// aglTools runs local_agents / run_local_agent for LLM agents and
+	// holds their chats' open permission requests.
+	aglTools *agl.Tools
+	mu       sync.RWMutex
+	dedup    sync.Map
 	// pairFails counts wrong /pair attempts per channel row id (see
 	// pairing.go); the outstanding code is burned once it hits the cap.
 	pairFails sync.Map

@@ -313,9 +313,7 @@ func (b *Bridge) handle(c *chat, in Inbound) {
 	// A pending permission request takes 1/2/3 as its answer.
 	if approval != nil {
 		if decision, ok := ApprovalDecision(text); ok {
-			_, err := b.link.Request(ctx, m.ID, "session.approve", map[string]any{
-				"session_id": approval.sessionID, "request_id": approval.requestID, "decision": decision,
-			})
+			err := approve(ctx, b.link, m.ID, approval, decision)
 			c.mu.Lock()
 			if c.approval == approval {
 				c.approval = nil
@@ -350,9 +348,7 @@ func (b *Bridge) handle(c *chat, in Inbound) {
 				c.stop = stop
 				c.mu.Unlock()
 				go b.collect(c, gen, in, p.sessionID, events, unsubscribe, done, p.turnID, p.text)
-				if _, err := b.link.Request(ctx, m.ID, "session.approve", map[string]any{
-					"session_id": p.sessionID, "request_id": p.requestID, "decision": decision,
-				}); err != nil {
+				if err := approve(ctx, b.link, m.ID, &pendingApproval{sessionID: p.sessionID, requestID: p.requestID}, decision); err != nil {
 					stop()
 					b.reply(in, fmt.Sprintf(MsgFailed, err))
 					return
@@ -483,11 +479,19 @@ type sessionMeta struct {
 // openSession creates or resumes the chat's named session and brings its
 // access level in line with the agent's config.
 func (b *Bridge) openSession(ctx context.Context, machineID string, rc RuntimeConfig, name string) (string, bool, error) {
-	params := map[string]any{"agent": rc.AglAgent, "name": name, "access": rc.Access}
-	if rc.Cwd != "" {
-		params["cwd"] = rc.Cwd
+	return openSession(ctx, b.link, machineID, rc.AglAgent, rc.Cwd, rc.Access, name)
+}
+
+// openSession creates or resumes the named session on machineID with
+// agent/cwd/access, re-applying access with session.configure when the
+// existing session runs at another level. It returns the session id and
+// whether the agent can steer a running turn.
+func openSession(ctx context.Context, link Link, machineID, agent, cwd, access, name string) (string, bool, error) {
+	params := map[string]any{"agent": agent, "name": name, "access": access}
+	if cwd != "" {
+		params["cwd"] = cwd
 	}
-	raw, err := b.link.Request(ctx, machineID, "session.create", params)
+	raw, err := link.Request(ctx, machineID, "session.create", params)
 	if err != nil {
 		return "", false, err
 	}
@@ -495,8 +499,8 @@ func (b *Bridge) openSession(ctx context.Context, machineID string, rc RuntimeCo
 	if err := json.Unmarshal(raw, &meta); err != nil || meta.ID == "" {
 		return "", false, errors.New("bad session.create response")
 	}
-	if meta.Access != "" && meta.Access != rc.Access {
-		if _, err := b.link.Request(ctx, machineID, "session.configure", map[string]any{"session_id": meta.ID, "access": rc.Access}); err != nil {
+	if meta.Access != "" && meta.Access != access {
+		if _, err := link.Request(ctx, machineID, "session.configure", map[string]any{"session_id": meta.ID, "access": access}); err != nil {
 			return "", false, err
 		}
 	}
@@ -507,6 +511,24 @@ func (b *Bridge) openSession(ctx context.Context, machineID string, rc RuntimeCo
 		}
 	}
 	return meta.ID, steer, nil
+}
+
+// approve answers a pending permission request with decision
+// (allow | allow_session | deny).
+func approve(ctx context.Context, link Link, machineID string, p *pendingApproval, decision string) error {
+	_, err := link.Request(ctx, machineID, "session.approve", map[string]any{
+		"session_id": p.sessionID, "request_id": p.requestID, "decision": decision,
+	})
+	return err
+}
+
+// approvalPrompt is the chat line for a permission_request event.
+func approvalPrompt(e AgentEvent) string {
+	title := strings.TrimSpace(e.Title)
+	if title == "" {
+		title = e.Tool
+	}
+	return fmt.Sprintf(MsgApproval, clipText(title, 300))
 }
 
 func (b *Bridge) prompt(ctx context.Context, machineID, sessionID, text, mode, turnID string) (json.RawMessage, error) {
@@ -594,17 +616,12 @@ func (b *Bridge) collect(c *chat, gen uint64, in Inbound, sessionID string, even
 				if !ours {
 					continue
 				}
-				title := strings.TrimSpace(e.Title)
-				if title == "" {
-					title = e.Tool
-				}
-				title = clipText(title, 300)
 				c.mu.Lock()
 				if c.gen == gen {
 					c.approval = &pendingApproval{sessionID: sessionID, requestID: e.RequestID}
 				}
 				c.mu.Unlock()
-				b.reply(in, fmt.Sprintf(MsgApproval, title))
+				b.reply(in, approvalPrompt(e))
 			case "permission_resolved":
 				c.mu.Lock()
 				cleared := c.approval != nil && c.approval.requestID == e.RequestID

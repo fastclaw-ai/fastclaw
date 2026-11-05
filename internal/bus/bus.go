@@ -100,6 +100,12 @@ type InboundMessage struct {
 	// it with "the channel's binder owns this agent" to decide whether
 	// the turn may touch the host.
 	FromChannelOwner bool
+	// MachineUserID is set by the gateway on a 1:1 IM turn from the
+	// person the channel belongs to: the Fastclaw user whose own linked
+	// computers (agl machines) this turn's LLM agent may dispatch work to
+	// with run_local_agent. Empty everywhere else (groups, shared
+	// sessions, web, cron, other senders). See docs/agl-machines.md.
+	MachineUserID string
 }
 
 // SessionTriple returns the (channel, accountID, chatID) used for session

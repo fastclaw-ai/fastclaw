@@ -1,0 +1,63 @@
+package agent
+
+import (
+	"context"
+	"log/slog"
+	"sync"
+	"time"
+
+	"github.com/fastclaw-ai/fastclaw/internal/agent/tools"
+	"github.com/fastclaw-ai/fastclaw/internal/agl"
+	"github.com/fastclaw-ai/fastclaw/internal/bus"
+)
+
+var (
+	localAgentsMu  sync.RWMutex
+	localAgentsSvc tools.LocalAgentRunner
+)
+
+// SetLocalAgents installs the runner behind local_agents /
+// run_local_agent (the gateway's *agl.Tools); nil turns them off.
+func SetLocalAgents(svc tools.LocalAgentRunner) {
+	localAgentsMu.Lock()
+	localAgentsSvc = svc
+	localAgentsMu.Unlock()
+}
+
+func localAgents() tools.LocalAgentRunner {
+	localAgentsMu.RLock()
+	defer localAgentsMu.RUnlock()
+	return localAgentsSvc
+}
+
+// mountLocalAgents puts local_agents / run_local_agent on this turn's
+// registry and returns the system hint naming the person's computers,
+// or "" when the turn may not use them.
+//
+// The computers are the CHATTER's — msg.MachineUserID, which the gateway
+// sets only on a 1:1 IM message from the person the channel belongs to —
+// never the agent owner's. Groups, shared sessions, web, cron and other
+// senders never get them; neither does anyone without a machine that
+// allows agents (the turn is then exactly as before).
+func (a *Agent) mountLocalAgents(ctx context.Context, msg bus.InboundMessage) string {
+	svc := localAgents()
+	uid := msg.MachineUserID
+	if svc == nil || a.registry == nil || uid == "" || msg.PeerKind == "group" || msg.SharedIdentity ||
+		msg.Source != bus.SourceUser || msg.Channel == "" || msg.Channel == "web" {
+		return ""
+	}
+	lctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	machines, err := svc.Machines(lctx, uid)
+	if err != nil {
+		slog.Warn("local agents: list machines failed", "agent", a.name, "user", uid, "error", err)
+		return ""
+	}
+	if len(machines) == 0 {
+		return ""
+	}
+	tools.RegisterLocalAgents(a.registry, svc, uid, agl.ToolChat{
+		Channel: msg.Channel, AccountID: msg.AccountID, ChatID: msg.ChatID, AgentID: a.name,
+	})
+	return tools.LocalAgentsNote(machines)
+}

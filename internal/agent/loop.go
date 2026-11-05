@@ -2443,6 +2443,9 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 	// The chatter's connected third-party accounts (internal/connectors):
 	// mounted only where they may be used; see mountConnectors.
 	connectorNote := a.mountConnectors(ctx, msg, chatterUID, sess.SessionKey())
+	// The person's own computers (agl): run_local_agent on 1:1 IM turns
+	// of the person the chat belongs to; see mountLocalAgents.
+	localAgentsNote := a.mountLocalAgents(ctx, msg)
 
 	// Steering: mark a turn in-flight so messages arriving mid-run are
 	// buffered onto the session (drained between tool iterations below)
@@ -2524,6 +2527,9 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 	}
 	if connectorNote != "" {
 		messages = append(messages, provider.Message{Role: "system", Content: connectorNote})
+	}
+	if localAgentsNote != "" {
+		messages = append(messages, provider.Message{Role: "system", Content: localAgentsNote})
 	}
 	// Persistence reminder — chatbot-only, positioned just before the
 	// session history so recency weight outranks the model's training

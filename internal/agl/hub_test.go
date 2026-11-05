@@ -188,6 +188,9 @@ func TestPairingCodeSingleUse(t *testing.T) {
 	if m.Hostname != "MacBook-Pro" || m.OS != "macos" || len(m.Agents) != 1 || m.Agents[0].ID != "claude" || m.TokenHash == token {
 		t.Fatalf("machine after hello = %+v", m)
 	}
+	if !m.AllowAgents || m.DefaultAccess != AccessAsk || m.DefaultCwd != "" {
+		t.Fatalf("new machine settings = %+v", m)
+	}
 	// Another user can't read the code's status.
 	if _, _, err := th.hub.PairingStatus(ctx, "u_bob", code); err != ErrPairingNotFound {
 		t.Fatalf("bob reads alice's code: %v", err)
@@ -298,5 +301,34 @@ func TestDownloadRedirect(t *testing.T) {
 		if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != want {
 			t.Fatalf("%s: %d %s", path, resp.StatusCode, resp.Header.Get("Location"))
 		}
+	}
+}
+
+// The name follows the hostname until the user renames the machine; a
+// rename survives later hellos.
+func TestHelloKeepsUserChosenName(t *testing.T) {
+	th := newTestHub(t)
+	ctx := context.Background()
+	if err := th.st.CreateMachine(ctx, &store.MachineRecord{ID: "mch_1", UserID: "u_alice", TokenHash: "h", AllowAgents: true}); err != nil {
+		t.Fatal(err)
+	}
+	hello := func(host string) *store.MachineRecord {
+		m, _ := th.st.GetMachine(ctx, "mch_1")
+		th.hub.applyHello(ctx, m, &helloMachine{Hostname: host})
+		m, _ = th.st.GetMachine(ctx, "mch_1")
+		return m
+	}
+	if m := hello("mac-a"); m.Name != "mac-a" {
+		t.Fatalf("first hello name = %q", m.Name)
+	}
+	if m := hello("mac-b"); m.Name != "mac-b" {
+		t.Fatalf("hostname change not followed: %q", m.Name)
+	}
+	name := "Work laptop"
+	if err := th.st.UpdateMachineSettings(ctx, "mch_1", store.MachineSettings{Name: &name}); err != nil {
+		t.Fatal(err)
+	}
+	if m := hello("mac-c"); m.Name != name || m.Hostname != "mac-c" {
+		t.Fatalf("rename lost on hello: %+v", m)
 	}
 }

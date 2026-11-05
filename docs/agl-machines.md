@@ -1,13 +1,21 @@
 # Machines: "connect my computer" (agl)
 
 An end user links their own computer to FastClaw with
-[agl](https://github.com/thinkany-ai/agl) and chats, from WeChat (or any
-IM channel bound to the agent), with a coding agent running on that
-computer — Claude Code, Codex, Gemini, … — instead of an LLM.
+[agl](https://github.com/thinkany-ai/agl). Then, from WeChat (or any IM
+channel), the coding agents on that computer — Claude Code, Codex,
+Gemini, … — are reachable two ways:
+
+- **Tool mode (main path).** The user chats with a normal LLM agent (e.g.
+  a platform persona). When a request needs their computer, the LLM calls
+  `run_local_agent`, which runs one turn of a local coding agent through
+  agl, and uses the answer in its own reply. See [Tool mode](#tool-mode).
+- **Passthrough (optional).** A private agent with `runtime: "agl"`: every
+  IM message goes straight to one local coding agent, no LLM in between.
 
 ```
 product UI ──/v1/machines──▶ FastClaw ◀──wss /agl/ws/machine── agl daemon ──▶ claude / codex / …
-WeChat ──iLink──▶ FastClaw WeChat channel ──▶ private agent (runtime "agl") ──agl link──▶ that machine
+WeChat ──▶ LLM agent ──run_local_agent──▶ agl link ──▶ the CHATTER's machine        (tool mode)
+WeChat ──▶ private agent (runtime "agl") ──agl link──▶ that machine                 (passthrough)
 ```
 
 ## Pieces
@@ -16,6 +24,7 @@ WeChat ──iLink──▶ FastClaw WeChat channel ──▶ private agent (run
 | --- | --- |
 | Hub (pairing, install script, machine WebSocket) | `internal/agl/hub.go`, mounted at `<FASTCLAW_PUBLIC_URL>/agl` |
 | IM turn bridge (sessions, approvals, `/new`, `/stop`) | `internal/agl/bridge.go`, hooked in `internal/gateway/agl.go` (`routeDM`) |
+| Tool mode runner (machine choice, runs, approvals) | `internal/agl/tools.go`; tools `internal/agent/tools/local_agents.go`, mounted in `internal/agent/local_agents.go`; approval interception + eligibility in `internal/gateway/agl.go` |
 | Runtime config validation | `internal/agl/runtime.go` |
 | `/v1/machines*`, `runtime` on `/v1/agents` | `internal/api/machines.go`, `internal/api/agents.go` |
 | Tables `machines`, `machine_pairings` | `internal/store/machines.go` (+ `migrationSQL`) |
@@ -44,8 +53,23 @@ All calls: `Authorization: Bearer fc_…` **and** `X-Fastclaw-End-User`
 | --- | --- |
 | `POST /v1/machines/pairing` `{}` | `{code, installCommand, expiresAt}` — one use, 10 min, stored as sha256 |
 | `POST /v1/machines/pairing/status` `{code}` | `{status: pending\|connected\|expired, machineId?}`; `connected` once the paired machine said `hello`; 404 for codes this end user didn't create |
-| `GET /v1/machines` | `{machines: [{id, name, hostname, os, arch, version, online, lastSeenAt, createdAt, agents: [{id, name, available}]}]}`, newest first, revoked excluded |
+| `GET /v1/machines` | `{machines: [Machine]}`, newest first, revoked excluded |
+| `PATCH /v1/machines/{id}` | body any of `{name, allowAgents, defaultAccess, defaultCwd}` → the updated Machine; 404 unless it is this end user's active machine; 400 on invalid values |
 | `DELETE /v1/machines/{id}` | `{ok: true}`; clears the token hash, closes the link (agl then reports "revoked" and stops retrying), agents bound to it stop running |
+
+Machine:
+
+```jsonc
+{"id": "mch_…", "name": "MacBook", "hostname": "MacBook-Pro", "os": "macos", "arch": "arm64",
+ "version": "0.3.3", "online": true, "lastSeenAt": "…", "createdAt": "…",
+ "agents": [{"id": "claude", "name": "Claude Code", "available": true}],
+ "allowAgents": true,      // LLM agents may dispatch work here (tool mode); default true
+ "defaultAccess": "ask",   // read_only | ask | edit | full; default "ask"
+ "defaultCwd": ""}         // working dir for tool runs; "" = agl default (home), "~/" expanded by agl
+```
+
+`name` follows the hostname until it is set with PATCH (1–64 characters,
+one line); later hellos keep a chosen name. `defaultCwd` ≤ 1024 bytes.
 
 Agents (`/v1/agents`, existing error shape):
 
@@ -83,7 +107,58 @@ silent for 75 s (agl pings every 20 s). Frames are capped at 8 MiB;
 them. Running several FastClaw instances needs a sticky socket holder (or
 agl's HTTP link) — the seam is `Hub.Request` / `Hub.Subscribe`.
 
-## IM turn semantics
+## Tool mode
+
+Tools offered to LLM agents (platform and private agents alike):
+
+| Tool | Params | Result |
+| --- | --- | --- |
+| `local_agents` | none | `{"computers": [{id, name, online, access, agents: [{id, name}]}]}` — the chatter's machines with `allowAgents`, available agents only |
+| `run_local_agent` | `agent` (required, e.g. `claude`), `task` (required, a self-contained instruction), `machine` (name or id), `cwd` | `[<agent name> on <machine>]\n<final answer>`; failures are tool errors with a short message for the LLM to relay |
+
+**When they are offered.** Only on a turn where the gateway stamped
+`MachineUserID` (`machineUserFor`): a 1:1 message typed by a person (not
+cron/heartbeat/sub-agent, not a bot, not web, not a shared-identity
+session, never a group), in an IM channel whose `channels.user_id` is the
+user space the message was routed to, and — when the channel knows who
+connected it (`bound_user_id`) — only from that sender. `MachineUserID`
+is that user space: **the chatter's own account, never the agent's
+owner.** The agent then mounts the tools only if that user has ≥1 active
+machine with `allowAgents`, and adds one system line naming them
+(`The person has linked their own computer(s): MacBook (online: claude,
+codex); …`). Anyone else's turn is unchanged. Runtime `agl` agents never
+reach the LLM, so they never see the tools.
+
+**A run.** Ownership is re-read at call time (`ListMachines(user)`,
+`allowAgents`, not revoked). Machine: the one named (`machine` = id or
+name), else the first online one that has the agent; offline / missing
+agent / not allowed → tool error. agl session `fc:tool:<machineId>:<agentId>:<chatHash>`
+(hash of channel+account+chat), so follow-ups in that chat keep the local
+agent's context; created/resumed with access = `defaultAccess`, cwd =
+`cwd` or `defaultCwd`. The prompt is sent with `mode: "queue"`; the tool
+waits for its `turn_ended`, keeping only non-commentary `text_delta`,
+capped at 8 KB with a truncation note. Outcome `failed` / `aborted` →
+tool error (with partial output). Limit 15 min, and at most 80% of what
+is left of the turn's deadline (the IM task timeout,
+`task_timeout_sec`, default 300 s — raise it for long jobs); on timeout
+or when the turn is cancelled, `session.abort` is sent.
+
+**While it runs.** Typing indicator every 5 s. `permission_request` →
+`需要确认：<title>\n回复 1 允许 / 2 本会话都允许 / 3 拒绝` in the chat. After
+20 s without an answer (and no pending approval) one notice:
+`<agent name> 正在你的电脑上处理…`. Approval timeouts are reported like in
+passthrough.
+
+**Approval replies.** `routeDM` first calls `interceptToolApproval`:
+when the chat has an open tool-run permission request, a `1`/`2`/`3`
+from the bound sender (same user space as the run) is answered with
+`session.approve` (`allow` / `allow_session` / `deny`) and acknowledged,
+and the message goes no further — no new turn, no steering into the
+turn that is blocked in the tool call. Anything else routes as usual.
+Requests live in memory (one per chat); after a restart the run's turn is
+gone anyway.
+
+## IM turn semantics (passthrough agents)
 
 - agl session name `fc:<agentId>:<chatId>`, created/resumed with the
   agent's `aglAgent`, `cwd`, `access` (access re-applied with

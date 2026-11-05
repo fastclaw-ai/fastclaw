@@ -37,7 +37,8 @@ func (h *v1Harness) addMachine(endUser, id string) {
 	if err := h.st.CreateMachine(context.Background(), &store.MachineRecord{
 		ID: id, UserID: h.appUserID(h.appA, endUser), AglMachineID: id, Hostname: "mac-" + endUser, Name: "mac-" + endUser,
 		OS: "macos", Arch: "arm64", Version: "0.3.3", TokenHash: "hash-" + id,
-		Agents: []store.MachineAgent{{ID: "claude", Name: "Claude Code", Available: true}},
+		Agents:      []store.MachineAgent{{ID: "claude", Name: "Claude Code", Available: true}},
+		AllowAgents: true, DefaultAccess: "ask",
 	}); err != nil {
 		h.t.Fatal(err)
 	}
@@ -49,7 +50,7 @@ func TestMachinesRequireEndUser(t *testing.T) {
 	h, _ := newMachinesHarness(t)
 	for _, c := range []struct{ method, path string }{
 		{"POST", "/v1/machines/pairing"}, {"POST", "/v1/machines/pairing/status"},
-		{"GET", "/v1/machines"}, {"DELETE", "/v1/machines/mch_x"},
+		{"GET", "/v1/machines"}, {"DELETE", "/v1/machines/mch_x"}, {"PATCH", "/v1/machines/mch_x"},
 	} {
 		code, out := h.do(c.method, c.path, h.keyA, map[string]any{})
 		if code != http.StatusBadRequest || flatErr(out) == "" {
@@ -207,4 +208,67 @@ func errMessage(out map[string]any) string {
 	e, _ := out["error"].(map[string]any)
 	m, _ := e["message"].(string)
 	return m
+}
+
+func TestUpdateMachineAPI(t *testing.T) {
+	h, _ := newMachinesHarness(t)
+	h.addMachine("alice", "mch_alice")
+	h.addMachine("bob", "mch_bob")
+	alice := []string{"X-Fastclaw-End-User", "alice"}
+
+	// Defaults are in every Machine.
+	_, out := h.do("GET", "/v1/machines", h.keyA, nil, alice...)
+	m := out["machines"].([]any)[0].(map[string]any)
+	if m["allowAgents"] != true || m["defaultAccess"] != "ask" || m["defaultCwd"] != "" {
+		t.Fatalf("defaults: %v", m)
+	}
+
+	code, out := h.do("PATCH", "/v1/machines/mch_alice", h.keyA, map[string]any{
+		"name": "  Work Mac ", "allowAgents": false, "defaultAccess": "edit", "defaultCwd": "~/code/app",
+	}, alice...)
+	if code != http.StatusOK || out["id"] != "mch_alice" || out["name"] != "Work Mac" || out["allowAgents"] != false ||
+		out["defaultAccess"] != "edit" || out["defaultCwd"] != "~/code/app" || out["hostname"] != "mac-alice" {
+		t.Fatalf("patch: %d %v", code, out)
+	}
+	// Partial update keeps the rest.
+	code, out = h.do("PATCH", "/v1/machines/mch_alice", h.keyA, map[string]any{"allowAgents": true}, alice...)
+	if code != http.StatusOK || out["allowAgents"] != true || out["name"] != "Work Mac" || out["defaultAccess"] != "edit" {
+		t.Fatalf("partial patch: %d %v", code, out)
+	}
+	rec, _ := h.st.GetMachine(context.Background(), "mch_alice")
+	if !rec.AllowAgents || rec.DefaultCwd != "~/code/app" {
+		t.Fatalf("stored: %+v", rec)
+	}
+
+	for _, body := range []map[string]any{
+		{"defaultAccess": "root"},
+		{"defaultAccess": ""},
+		{"name": "   "},
+		{"name": strings.Repeat("x", 65)},
+		{"name": "a\nb"},
+		{"defaultCwd": strings.Repeat("d", 1025)},
+		{"allowAgents": "yes"},
+	} {
+		code, out := h.do("PATCH", "/v1/machines/mch_alice", h.keyA, body, alice...)
+		if code != http.StatusBadRequest || flatErr(out) == "" {
+			t.Errorf("patch %v: %d %v", body, code, out)
+		}
+	}
+
+	// Someone else's, unknown and revoked machines are 404.
+	if code, out := h.do("PATCH", "/v1/machines/mch_bob", h.keyA, map[string]any{"name": "mine"}, alice...); code != http.StatusNotFound || flatErr(out) != "machine not found" {
+		t.Fatalf("alice patches bob's: %d %v", code, out)
+	}
+	if code, _ := h.do("PATCH", "/v1/machines/mch_nope", h.keyA, map[string]any{"name": "x"}, alice...); code != http.StatusNotFound {
+		t.Fatalf("unknown: %d", code)
+	}
+	if rec, _ := h.st.GetMachine(context.Background(), "mch_bob"); rec.Name != "mac-bob" {
+		t.Fatalf("bob's machine changed: %+v", rec)
+	}
+	if code, _ := h.do("DELETE", "/v1/machines/mch_alice", h.keyA, nil, alice...); code != http.StatusOK {
+		t.Fatal("delete")
+	}
+	if code, _ := h.do("PATCH", "/v1/machines/mch_alice", h.keyA, map[string]any{"name": "x"}, alice...); code != http.StatusNotFound {
+		t.Fatalf("revoked: %d", code)
+	}
 }

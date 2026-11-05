@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/fastclaw-ai/fastclaw/internal/agl"
 	"github.com/fastclaw-ai/fastclaw/internal/auth"
@@ -86,7 +87,91 @@ func (s *Server) machineView(m *store.MachineRecord) map[string]any {
 		"lastSeenAt": lastSeen,
 		"createdAt":  rfc3339OrNil(m.CreatedAt),
 		"agents":     agents,
+		// Tool mode settings (LLM agents dispatching to this machine).
+		"allowAgents":   m.AllowAgents,
+		"defaultAccess": firstNonEmptyStr(m.DefaultAccess, agl.AccessAsk),
+		"defaultCwd":    m.DefaultCwd,
 	}
+}
+
+func firstNonEmptyStr(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
+const maxMachineNameLen = 64
+
+// HandleUpdateMachine handles PATCH /v1/machines/{id}: any of name,
+// allowAgents, defaultAccess, defaultCwd on the end user's own active
+// machine (404 otherwise). Returns the updated Machine.
+func (s *Server) HandleUpdateMachine(w http.ResponseWriter, r *http.Request) {
+	ident, ms, ok := s.requireMachineAPI(w, r)
+	if !ok {
+		return
+	}
+	m, err := ms.GetMachine(r.Context(), r.PathValue("id"))
+	if err != nil || m.UserID != ident.UserID || m.Revoked() {
+		writeFlatError(w, http.StatusNotFound, "machine not found")
+		return
+	}
+	var body struct {
+		Name          *string `json:"name"`
+		AllowAgents   *bool   `json:"allowAgents"`
+		DefaultAccess *string `json:"defaultAccess"`
+		DefaultCwd    *string `json:"defaultCwd"`
+	}
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
+	if err := dec.Decode(&body); err != nil {
+		writeFlatError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	set := store.MachineSettings{AllowAgents: body.AllowAgents}
+	if body.Name != nil {
+		name := strings.TrimSpace(*body.Name)
+		if name == "" {
+			writeFlatError(w, http.StatusBadRequest, "name must not be empty")
+			return
+		}
+		if utf8.RuneCountInString(name) > maxMachineNameLen || !utf8.ValidString(name) || strings.ContainsAny(name, "\x00\n\r") {
+			writeFlatError(w, http.StatusBadRequest, "name is invalid (at most 64 characters, one line)")
+			return
+		}
+		set.Name = &name
+	}
+	if body.DefaultAccess != nil {
+		access := strings.TrimSpace(*body.DefaultAccess)
+		switch access {
+		case agl.AccessReadOnly, agl.AccessAsk, agl.AccessEdit, agl.AccessFull:
+		default:
+			writeFlatError(w, http.StatusBadRequest, `defaultAccess must be "read_only", "ask", "edit" or "full"`)
+			return
+		}
+		set.DefaultAccess = &access
+	}
+	if body.DefaultCwd != nil {
+		cwd := strings.TrimSpace(*body.DefaultCwd)
+		if !agl.ValidCwd(cwd) {
+			writeFlatError(w, http.StatusBadRequest, "defaultCwd is invalid")
+			return
+		}
+		set.DefaultCwd = &cwd
+	}
+	if err := ms.UpdateMachineSettings(r.Context(), m.ID, set); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeFlatError(w, http.StatusNotFound, "machine not found")
+			return
+		}
+		writeFlatError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	m, err = ms.GetMachine(r.Context(), m.ID)
+	if err != nil {
+		writeFlatError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, s.machineView(m))
 }
 
 // HandleCreateMachinePairing handles POST /v1/machines/pairing.

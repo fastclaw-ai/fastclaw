@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -37,6 +38,23 @@ type MachineRecord struct {
 	LastSeenAt time.Time // zero until the first hello
 	CreatedAt  time.Time
 	RevokedAt  time.Time // zero while active
+
+	// Settings for LLM agents that dispatch work to this machine
+	// (run_local_agent): whether they may at all, the agl access level
+	// their sessions get, and their working directory ("" = agl's
+	// default). New machines: true, "ask", "".
+	AllowAgents   bool
+	DefaultAccess string
+	DefaultCwd    string
+}
+
+// MachineSettings is a partial update of a machine's user-editable
+// fields; nil fields are left unchanged.
+type MachineSettings struct {
+	Name          *string
+	AllowAgents   *bool
+	DefaultAccess *string
+	DefaultCwd    *string
 }
 
 // Revoked reports whether the machine was revoked.
@@ -78,6 +96,9 @@ type MachineStore interface {
 	TouchMachine(ctx context.Context, id string, seen time.Time) error
 	// RevokeMachine clears the token hash and stamps revoked_at.
 	RevokeMachine(ctx context.Context, id string, now time.Time) error
+	// UpdateMachineSettings applies the non-nil fields of s to an
+	// active machine; ErrNotFound when it is unknown or revoked.
+	UpdateMachineSettings(ctx context.Context, id string, s MachineSettings) error
 }
 
 var _ MachineStore = (*DBStore)(nil)
@@ -153,15 +174,19 @@ func (d *DBStore) SetMachinePairingMachine(ctx context.Context, codeHash, machin
 	return err
 }
 
-const machineColumns = `id, user_id, agl_machine_id, name, hostname, os, arch, version, agents, token_hash, last_seen_at, created_at, revoked_at`
+const machineColumns = `id, user_id, agl_machine_id, name, hostname, os, arch, version, agents, token_hash, last_seen_at, created_at, revoked_at, allow_agents, default_access, default_cwd`
 
 func scanMachine(scanner interface{ Scan(dest ...any) error }) (*MachineRecord, error) {
 	var m MachineRecord
 	var agents string
-	var seen, created, revoked int64
+	var seen, created, revoked, allow int64
 	if err := scanner.Scan(&m.ID, &m.UserID, &m.AglMachineID, &m.Name, &m.Hostname, &m.OS, &m.Arch, &m.Version,
-		&agents, &m.TokenHash, &seen, &created, &revoked); err != nil {
+		&agents, &m.TokenHash, &seen, &created, &revoked, &allow, &m.DefaultAccess, &m.DefaultCwd); err != nil {
 		return nil, scanErr(err)
+	}
+	m.AllowAgents = allow != 0
+	if m.DefaultAccess == "" {
+		m.DefaultAccess = "ask"
 	}
 	if agents != "" {
 		_ = json.Unmarshal([]byte(agents), &m.Agents)
@@ -185,11 +210,16 @@ func (d *DBStore) CreateMachine(ctx context.Context, m *MachineRecord) error {
 	if m.CreatedAt.IsZero() {
 		m.CreatedAt = time.Now().UTC()
 	}
+	if m.DefaultAccess == "" {
+		m.DefaultAccess = "ask"
+	}
 	_, err := d.db.ExecContext(ctx,
-		fmt.Sprintf(`INSERT INTO machines (%s) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)`, machineColumns,
-			d.ph(1), d.ph(2), d.ph(3), d.ph(4), d.ph(5), d.ph(6), d.ph(7), d.ph(8), d.ph(9), d.ph(10), d.ph(11), d.ph(12), d.ph(13)),
+		fmt.Sprintf(`INSERT INTO machines (%s) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)`, machineColumns,
+			d.ph(1), d.ph(2), d.ph(3), d.ph(4), d.ph(5), d.ph(6), d.ph(7), d.ph(8), d.ph(9), d.ph(10), d.ph(11), d.ph(12), d.ph(13),
+			d.ph(14), d.ph(15), d.ph(16)),
 		m.ID, m.UserID, m.AglMachineID, m.Name, m.Hostname, m.OS, m.Arch, m.Version, marshalMachineAgents(m.Agents),
-		m.TokenHash, toMillis(m.LastSeenAt), toMillis(m.CreatedAt), toMillis(m.RevokedAt))
+		m.TokenHash, toMillis(m.LastSeenAt), toMillis(m.CreatedAt), toMillis(m.RevokedAt),
+		boolInt(m.AllowAgents), m.DefaultAccess, m.DefaultCwd)
 	return err
 }
 
@@ -254,6 +284,50 @@ func (d *DBStore) RevokeMachine(ctx context.Context, id string, now time.Time) e
 	res, err := d.db.ExecContext(ctx,
 		fmt.Sprintf(`UPDATE machines SET token_hash = '', revoked_at = %s WHERE id = %s AND revoked_at = 0`, d.ph(1), d.ph(2)),
 		now.UnixMilli(), id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+func (d *DBStore) UpdateMachineSettings(ctx context.Context, id string, s MachineSettings) error {
+	var sets []string
+	var args []any
+	add := func(col string, v any) {
+		args = append(args, v)
+		sets = append(sets, fmt.Sprintf("%s = %s", col, d.ph(len(args))))
+	}
+	if s.Name != nil {
+		add("name", *s.Name)
+	}
+	if s.AllowAgents != nil {
+		add("allow_agents", boolInt(*s.AllowAgents))
+	}
+	if s.DefaultAccess != nil {
+		add("default_access", *s.DefaultAccess)
+	}
+	if s.DefaultCwd != nil {
+		add("default_cwd", *s.DefaultCwd)
+	}
+	if len(sets) == 0 {
+		if _, err := d.GetMachine(ctx, id); err != nil {
+			return err
+		}
+		return nil
+	}
+	args = append(args, id)
+	res, err := d.db.ExecContext(ctx,
+		fmt.Sprintf(`UPDATE machines SET %s WHERE id = %s AND revoked_at = 0`, strings.Join(sets, ", "), d.ph(len(args))), args...)
 	if err != nil {
 		return err
 	}

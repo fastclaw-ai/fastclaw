@@ -41,6 +41,49 @@ func (g *Gateway) EnableAgl(hub *agl.Hub) {
 		return
 	}
 	g.aglBridge = agl.NewBridge(hub, ms, aglSender{g: g})
+	// Tool mode: LLM agents dispatch to the chatter's own computer.
+	g.aglTools = agl.NewTools(hub, ms, aglSender{g: g})
+	agent.SetLocalAgents(g.aglTools)
+}
+
+// interceptToolApproval takes a 1/2/3 reply that answers a permission
+// request raised by a running run_local_agent call in this chat. It runs
+// before routing, so the reply never starts, joins or steers an LLM turn
+// — the turn that asked is still blocked in the tool call.
+func (g *Gateway) interceptToolApproval(ctx context.Context, msg bus.InboundMessage) bool {
+	if g.aglTools == nil || msg.PeerKind == "group" || msg.Source != bus.SourceUser || msg.IsBotMessage {
+		return false
+	}
+	chat := agl.ToolChat{Channel: msg.Channel, AccountID: msg.AccountID, ChatID: msg.ChatID}
+	if _, ok := agl.ApprovalDecision(msg.Text); !ok || !g.aglTools.HasPendingApproval(chat) {
+		return false
+	}
+	if g.store != nil && !g.aglSenderAllowed(ctx, msg) {
+		return false
+	}
+	return g.aglTools.InterceptApproval(ctx, chat, msg.OwnerUserID, msg.Text)
+}
+
+// machineUserFor returns whose linked computers an LLM turn for msg may
+// dispatch to (bus.InboundMessage.MachineUserID), or "": a 1:1 IM
+// message from a person typing, in a channel that belongs to the user
+// space it was routed to (never a channel inherited from an agent's
+// owner), from the channel's bound sender when the channel knows one.
+// The agent then offers the tools only when that user has a machine
+// that allows agents.
+func (g *Gateway) machineUserFor(ctx context.Context, msg bus.InboundMessage) string {
+	if g.aglTools == nil || g.store == nil || msg.OwnerUserID == "" || msg.PeerKind == "group" ||
+		msg.Source != bus.SourceUser || msg.IsBotMessage || msg.SharedIdentity || msg.Channel == "" || msg.Channel == "web" {
+		return ""
+	}
+	ch, err := g.store.LookupChannel(ctx, msg.Channel, msg.AccountID)
+	if err != nil || ch == nil || ch.UserID == "" || ch.UserID != msg.OwnerUserID {
+		return ""
+	}
+	if ch.BoundUserID != "" && !msg.FromChannelOwner {
+		return ""
+	}
+	return msg.OwnerUserID
 }
 
 // aglAgentFor returns the agent msg would be routed to in a DM when that

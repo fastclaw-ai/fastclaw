@@ -427,6 +427,7 @@ func (h *Hub) pair(ctx context.Context, ws *websocket.Conn, p *store.MachinePair
 		machineID = "mch_" + id
 		if err := h.store.CreateMachine(ctx, &store.MachineRecord{
 			ID: machineID, UserID: p.UserID, AglMachineID: aglID, TokenHash: hash, CreatedAt: h.now(),
+			AllowAgents: true, DefaultAccess: AccessAsk,
 		}); err != nil {
 			slog.Warn("agl: create machine failed", "error", err)
 			return
@@ -501,8 +502,13 @@ func (h *Hub) serve(ws *websocket.Conn, m *store.MachineRecord) {
 }
 
 func (h *Hub) applyHello(ctx context.Context, m *store.MachineRecord, hm *helloMachine) {
-	m.Hostname = clip(hm.Hostname)
-	m.Name = m.Hostname
+	// The name follows the hostname until the user renames the machine
+	// (PATCH /v1/machines/{id}).
+	host := clip(hm.Hostname)
+	if m.Name == "" || m.Name == m.Hostname {
+		m.Name = host
+	}
+	m.Hostname = host
 	m.OS = clip(hm.OS)
 	if m.OS == "darwin" {
 		m.OS = "macos"
