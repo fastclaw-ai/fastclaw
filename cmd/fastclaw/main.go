@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/fastclaw-ai/fastclaw/internal/agent"
+	"github.com/fastclaw-ai/fastclaw/internal/agl"
 	"github.com/fastclaw-ai/fastclaw/internal/api"
 	"github.com/fastclaw-ai/fastclaw/internal/auth"
 	"github.com/fastclaw-ai/fastclaw/internal/config"
@@ -266,6 +267,15 @@ func runGateway(port int) error {
 	apiSrv.SetQuotaStore(gw.QuotaStore())
 	apiSrv.SetStore(gw.Store())
 	apiSrv.SetWorkspaceStore(gw.Workspace())
+	// "Connect my computer": the agl hub at <FASTCLAW_PUBLIC_URL>/agl,
+	// /v1/machines, and runtime "agl" agents whose IM turns run on the
+	// owner's linked machine. FASTCLAW_PUBLIC_URL is the origin machines
+	// and install commands use (falls back to the request's origin).
+	if ms, ok := gw.Store().(store.MachineStore); ok {
+		aglHub := agl.NewHub(ms, os.Getenv("FASTCLAW_PUBLIC_URL"))
+		apiSrv.SetAglHub(aglHub)
+		gw.EnableAgl(aglHub)
+	}
 	webSrv.SetAPIServer(apiSrv)
 
 	// Coding-agent project runtime: long-lived dev-server sandbox +

@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/fastclaw-ai/fastclaw/internal/agent"
+	"github.com/fastclaw-ai/fastclaw/internal/agl"
 	"github.com/fastclaw-ai/fastclaw/internal/auth"
 	"github.com/fastclaw-ai/fastclaw/internal/config"
 	"github.com/fastclaw-ai/fastclaw/internal/store"
@@ -51,8 +52,11 @@ type Server struct {
 	// workspace holds conversation workspaces; /v1 returns the files an
 	// agent produces from it. Nil disables file return.
 	workspace workspace.Store
-	acpMu     sync.Mutex
-	acpRuns   map[string]*acpRunState
+	// aglHub links end users' own computers (/v1/machines, /agl). Nil
+	// leaves both off.
+	aglHub  *agl.Hub
+	acpMu   sync.Mutex
+	acpRuns map[string]*acpRunState
 }
 
 // NewServer creates a new API server. authResolver is mandatory — there is
@@ -119,6 +123,20 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 		s.authMiddleware(rateLimitMiddleware(s.limiter, getUserID, s.HandleGetQuota)))
 	mux.HandleFunc("DELETE /v1/quota",
 		s.authMiddleware(rateLimitMiddleware(s.limiter, getUserID, s.HandleDeleteQuota)))
+
+	// Machines linked through agl ("connect my computer") and the agl
+	// hub the machines dial into. See docs/agl-machines.md.
+	if s.aglHub != nil {
+		for pattern, h := range map[string]http.HandlerFunc{
+			"POST /v1/machines/pairing":        s.HandleCreateMachinePairing,
+			"POST /v1/machines/pairing/status": s.HandleMachinePairingStatus,
+			"GET /v1/machines":                 s.HandleListMachines,
+			"DELETE /v1/machines/{id}":         s.HandleDeleteMachine,
+		} {
+			mux.HandleFunc(pattern, s.authMiddleware(rateLimitMiddleware(s.limiter, getUserID, h)))
+		}
+		s.aglHub.RegisterRoutes(mux)
+	}
 
 	// Agent Communication Protocol (ACP) 0.2. The protocol defines root
 	// paths such as /agents and /runs relative to a server base URL. FastClaw

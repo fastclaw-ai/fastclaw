@@ -297,6 +297,9 @@ func (g *Gateway) routeDM(ctx context.Context, msg bus.InboundMessage) {
 		slog.Warn("user space load failed", "user", msg.OwnerUserID, "error", err)
 		return
 	}
+	if g.routeAgl(ctx, space, msg) {
+		return
+	}
 	ag := g.matchAgent(ctx, space, msg)
 	if ag == nil {
 		slog.Warn("no agent matched for DM, dropping",
@@ -319,7 +322,11 @@ func (g *Gateway) routeGroup(ctx context.Context, msg bus.InboundMessage) {
 		slog.Warn("user space load failed", "user", msg.OwnerUserID, "error", err)
 		return
 	}
-	boundAgents := g.agentsBoundToMessage(ctx, space, msg)
+	boundAgents, aglRefused := g.withoutAglAgents(ctx, g.agentsBoundToMessage(ctx, space, msg))
+	if aglRefused && len(boundAgents) == 0 {
+		g.aglGroupRefusal(ctx, msg)
+		return
+	}
 	if len(boundAgents) == 0 {
 		slog.Warn("no agents bound for group message, dropping",
 			"user", msg.OwnerUserID, "chat_id", msg.ChatID)

@@ -26,6 +26,7 @@ import (
 	"github.com/fastclaw-ai/fastclaw/internal/agent"
 	"github.com/fastclaw-ai/fastclaw/internal/agent/tools"
 	"github.com/fastclaw-ai/fastclaw/internal/agentcli"
+	"github.com/fastclaw-ai/fastclaw/internal/agl"
 	"github.com/fastclaw-ai/fastclaw/internal/bus"
 	"github.com/fastclaw-ai/fastclaw/internal/channels"
 	"github.com/fastclaw-ai/fastclaw/internal/config"
@@ -238,8 +239,11 @@ type Gateway struct {
 	// SSE hub a user-typed POST /api/chat turn uses. Nil-safe: unset
 	// keeps the legacy bus.Outbound → WebChannel async-bubble path.
 	chatEvents *agent.EventHub
-	mu         sync.RWMutex
-	dedup      sync.Map
+	// aglBridge runs IM turns of runtime "agl" agents on the owner's
+	// linked computer instead of the LLM (agl.go). Nil = off.
+	aglBridge *agl.Bridge
+	mu        sync.RWMutex
+	dedup     sync.Map
 	// pairFails counts wrong /pair attempts per channel row id (see
 	// pairing.go); the outstanding code is burned once it hits the cap.
 	pairFails sync.Map

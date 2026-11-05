@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/fastclaw-ai/fastclaw/internal/agent"
+	"github.com/fastclaw-ai/fastclaw/internal/agl"
 	"github.com/fastclaw-ai/fastclaw/internal/auth"
 	"github.com/fastclaw-ai/fastclaw/internal/scope"
 	"github.com/fastclaw-ai/fastclaw/internal/store"
@@ -244,6 +245,11 @@ type createAgentRequest struct {
 	// ExternalRef is an idempotency key, unique per owner: creating again
 	// with the same ref returns the existing agent unchanged.
 	ExternalRef string `json:"external_ref,omitempty"`
+	// Runtime "agl" runs the agent's turns on the owner's own computer
+	// (docs/agl-machines.md) instead of an LLM; only for private agents.
+	// RuntimeConfig is {machineId, aglAgent, cwd, access}.
+	Runtime       string                 `json:"runtime,omitempty"`
+	RuntimeConfig map[string]interface{} `json:"runtimeConfig,omitempty"`
 }
 
 type updateAgentRequest struct {
@@ -254,6 +260,57 @@ type updateAgentRequest struct {
 	// Metadata is merged into the existing map. A key set to null or ""
 	// is removed.
 	Metadata map[string]*string `json:"metadata,omitempty"`
+	// RuntimeConfig is merged into a runtime "agl" agent's config (keys
+	// present replace), then validated like on create.
+	RuntimeConfig map[string]interface{} `json:"runtimeConfig,omitempty"`
+}
+
+// mergeRuntimeConfig applies patch onto base. Every value must be a
+// string (or null, which clears it).
+func mergeRuntimeConfig(base agl.RuntimeConfig, patch map[string]interface{}) (agl.RuntimeConfig, error) {
+	for k, v := range patch {
+		var str string
+		switch t := v.(type) {
+		case nil:
+		case string:
+			str = t
+		default:
+			return base, fmt.Errorf("runtimeConfig.%s must be a string", k)
+		}
+		switch k {
+		case "machineId":
+			base.MachineID = str
+		case "aglAgent":
+			base.AglAgent = str
+		case "cwd":
+			base.Cwd = str
+		case "access":
+			base.Access = str
+		default:
+			return base, fmt.Errorf("unknown runtimeConfig field %q", k)
+		}
+	}
+	return base, nil
+}
+
+// validateAglRuntime checks rc for an agent owned by ownerID, writing the
+// error response and returning false when it fails.
+func (s *Server) validateAglRuntime(w http.ResponseWriter, r *http.Request, ownerID string, rc *agl.RuntimeConfig) bool {
+	ms := s.machineStore()
+	if ms == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, errTypeServer, codeNotConfigured, "machines are not enabled on this server")
+		return false
+	}
+	if err := agl.ValidateRuntimeConfig(r.Context(), ms, ownerID, rc); err != nil {
+		var ve *agl.ValidationError
+		if errors.As(err, &ve) {
+			writeBadRequest(w, err.Error())
+		} else {
+			writeServerError(w, err)
+		}
+		return false
+	}
+	return true
 }
 
 // HandleCreateAgent handles POST /v1/agents.
@@ -319,6 +376,32 @@ func (s *Server) HandleCreateAgent(w http.ResponseWriter, r *http.Request) {
 		}
 		owner = ident.UserID
 	}
+	var runtimeCfg *agl.RuntimeConfig
+	switch strings.TrimSpace(req.Runtime) {
+	case "":
+		if req.RuntimeConfig != nil {
+			writeBadRequest(w, `runtimeConfig requires runtime "agl"`)
+			return
+		}
+	case agl.Runtime:
+		// An agl agent drives one person's computer: always private.
+		if req.Owner != agentOwnerEndUser {
+			writeBadRequest(w, `runtime "agl" requires owner "end_user"`)
+			return
+		}
+		rc, err := mergeRuntimeConfig(agl.RuntimeConfig{}, req.RuntimeConfig)
+		if err != nil {
+			writeBadRequest(w, err.Error())
+			return
+		}
+		if !s.validateAglRuntime(w, r, owner, &rc) {
+			return
+		}
+		runtimeCfg = &rc
+	default:
+		writeBadRequest(w, `runtime must be "agl" or omitted`)
+		return
+	}
 	ctx := r.Context()
 	existing := func() *store.AgentRecord {
 		if req.ExternalRef == "" {
@@ -360,6 +443,10 @@ func (s *Server) HandleCreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(req.Metadata) > 0 {
 		rec.Config["metadata"] = metadataToConfig(req.Metadata)
+	}
+	if runtimeCfg != nil {
+		rec.Config["runtime"] = agl.Runtime
+		rec.Config["runtimeConfig"] = runtimeCfg.Map()
 	}
 	if err := s.store.CreateAgent(ctx, rec); err != nil {
 		// A concurrent create with the same external_ref won the insert.
@@ -570,6 +657,21 @@ func (s *Server) HandleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 			rec.Config["metadata"] = metadataToConfig(md)
 		}
 	}
+	if req.RuntimeConfig != nil {
+		if !agl.IsAglAgent(rec) {
+			writeBadRequest(w, `runtimeConfig requires runtime "agl"`)
+			return
+		}
+		rc, err := mergeRuntimeConfig(agl.RuntimeConfigOf(rec.Config), req.RuntimeConfig)
+		if err != nil {
+			writeBadRequest(w, err.Error())
+			return
+		}
+		if !s.validateAglRuntime(w, r, rec.UserID, &rc) {
+			return
+		}
+		rec.Config["runtimeConfig"] = rc.Map()
+	}
 	ctx := r.Context()
 	if err := s.store.SaveAgent(ctx, rec); err != nil {
 		writeServerError(w, err)
@@ -700,6 +802,10 @@ func (s *Server) agentView(r *http.Request, rec *store.AgentRecord, endUsers map
 	}
 	if rec.ExternalRef != "" {
 		view["external_ref"] = rec.ExternalRef
+	}
+	if agl.IsAglAgent(rec) {
+		view["runtime"] = agl.Runtime
+		view["runtimeConfig"] = agl.RuntimeConfigOf(rec.Config).Map()
 	}
 	ident, _ := auth.FromContext(r.Context())
 	if rec.UserID != ident.AccountID() {
