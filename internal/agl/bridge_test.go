@@ -189,6 +189,14 @@ func TestBridgeTurnAndApprovalReply(t *testing.T) {
 	if n := len(f.link.calls("session.prompt")); n != 1 {
 		t.Fatalf("approval reply became a prompt (%d prompts)", n)
 	}
+	// "2" covers the session: the next request is answered without asking.
+	ev(AgentEvent{Kind: "permission_resolved", RequestID: "r1", By: "client"})
+	f.out.reset()
+	ev(AgentEvent{Kind: "permission_request", RequestID: "r2", Tool: "Bash", Title: "Run go vet"})
+	waitFor(t, "auto approve", func() bool { return len(f.link.calls("session.approve")) == 2 })
+	if got := f.link.calls("session.approve")[1]; !strings.Contains(got, `"request_id":"r2"`) || !strings.Contains(got, `"decision":"allow_session"`) {
+		t.Fatalf("auto approve = %s", got)
+	}
 
 	ev(AgentEvent{Kind: "text_delta", Text: "planning…", Phase: "commentary"})
 	ev(AgentEvent{Kind: "text_delta", Text: "All tests "})

@@ -148,13 +148,14 @@ type Bridge struct {
 	store store.MachineStore
 	out   Sender
 
-	mu    sync.Mutex
-	chats map[string]*chat
+	mu     sync.Mutex
+	chats  map[string]*chat
+	grants *sessionGrants
 }
 
 // NewBridge returns a bridge over link.
 func NewBridge(link Link, st store.MachineStore, out Sender) *Bridge {
-	return &Bridge{link: link, store: st, out: out, chats: map[string]*chat{}}
+	return &Bridge{link: link, store: st, out: out, chats: map[string]*chat{}, grants: newSessionGrants()}
 }
 
 type pendingApproval struct {
@@ -323,6 +324,7 @@ func (b *Bridge) handle(c *chat, in Inbound) {
 				b.reply(in, fmt.Sprintf(MsgFailed, err))
 				return
 			}
+			b.grants.note(m.ID, approval.sessionID, decision)
 			b.reply(in, approvalAck[decision])
 			return
 		}
@@ -353,6 +355,7 @@ func (b *Bridge) handle(c *chat, in Inbound) {
 					b.reply(in, fmt.Sprintf(MsgFailed, err))
 					return
 				}
+				b.grants.note(m.ID, p.sessionID, decision)
 				b.reply(in, approvalAck[decision])
 				return
 			}
@@ -614,6 +617,13 @@ func (b *Bridge) collect(c *chat, gen uint64, in Inbound, sessionID string, even
 				}
 			case "permission_request":
 				if !ours {
+					continue
+				}
+				c.mu.Lock()
+				machineID := c.machineID
+				c.mu.Unlock()
+				if e.RequestID != "" && b.grants.has(machineID, sessionID) {
+					autoApprove(b.link, machineID, sessionID, e.RequestID)
 					continue
 				}
 				c.mu.Lock()

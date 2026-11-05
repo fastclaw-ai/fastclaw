@@ -163,7 +163,7 @@ func TestToolsRunRefusals(t *testing.T) {
 		r    ToolRun
 		want string
 	}{
-		{ToolRun{Agent: "codex", Task: "x"}, "No linked computer has"},          // unavailable agent
+		{ToolRun{Agent: "codex", Task: "x"}, "No linked computer has"},           // unavailable agent
 		{ToolRun{Agent: "claude", Task: "x", Machine: "Desktop"}, "No computer"}, // allowAgents=false
 		{ToolRun{Agent: "claude", Task: "x", Machine: "BobMac"}, "No computer"},  // someone else's
 		{ToolRun{Agent: "claude", Task: "x", UserID: "u_carol"}, "no computer linked"},
@@ -236,5 +236,56 @@ func TestCapResult(t *testing.T) {
 	}
 	if capResult("short") != "short" {
 		t.Fatal("short text changed")
+	}
+}
+
+// "2 本会话都允许" covers the rest of that local session: later requests
+// (this turn or a later run in the same chat) are approved without
+// asking; "1" grants nothing beyond the one request.
+func TestToolsAllowSessionAutoApprovesLaterRequests(t *testing.T) {
+	f := newToolsFixture(t)
+	f.tools.NoticeAfter = time.Hour
+	res, errc := f.run(ToolRun{Agent: "claude", Task: "scan ~/code"})
+	turn := f.promptTurn(t)
+	f.ev(AgentEvent{Kind: "turn_started", TurnID: turn})
+
+	f.ev(AgentEvent{Kind: "permission_request", RequestID: "r1", Title: "ls"})
+	f.out.waitFor(t, "需要确认：ls")
+	if !f.tools.InterceptApproval(context.Background(), f.chat, "u_alice", "1") {
+		t.Fatal("1 not intercepted")
+	}
+	f.ev(AgentEvent{Kind: "permission_resolved", RequestID: "r1", By: "client"})
+	f.ev(AgentEvent{Kind: "permission_request", RequestID: "r2", Title: "git log"})
+	f.out.waitFor(t, "需要确认：git log") // "1" was a one-off
+	if !f.tools.InterceptApproval(context.Background(), f.chat, "u_alice", "2") {
+		t.Fatal("2 not intercepted")
+	}
+	f.ev(AgentEvent{Kind: "permission_resolved", RequestID: "r2", By: "client"})
+
+	f.out.reset()
+	f.ev(AgentEvent{Kind: "permission_request", RequestID: "r3", Title: "cat README.md"})
+	waitFor(t, "auto approve", func() bool { return len(f.link.calls("session.approve")) == 3 })
+	if got := f.link.calls("session.approve")[2]; !strings.Contains(got, `"request_id":"r3"`) || !strings.Contains(got, `"decision":"allow_session"`) {
+		t.Fatalf("auto approve = %s", got)
+	}
+	if f.tools.HasPendingApproval(f.chat) {
+		t.Fatal("auto-approved request left pending")
+	}
+	f.ev(AgentEvent{Kind: "text_delta", Text: "done"})
+	f.ev(AgentEvent{Kind: "turn_ended", TurnID: turn, Outcome: "completed"})
+	if out, err := <-res, <-errc; err != nil || !strings.Contains(out, "done") {
+		t.Fatalf("result = %q, %v", out, err)
+	}
+	f.out.mu.Lock()
+	for _, m := range f.out.sent {
+		if strings.Contains(m, "cat README.md") {
+			t.Errorf("granted request was asked again: %q", m)
+		}
+	}
+	f.out.mu.Unlock()
+
+	// Another person's machine session isn't covered.
+	if f.tools.grants.has("mch_b", "s1") {
+		t.Fatal("grant leaked to another machine")
 	}
 }

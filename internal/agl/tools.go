@@ -128,12 +128,13 @@ type Tools struct {
 
 	mu      sync.Mutex
 	pending map[string]*toolApproval // ToolChat.key() → open permission request
+	grants  *sessionGrants
 }
 
 // NewTools returns the tool-mode runner over link.
 func NewTools(link Link, st store.MachineStore, out Sender) *Tools {
 	return &Tools{link: link, store: st, out: out, Timeout: ToolRunTimeout, NoticeAfter: toolNoticeAfter,
-		pending: map[string]*toolApproval{}}
+		pending: map[string]*toolApproval{}, grants: newSessionGrants()}
 }
 
 // Machines lists userID's active machines that allow LLM agents.
@@ -353,6 +354,10 @@ func (t *Tools) Run(ctx context.Context, r ToolRun) (string, error) {
 				if !ours || e.RequestID == "" {
 					continue
 				}
+				if t.grants.has(m.ID, sid) {
+					autoApprove(t.link, m.ID, sid, e.RequestID)
+					continue
+				}
 				t.mu.Lock()
 				t.pending[r.Chat.key()] = &toolApproval{machineID: m.ID, userID: r.UserID, chat: r.Chat,
 					p: pendingApproval{sessionID: sid, requestID: e.RequestID}}
@@ -473,6 +478,7 @@ func (t *Tools) InterceptApproval(ctx context.Context, chat ToolChat, senderUser
 		t.send(a.chat, fmt.Sprintf(MsgFailed, err))
 		return true
 	}
+	t.grants.note(a.machineID, a.p.sessionID, decision)
 	t.send(a.chat, approvalAck[decision])
 	return true
 }
