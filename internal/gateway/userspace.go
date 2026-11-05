@@ -131,7 +131,6 @@ func buildSystemSandboxPool(cfg config.SandboxCfg, ws workspace.Store) sandbox.E
 		inner = sandbox.NewBoxliteExecutorPool(
 			cfg.BoxliteURL,
 			cfg.BoxlitePrefix,
-			cfg.BoxliteClientID,
 			secret,
 			snapshot,
 			home,

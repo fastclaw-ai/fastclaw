@@ -262,7 +262,7 @@ export default function OnboardPage() {
       : sandboxBackend === "e2b"
         ? sandboxE2BKey.trim() !== "" && sandboxE2BTemplate.trim() !== ""
         : sandboxBackend === "boxlite"
-          ? sandboxBoxliteKey.trim() !== "" && sandboxBoxliteImage.trim() !== ""
+          ? sandboxBoxliteKey.trim() !== ""
           : false);
   const stepValid: boolean[] = [
     true,
@@ -883,20 +883,20 @@ function SandboxStep(props: {
                       type="password"
                       value={props.boxliteKey}
                       onChange={(e) => props.setBoxliteKey(e.target.value)}
-                      placeholder="client_secret"
+                      placeholder="blk_live_..."
                       className="font-mono text-sm"
                     />
                   </div>
                   <div className="space-y-1.5">
-                    <Label>{tr("Snapshot", "快照")}</Label>
+                    <Label>{tr("Image (optional)", "镜像（可选）")}</Label>
                     <Input
                       value={props.boxliteImage}
                       onChange={(e) => props.setBoxliteImage(e.target.value)}
-                      placeholder="fastclaw-sandbox"
+                      placeholder="thinkany/fastclaw-sandbox:latest"
                       className="font-mono text-sm"
                     />
                     <p className="text-xs text-muted-foreground">
-                      {tr("BoxLite snapshot name imported through the BoxLite Dashboard, not a Docker Hub image reference.", "填写通过 BoxLite Dashboard 导入的快照名称，而不是 Docker Hub 镜像地址。")}
+                      {tr("Any public registry image; short names resolve to Docker Hub. Leave empty to use the default.", "任意公共仓库镜像，短名称默认指向 Docker Hub。留空则使用默认镜像。")}
                     </p>
                   </div>
                   <div className="space-y-1.5 sm:col-span-2">
@@ -904,7 +904,7 @@ function SandboxStep(props: {
                     <Input
                       value={props.boxliteURL}
                       onChange={(e) => props.setBoxliteURL(e.target.value)}
-                      placeholder="https://api.dev.boxlite.ai/api/v1"
+                      placeholder="https://api.boxlite.ai/v1"
                       className="font-mono text-sm"
                     />
                   </div>

@@ -248,14 +248,13 @@ type onboardRequest struct {
 
 	AgentName string `json:"agentName,omitempty"`
 
-	SandboxEnabled         bool   `json:"sandboxEnabled,omitempty"`
-	SandboxBackend         string `json:"sandboxBackend,omitempty"`
-	SandboxImage           string `json:"sandboxImage,omitempty"`
-	SandboxE2BKey          string `json:"sandboxE2BKey,omitempty"`
-	SandboxBoxliteURL      string `json:"sandboxBoxliteUrl,omitempty"`
-	SandboxBoxliteClientID string `json:"sandboxBoxliteClientId,omitempty"`
-	SandboxBoxliteKey      string `json:"sandboxBoxliteKey,omitempty"`
-	SandboxBoxlitePrefix   string `json:"sandboxBoxlitePrefix,omitempty"`
+	SandboxEnabled       bool   `json:"sandboxEnabled,omitempty"`
+	SandboxBackend       string `json:"sandboxBackend,omitempty"`
+	SandboxImage         string `json:"sandboxImage,omitempty"`
+	SandboxE2BKey        string `json:"sandboxE2BKey,omitempty"`
+	SandboxBoxliteURL    string `json:"sandboxBoxliteUrl,omitempty"`
+	SandboxBoxliteKey    string `json:"sandboxBoxliteKey,omitempty"`
+	SandboxBoxlitePrefix string `json:"sandboxBoxlitePrefix,omitempty"`
 }
 
 // handleOnboard creates the first super_admin + first system provider +
@@ -355,9 +354,6 @@ func (s *Server) handleOnboard(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.SandboxBoxliteURL != "" {
 			sandbox["boxliteUrl"] = req.SandboxBoxliteURL
-		}
-		if req.SandboxBoxliteClientID != "" {
-			sandbox["boxliteClientId"] = req.SandboxBoxliteClientID
 		}
 		if req.SandboxBoxliteKey != "" {
 			sandbox["boxliteKey"] = req.SandboxBoxliteKey

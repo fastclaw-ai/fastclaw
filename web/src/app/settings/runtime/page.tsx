@@ -262,22 +262,22 @@ export default function RuntimeSettingsPage() {
                       type="password"
                       value={sandboxBoxliteKey}
                       onChange={(e) => setSandboxBoxliteKey(e.target.value)}
-                      placeholder="client_secret"
+                      placeholder="blk_live_..."
                       className="font-mono text-sm"
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label>{tr("Snapshot", "快照")}</Label>
+                    <Label>{tr("Image (optional)", "镜像（选填）")}</Label>
                     <Input
                       value={sandboxBoxliteImage}
                       onChange={(e) => setSandboxBoxliteImage(e.target.value)}
-                      placeholder="fastclaw-sandbox"
+                      placeholder="thinkany/fastclaw-sandbox:latest"
                       className="font-mono text-sm"
                     />
                     <p className="text-xs text-muted-foreground">
                       {tr(
-                        "BoxLite snapshot name (imported through the BoxLite Dashboard), not a Docker Hub image reference.",
-                        "BoxLite 快照名称（通过 BoxLite 控制台导入），不是 Docker Hub 镜像地址。",
+                        "Any public registry image; short names resolve to Docker Hub. Leave empty to use the default.",
+                        "任意公共仓库镜像，短名称默认指向 Docker Hub。留空则使用默认镜像。",
                       )}
                     </p>
                   </div>
@@ -286,7 +286,7 @@ export default function RuntimeSettingsPage() {
                     <Input
                       value={sandboxBoxliteURL}
                       onChange={(e) => setSandboxBoxliteURL(e.target.value)}
-                      placeholder="https://api.dev.boxlite.ai/api/v1"
+                      placeholder="https://api.boxlite.ai/v1"
                       className="font-mono text-sm"
                     />
                   </div>

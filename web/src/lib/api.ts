@@ -246,7 +246,6 @@ export interface ConfigResponse {
     boxliteSnapshot?: string;
     e2bKey?: string;
     boxliteUrl?: string;
-    boxliteClientId?: string;
     boxliteKey?: string;
     boxlitePrefix?: string;
   };
@@ -420,7 +419,6 @@ export interface OnboardRequest {
   sandboxImage?: string;
   sandboxE2BKey?: string;
   sandboxBoxliteUrl?: string;
-  sandboxBoxliteClientId?: string;
   sandboxBoxliteKey?: string;
   sandboxBoxlitePrefix?: string;
 }

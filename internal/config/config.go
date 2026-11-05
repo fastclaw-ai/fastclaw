@@ -198,15 +198,14 @@ type SandboxCfg struct {
 	// BoxliteURL is the full base URL (default https://api.boxlite.ai/v1);
 	// BoxliteKey is the apikey sent as `Authorization: Bearer <key>`
 	// directly (no OAuth exchange — that path was removed upstream).
-	// ClientID is retained for back-compat with older config rows but
-	// no longer wired to anything. Prefix defaults to "default" when
-	// empty so the minimum config is just (URL, Key).
-	BoxliteURL      string `json:"boxliteUrl,omitempty"`
-	BoxliteClientID string `json:"boxliteClientId,omitempty"`
-	BoxliteKey      string `json:"boxliteKey,omitempty"`
-	BoxlitePrefix   string `json:"boxlitePrefix,omitempty"`
-	Network         string `json:"network,omitempty"`
-	IdleTTLSec      int    `json:"idleTTLSec,omitempty"`
+	// URL defaults to BoxLite Cloud (https://api.boxlite.ai/v1), which
+	// takes no Prefix; set Prefix only for self-hosted servers that route
+	// under /{prefix}/boxes. The minimum config is just Key.
+	BoxliteURL    string `json:"boxliteUrl,omitempty"`
+	BoxliteKey    string `json:"boxliteKey,omitempty"`
+	BoxlitePrefix string `json:"boxlitePrefix,omitempty"`
+	Network       string `json:"network,omitempty"`
+	IdleTTLSec    int    `json:"idleTTLSec,omitempty"`
 }
 
 // GatewayAuth is now a thin shell — the authoritative auth state lives in
