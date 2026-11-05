@@ -41,15 +41,16 @@ func RegisterLocalAgents(r *Registry, svc LocalAgentRunner, userID string, chat 
 	t := &localAgentsTool{svc: svc, userID: userID, chat: chat}
 
 	r.RegisterFrom(LocalAgentsToolName,
-		"List the person's own linked computers (name, online) and the coding agents available on each (claude, codex, gemini, …). "+
+		"List the person's own linked computers (name, online) and the local agents available on each (claude, codex, gemini, …) with what each is good at (e.g. codex can generate images). "+
 			"Use it before run_local_agent when you are not sure which agent or computer to use.",
 		map[string]any{"type": "object", "properties": map[string]any{}},
 		t.list, SourceLocalAgent)
 
 	r.RegisterSerialFrom(RunLocalAgentToolName, strings.Join([]string{
-		"Run a task with a coding agent (Claude Code, Codex, …) on the PERSON'S OWN computer, linked to this chat, and get its final answer back.",
-		"Use it when the request needs their computer: reading or changing code, files or repositories there, running commands, builds or tests, checking something on their machine.",
-		"Do NOT use it for chit-chat, general knowledge, writing or anything you can answer yourself.",
+		"Run a task with a local agent (Claude Code, Codex, …) on the PERSON'S OWN computer, linked to this chat, and get its final answer back.",
+		"Use it when the request needs their computer (code, files or repositories there, commands, builds, tests) OR a capability you lack but one of their local agents has — e.g. generating an image: Codex can generate images. Before saying you can't do something, check the agents' strengths (local_agents) and dispatch to one that can.",
+		"Pick the agent by its strengths, not just the first one: images → codex; code/files/analysis → any (claude is a good default).",
+		"Do NOT use it for chit-chat, general knowledge or plain text you can write yourself.",
 		"Write \"task\" as a complete, self-contained instruction for the coding agent (it does not see this chat), in the person's language. Follow-ups in this chat continue the same local session, so you can refer to earlier work.",
 		"The run can take minutes; the person may be asked in this chat to approve actions (they reply 1/2/3). Summarize the result for the person in your own words; do not paste huge outputs.",
 		"If it returns an error (computer offline, agent missing, timeout), tell the person plainly what happened and what they can do.",
@@ -136,8 +137,9 @@ func (t *localAgentsTool) list(ctx context.Context, _ json.RawMessage) (string, 
 		return "", fmt.Errorf("could not list the person's computers: %w", err)
 	}
 	type agentView struct {
-		ID   string `json:"id"`
-		Name string `json:"name"`
+		ID        string `json:"id"`
+		Name      string `json:"name"`
+		Strengths string `json:"strengths,omitempty"`
 	}
 	type machineView struct {
 		ID     string      `json:"id"`
@@ -150,7 +152,7 @@ func (t *localAgentsTool) list(ctx context.Context, _ json.RawMessage) (string, 
 	for _, m := range machines {
 		v := machineView{ID: m.ID, Name: m.Name, Online: m.Online, Access: m.DefaultAccess, Agents: []agentView{}}
 		for _, a := range m.Agents {
-			v.Agents = append(v.Agents, agentView{ID: a.ID, Name: a.Name})
+			v.Agents = append(v.Agents, agentView{ID: a.ID, Name: a.Name, Strengths: agl.AgentStrengths(a.ID)})
 		}
 		out = append(out, v)
 	}
@@ -182,7 +184,8 @@ func (t *localAgentsTool) run(ctx context.Context, raw json.RawMessage) (string,
 // LocalAgentsNote is the one-line system hint for a turn that has the
 // tools: which computers and agents the person has.
 func LocalAgentsNote(machines []agl.LocalMachine) string {
-	var parts []string
+	var parts, strengths []string
+	seen := map[string]bool{}
 	for _, m := range machines {
 		state := "online"
 		if !m.Online {
@@ -191,6 +194,10 @@ func LocalAgentsNote(machines []agl.LocalMachine) string {
 		ids := make([]string, 0, len(m.Agents))
 		for _, a := range m.Agents {
 			ids = append(ids, a.ID)
+			if st := agl.AgentStrengths(a.ID); st != "" && !seen[a.ID] {
+				seen[a.ID] = true
+				strengths = append(strengths, a.ID+": "+st)
+			}
 		}
 		agents := strings.Join(ids, ", ")
 		if agents == "" {
@@ -199,6 +206,14 @@ func LocalAgentsNote(machines []agl.LocalMachine) string {
 		parts = append(parts, fmt.Sprintf("%s (%s: %s)", m.Name, state, agents))
 	}
 	return "The person has linked their own computer(s): " + strings.Join(parts, "; ") +
-		". When a request needs their computer (code, files, repos, running commands), use run_local_agent; answer everything else yourself." +
-		" When the result is an image or file the person should see, fetch it with send_local_file and put it in your reply (ask for PNG instead of SVG)."
+		". When a request needs their computer (code, files, repos, running commands) or something you can't do yourself but a local agent can (e.g. generating an image), use run_local_agent with the agent best suited; answer everything else yourself. Never tell the person you can't do something a local agent here can do." +
+		" When the result is an image or file the person should see, fetch it with send_local_file and put it in your reply (ask for PNG instead of SVG)." +
+		strengthsNote(strengths)
+}
+
+func strengthsNote(strengths []string) string {
+	if len(strengths) == 0 {
+		return ""
+	}
+	return " Local agents' strengths — " + strings.Join(strengths, " | ")
 }
