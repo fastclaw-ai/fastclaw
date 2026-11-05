@@ -351,7 +351,7 @@ func (t *Tools) Run(ctx context.Context, r ToolRun) (string, error) {
 					buf.WriteString(e.Text)
 				}
 			case "permission_request":
-				if !ours || e.RequestID == "" {
+				if !ours || e.RequestID == "" || e.DecidedBy != "" {
 					continue
 				}
 				if t.grants.has(m.ID, sid) {

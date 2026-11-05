@@ -289,3 +289,29 @@ func TestToolsAllowSessionAutoApprovesLaterRequests(t *testing.T) {
 		t.Fatal("grant leaked to another machine")
 	}
 }
+
+// Requests agl answers itself (decided_by) never reach the chat.
+func TestToolsSkipsRequestsAglDecided(t *testing.T) {
+	f := newToolsFixture(t)
+	f.tools.NoticeAfter = time.Hour
+	res, errc := f.run(ToolRun{Agent: "claude", Task: "scan"})
+	turn := f.promptTurn(t)
+	f.ev(AgentEvent{Kind: "turn_started", TurnID: turn})
+	f.ev(AgentEvent{Kind: "permission_request", RequestID: "r1", Title: "ls", DecidedBy: "session"})
+	f.ev(AgentEvent{Kind: "permission_resolved", RequestID: "r1", By: "session"})
+	f.ev(AgentEvent{Kind: "text_delta", Text: "done"})
+	f.ev(AgentEvent{Kind: "turn_ended", TurnID: turn, Outcome: "completed"})
+	if out, err := <-res, <-errc; err != nil || !strings.Contains(out, "done") {
+		t.Fatalf("result = %q, %v", out, err)
+	}
+	f.out.mu.Lock()
+	defer f.out.mu.Unlock()
+	for _, m := range f.out.sent {
+		if strings.Contains(m, "需要确认") {
+			t.Fatalf("asked for a request agl decided: %q", m)
+		}
+	}
+	if len(f.link.calls("session.approve")) != 0 || f.tools.HasPendingApproval(f.chat) {
+		t.Fatal("decided request was answered or left pending")
+	}
+}

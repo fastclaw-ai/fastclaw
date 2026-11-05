@@ -616,7 +616,7 @@ func (b *Bridge) collect(c *chat, gen uint64, in Inbound, sessionID string, even
 					buf.WriteString(e.Text)
 				}
 			case "permission_request":
-				if !ours {
+				if !ours || e.DecidedBy != "" {
 					continue
 				}
 				c.mu.Lock()
@@ -729,7 +729,7 @@ func (b *Bridge) recoverApproval(ctx context.Context, machineID, name string) *r
 				text.WriteString(e.Event.Text)
 			}
 		case "permission_request":
-			if turn != "" && e.Event.RequestID != "" {
+			if turn != "" && e.Event.RequestID != "" && e.Event.DecidedBy == "" {
 				pending = append(pending, e.Event.RequestID)
 			}
 		case "permission_resolved":

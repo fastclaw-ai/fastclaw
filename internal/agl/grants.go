@@ -12,7 +12,9 @@ import (
 // asks again for each new command, and agl answers allow_session there
 // like a one-off allow. So Fastclaw remembers the grant per agl session
 // (one machine, one local agent, one chat) and answers the session's
-// later requests itself, without asking the chat again.
+// later requests itself, without asking the chat again. agl ≥ 0.3.4 does
+// this itself and marks such requests decided_by; this stays as the
+// fallback for older machines.
 
 const (
 	grantTTL       = 24 * time.Hour

@@ -98,10 +98,13 @@ type AgentEvent struct {
 	Options    []string `json:"options,omitempty"`
 	Decision   string   `json:"decision,omitempty"`
 	By         string   `json:"by,omitempty"`
-	Outcome    string   `json:"outcome,omitempty"`
-	Error      string   `json:"error,omitempty"`
-	Message    string   `json:"message,omitempty"`
-	Status     string   `json:"status,omitempty"`
+	// DecidedBy (permission_request, agl ≥ 0.3.4): agl answers it itself
+	// ("policy" | "session"); never ask the chat.
+	DecidedBy string `json:"decided_by,omitempty"`
+	Outcome   string `json:"outcome,omitempty"`
+	Error     string `json:"error,omitempty"`
+	Message   string `json:"message,omitempty"`
+	Status    string `json:"status,omitempty"`
 }
 
 // wireMsg is one agl link frame (protocol.md "Framing").
