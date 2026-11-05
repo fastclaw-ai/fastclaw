@@ -85,6 +85,10 @@ func (s *Server) resolveChannelBindingScope(w http.ResponseWriter, r *http.Reque
 		return "", "", false
 	}
 	ident, _ := auth.FromContext(r.Context())
+	if rec.UserID != uid && s.foreignPrivateAgent(r, rec) {
+		jsonResponse(w, http.StatusNotFound, map[string]any{"error": "agent not found"})
+		return "", "", false
+	}
 	if rec.UserID == uid || (ident.AuthMethod != "" && ident.CanAdminPlatform()) {
 		return uid, agentID, true
 	}

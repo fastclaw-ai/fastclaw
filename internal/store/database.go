@@ -2232,6 +2232,38 @@ func (d *DBStore) migrationSQL() []string {
 			UNIQUE (type, account_id)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_channels_user ON channels (user_id, agent_id)`,
+		// machines are users' own computers linked through agl ("connect
+		// my computer", see docs/agl-machines.md). token_hash is
+		// sha256(machine token); revoking clears it so the token fails at
+		// the next upgrade. Times are unix milliseconds.
+		`CREATE TABLE IF NOT EXISTS machines (
+			id TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL,
+			agl_machine_id TEXT NOT NULL DEFAULT '',
+			name TEXT NOT NULL DEFAULT '',
+			hostname TEXT NOT NULL DEFAULT '',
+			os TEXT NOT NULL DEFAULT '',
+			arch TEXT NOT NULL DEFAULT '',
+			version TEXT NOT NULL DEFAULT '',
+			agents TEXT NOT NULL DEFAULT '[]',
+			token_hash TEXT NOT NULL DEFAULT '',
+			last_seen_at BIGINT NOT NULL DEFAULT 0,
+			created_at BIGINT NOT NULL DEFAULT 0,
+			revoked_at BIGINT NOT NULL DEFAULT 0
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_machines_user ON machines (user_id, created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_machines_token ON machines (token_hash)`,
+		// machine_pairings holds one-time pairing codes (only their
+		// sha256 is stored): 10 minutes, single use.
+		`CREATE TABLE IF NOT EXISTS machine_pairings (
+			code_hash TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL,
+			expires_at BIGINT NOT NULL,
+			used_at BIGINT NOT NULL DEFAULT 0,
+			machine_id TEXT NOT NULL DEFAULT '',
+			created_at BIGINT NOT NULL DEFAULT 0
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_machine_pairings_user ON machine_pairings (user_id)`,
 	}
 }
 

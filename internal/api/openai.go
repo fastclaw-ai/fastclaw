@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/fastclaw-ai/fastclaw/internal/agent"
+	"github.com/fastclaw-ai/fastclaw/internal/agl"
 	"github.com/fastclaw-ai/fastclaw/internal/auth"
 	"github.com/fastclaw-ai/fastclaw/internal/bus"
 	"github.com/fastclaw-ai/fastclaw/internal/channels"
@@ -383,6 +384,14 @@ func (s *Server) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 		writeUnauth(w, err.Error())
 		return
+	}
+	// A runtime "agl" agent runs on its owner's computer, reached only
+	// through IM channels; never answer for it with the LLM.
+	if s.store != nil {
+		if rec, err := s.store.GetAgent(r.Context(), ag.Name()); err == nil && agl.IsAglAgent(rec) {
+			writeBadRequest(w, "this agent runs on a linked computer and only answers through its IM channel")
+			return
+		}
 	}
 
 	// Build session key from header
