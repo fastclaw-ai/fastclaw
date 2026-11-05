@@ -49,7 +49,7 @@ func RegisterLocalAgents(r *Registry, svc LocalAgentRunner, userID string, chat 
 	r.RegisterSerialFrom(RunLocalAgentToolName, strings.Join([]string{
 		"Run a task with a local agent (Claude Code, Codex, …) on the PERSON'S OWN computer, linked to this chat, and get its final answer back.",
 		"Use it when the request needs their computer (code, files or repositories there, commands, builds, tests) OR a capability you lack but one of their local agents has — e.g. generating an image: Codex can generate images. Before saying you can't do something, check the agents' strengths (local_agents) and dispatch to one that can.",
-		"Pick the agent by its strengths, not just the first one: images → codex; code/files/analysis → any (claude is a good default).",
+		"Pick the agent by its strengths, not just the first one: images → codex, and tell it to use its built-in image generation tool instead of drawing with code; code/files/analysis → any (claude is a good default).",
 		"Do NOT use it for chit-chat, general knowledge or plain text you can write yourself.",
 		"Write \"task\" as a complete, self-contained instruction for the coding agent (it does not see this chat), in the person's language. Follow-ups in this chat continue the same local session, so you can refer to earlier work.",
 		"The run can take minutes; the person may be asked in this chat to approve actions (they reply 1/2/3). Summarize the result for the person in your own words; do not paste huge outputs.",
