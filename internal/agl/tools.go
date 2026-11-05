@@ -23,8 +23,9 @@ import (
 // runs them and owns the chat's pending permission request, which the
 // gateway answers from the chat's next 1/2/3 before any LLM sees it.
 
-// MsgWorking is sent once when a tool run takes a while: "%s" is the
-// local agent's name.
+// MsgWorking is the first notice of a tool run that takes a while, when
+// nothing is known yet about what it's doing: "%s" is the agent's name.
+// Later updates: progress.go.
 const MsgWorking = "%s 正在你的电脑上处理…"
 
 const (
@@ -123,8 +124,9 @@ type Tools struct {
 	out   Sender
 
 	// Overridable in tests.
-	Timeout     time.Duration
-	NoticeAfter time.Duration
+	Timeout       time.Duration
+	NoticeAfter   time.Duration
+	ProgressEvery time.Duration
 
 	mu      sync.Mutex
 	pending map[string]*toolApproval // ToolChat.key() → open permission request
@@ -133,7 +135,7 @@ type Tools struct {
 
 // NewTools returns the tool-mode runner over link.
 func NewTools(link Link, st store.MachineStore, out Sender) *Tools {
-	return &Tools{link: link, store: st, out: out, Timeout: ToolRunTimeout, NoticeAfter: toolNoticeAfter,
+	return &Tools{link: link, store: st, out: out, Timeout: ToolRunTimeout, NoticeAfter: toolNoticeAfter, ProgressEvery: progressEvery,
 		pending: map[string]*toolApproval{}, grants: newSessionGrants()}
 }
 
@@ -316,6 +318,15 @@ func (t *Tools) Run(ctx context.Context, r ToolRun) (string, error) {
 	defer typing.Stop()
 	notice := time.NewTimer(t.NoticeAfter)
 	defer notice.Stop()
+	// Later progress updates start after the first notice.
+	var updates <-chan time.Time
+	var updateTicker *time.Ticker
+	defer func() {
+		if updateTicker != nil {
+			updateTicker.Stop()
+		}
+	}()
+	prog := newProgress(time.Now())
 	t.typing(r.Chat)
 
 	var buf strings.Builder
@@ -332,7 +343,19 @@ func (t *Tools) Run(ctx context.Context, r ToolRun) (string, error) {
 			t.typing(r.Chat)
 		case <-notice.C:
 			if !t.hasApproval(r.Chat) {
-				t.send(r.Chat, fmt.Sprintf(MsgWorking, agentName))
+				t.send(r.Chat, prog.first(agentName, time.Now()))
+				// A bot message ends the client's typing cue; restart it.
+				t.typing(r.Chat)
+			}
+			updateTicker = time.NewTicker(t.ProgressEvery)
+			updates = updateTicker.C
+		case <-updates:
+			if t.hasApproval(r.Chat) {
+				continue
+			}
+			if msg := prog.update(agentName, time.Now()); msg != "" {
+				t.send(r.Chat, msg)
+				t.typing(r.Chat)
 			}
 		case ev := <-events:
 			if ev.Disconnected {
@@ -342,6 +365,9 @@ func (t *Tools) Run(ctx context.Context, r ToolRun) (string, error) {
 				continue
 			}
 			e := ev.Event
+			if ours || (e.Kind == "turn_started" && e.TurnID == turnID) {
+				prog.event(e)
+			}
 			switch e.Kind {
 			case "turn_started":
 				ours = e.TurnID == turnID
