@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -126,14 +127,30 @@ func (a *Agent) mountLocalAgents(ctx context.Context, msg bus.InboundMessage) st
 	if fetcher, ok := svc.(tools.LocalFileFetcher); ok {
 		// Same session key the gateway resolves reply media from.
 		sessionID, projectID := msg.ChatID, msg.ProjectID
-		tools.RegisterSendLocalFile(a.registry, fetcher, func(ctx context.Context, f agl.FetchedFile) (string, error) {
+		save := func(ctx context.Context, f agl.FetchedFile) (string, error) {
 			url := "data:" + f.ContentType + ";base64," + base64.StdEncoding.EncodeToString(f.Bytes)
 			names := a.WriteSessionAttachments(ctx, sessionID, projectID, []Attachment{{URL: url, Name: f.Name}})
 			if len(names) == 0 {
 				return "", errors.New("workspace write failed")
 			}
 			return names[0], nil
-		}, uid)
+		}
+		tools.RegisterSendLocalFile(a.registry, fetcher, save, uid)
+		if maker, ok := svc.(tools.LocalImageMaker); ok && hasLocalAgent(machines, "codex") {
+			tools.RegisterGenerateImage(a.registry, maker, save, uid, chat, notify)
+		}
 	}
 	return tools.LocalAgentsNote(machines)
+}
+
+// hasLocalAgent reports whether any of machines reports agent id.
+func hasLocalAgent(machines []agl.LocalMachine, id string) bool {
+	for _, m := range machines {
+		for _, a := range m.Agents {
+			if strings.EqualFold(a.ID, id) {
+				return true
+			}
+		}
+	}
+	return false
 }

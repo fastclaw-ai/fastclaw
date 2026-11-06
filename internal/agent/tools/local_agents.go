@@ -54,8 +54,9 @@ func RegisterLocalAgents(r *Registry, svc LocalAgentRunner, userID string, chat 
 
 	r.RegisterSerialFrom(RunLocalAgentToolName, strings.Join([]string{
 		"Run a task with a local agent (Claude Code, Codex, …) on the PERSON'S OWN computer, linked to this chat, and get its final answer back.",
-		"Use it when the request needs their computer (code, files or repositories there, commands, builds, tests) OR a capability you lack but one of their local agents has — e.g. generating an image: Codex can generate images. Before saying you can't do something, check the agents' strengths (local_agents) and dispatch to one that can.",
-		"Pick the agent by its strengths, not just the first one: images → codex, and tell it to use its built-in image generation tool instead of drawing with code; code/files/analysis → any (claude is a good default).",
+		"Use it when the request needs their computer (code, files or repositories there, commands, builds, tests) OR a capability you lack but one of their local agents has. Before saying you can't do something, check the agents' strengths (local_agents) and dispatch to one that can.",
+		"For pictures (draw, paint, generate an image) use generate_image, not this tool.",
+		"Pick the agent by its strengths, not just the first one: code/files/analysis → any (claude is a good default).",
 		"Do NOT use it for chit-chat, general knowledge or plain text you can write yourself.",
 		"Write \"task\" as a complete, self-contained instruction for the coding agent (it does not see this chat), in the person's language. Follow-ups in this chat continue the same local session, so you can refer to earlier work.",
 		"The run can take minutes; " + approvals + ". Summarize the result for the person in your own words; do not paste huge outputs.",
@@ -213,8 +214,8 @@ func LocalAgentsNote(machines []agl.LocalMachine) string {
 		parts = append(parts, fmt.Sprintf("%s (%s: %s)", m.Name, state, agents))
 	}
 	return "The person has linked their own computer(s): " + strings.Join(parts, "; ") +
-		". When a request needs their computer (code, files, repos, running commands) or something you can't do yourself but a local agent can (e.g. generating an image), use run_local_agent with the agent best suited; answer everything else yourself. Never tell the person you can't do something a local agent here can do." +
-		" When the person asks for Codex, Claude Code or another coding agent by name, that means run_local_agent on their computer — never run those CLIs with exec." +
+		". When a request needs their computer (code, files, repos, running commands) or something you can't do yourself but a local agent can, use run_local_agent with the agent best suited; for any picture (draw, paint, generate an image) use generate_image when it is available. Answer everything else yourself. Never tell the person you can't do something a local agent here can do." +
+		" When the person asks for Codex, Claude Code or another coding agent by name, that means run_local_agent on their computer (generate_image for a picture) — never run those CLIs with exec." +
 		" When the result is an image or file the person should see, fetch it with send_local_file and put it in your reply (ask for PNG instead of SVG)." +
 		strengthsNote(strengths)
 }
