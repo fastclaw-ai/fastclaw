@@ -2717,6 +2717,12 @@ export interface Machine {
   lastSeenAt: string | null;
   createdAt: string | null;
   agents: MachineAgent[];
+  // agl updates: the newest release ("" while unknown), whether this
+  // computer is behind it, and whether its agl takes a one-click update
+  // (agl ≥ 0.3.5; older ones need `agl update` on the computer).
+  latestVersion: string;
+  updateAvailable: boolean;
+  remoteUpdate: boolean;
   allowAgents: boolean;
   defaultAccess: MachineAccess;
   defaultCwd: string;
@@ -2770,6 +2776,15 @@ export function updateMachine(id: string, patch: MachinePatch) {
 
 export function deleteMachine(id: string) {
   return machineJSON<{ ok: boolean }>(`/v1/machines/${encodeURIComponent(id)}`, machineInit("DELETE"));
+}
+
+// Update the computer's agl to the newest release. Never ends a running
+// task: {updated:false, busy} while one runs.
+export function updateMachineAgl(id: string) {
+  return machineJSON<{ updated: boolean; current: string; latest: string; busy?: number }>(
+    `/v1/machines/${encodeURIComponent(id)}/update`,
+    machineInit("POST", {}),
+  );
 }
 
 // Re-detect the computer's local agents now.

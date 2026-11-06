@@ -40,6 +40,7 @@ import {
   refreshMachineAgents,
   testMachineAgent,
   updateMachine,
+  updateMachineAgl,
   type Machine,
   type MachineAccess,
   type MachineAgent,
@@ -222,6 +223,16 @@ export function DevicesSettingsPage() {
                   </div>
                 )}
                 <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px]">
+                  {m.updateAvailable && (
+                    <button
+                      type="button"
+                      className="rounded border border-sky-500/40 px-1.5 py-0.5 text-sky-600 hover:bg-sky-500/10 dark:text-sky-400"
+                      onClick={() => setEditing(m)}
+                      title={tr("agl {{v}} is available", "agl {{v}} 可用", { v: m.latestVersion })}
+                    >
+                      {tr("Update available", "可更新")}
+                    </button>
+                  )}
                   {m.allowAgents ? (
                     <span className="rounded border border-border px-1.5 py-0.5 text-muted-foreground">
                       {accessLabel(tr, m.defaultAccess)}
@@ -370,6 +381,16 @@ function DeviceSettingsDialog({
         </DialogHeader>
 
         <div className="min-w-0 space-y-4">
+          {machine.updateAvailable && (
+            <AglUpdateRow
+              machine={machine}
+              onUpdated={() => {
+                // agl restarts and the link comes back on the new version.
+                setTimeout(onRefreshed, 8_000);
+                setTimeout(onRefreshed, 20_000);
+              }}
+            />
+          )}
           <div className="space-y-1.5">
             <p className="text-sm font-medium">{tr("Name", "名称")}</p>
             <Input value={name} maxLength={64} onChange={(e) => setName(e.target.value)} />
@@ -442,6 +463,78 @@ function DeviceSettingsDialog({
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+// AglUpdateRow offers the newest agl: one click on agl ≥ 0.3.5, the
+// `agl update` command to run on the computer for older ones.
+function AglUpdateRow({ machine, onUpdated }: { machine: Machine; onUpdated: () => void }) {
+  const { tr } = useLocale();
+  const [state, setState] = React.useState<"" | "updating" | "started" | "busy" | "manual">("");
+  const [error, setError] = React.useState("");
+  const manual = !machine.remoteUpdate || state === "manual";
+
+  const update = async () => {
+    setState("updating");
+    setError("");
+    try {
+      const r = await updateMachineAgl(machine.id);
+      if (r.updated) {
+        setState("started");
+        onUpdated();
+      } else {
+        setState(r.busy ? "busy" : "");
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes("agl update")) {
+        setState("manual");
+      } else {
+        setError(msg);
+        setState("");
+      }
+    }
+  };
+
+  return (
+    <div className="min-w-0 rounded-lg border border-sky-500/30 bg-sky-500/5 p-3 text-sm">
+      <div className="flex min-w-0 items-center gap-2">
+        <p className="min-w-0 flex-1">
+          {tr("agl {{latest}} is available (this computer has {{current}}).", "agl {{latest}} 已发布（这台电脑是 {{current}}）。", {
+            latest: machine.latestVersion,
+            current: machine.version,
+          })}
+        </p>
+        {!manual && state !== "started" && (
+          <Button size="sm" className="h-7 shrink-0" disabled={state === "updating" || !machine.online} onClick={() => void update()}>
+            {state === "updating" && <Loader2 className="mr-1 size-3.5 animate-spin" />}
+            {state === "updating" ? tr("Updating…", "更新中…") : tr("Update", "更新")}
+          </Button>
+        )}
+      </div>
+      {state === "started" && (
+        <p className="mt-1.5 text-xs text-emerald-600 dark:text-emerald-400">
+          {tr("Updating. The computer disconnects for a moment and comes back on the new version.", "正在更新，电脑会短暂断开，然后以新版本自动重连。")}
+        </p>
+      )}
+      {state === "busy" && (
+        <p className="mt-1.5 text-xs text-amber-600 dark:text-amber-400">
+          {tr("The computer is running a task. Try again when it's done.", "电脑正在执行任务，等任务结束后再更新。")}
+        </p>
+      )}
+      {manual && (
+        <div className="mt-1.5">
+          <p className="text-xs text-muted-foreground">
+            {tr("This version can't be updated from here. Run this on the computer once:", "这个版本还不能在网页上更新，请在那台电脑上运行一次：")}
+          </p>
+          <CopyLine text="agl update" />
+        </div>
+      )}
+      {!machine.online && !manual && (
+        <p className="mt-1.5 text-xs text-muted-foreground">{tr("The computer is offline.", "电脑当前离线。")}</p>
+      )}
+      {error && <p className="mt-1.5 text-xs text-destructive">{error}</p>}
+    </div>
   );
 }
 

@@ -231,6 +231,7 @@ type Hub struct {
 	store      store.MachineStore
 	publicURL  string
 	releaseURL string
+	latest     *latestRelease // newest agl release, for "update available"
 	now        func() time.Time
 	upgrader   websocket.Upgrader
 
@@ -248,6 +249,7 @@ func NewHub(st store.MachineStore, publicURL string) *Hub {
 		store:      st,
 		publicURL:  strings.TrimRight(strings.TrimSpace(publicURL), "/"),
 		releaseURL: DefaultReleaseURL,
+		latest:     newLatestRelease(DefaultLatestURL),
 		now:        func() time.Time { return time.Now().UTC() },
 		upgrader: websocket.Upgrader{
 			// Machines are not browsers; auth is the code / token.

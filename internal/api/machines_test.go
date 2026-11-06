@@ -20,6 +20,7 @@ func newMachinesHarness(t *testing.T) (*v1Harness, *agl.Hub) {
 		t.Fatal(err)
 	}
 	hub := agl.NewHub(h.st, "https://fc.example.com")
+	hub.SetLatestURL("") // no network in tests
 	srv := NewServer(h.rt, authResolver, nil)
 	srv.SetStore(h.st)
 	srv.SetAglHub(hub)
@@ -353,5 +354,14 @@ func TestMachineAgentSettingsAPI(t *testing.T) {
 	}
 	if code, _ := h.do("GET", "/v1/machines/mch_a/agents/claude/models", h.keyA, nil, "X-Fastclaw-End-User", "bob"); code != http.StatusNotFound {
 		t.Fatalf("bob reads alice's machine: %d", code)
+	}
+	// The machine reported agl 0.3.3: no one-click update; offline anyway.
+	_, out = h.do("GET", "/v1/machines", h.keyA, nil, "X-Fastclaw-End-User", "alice")
+	mv := out["machines"].([]any)[0].(map[string]any)
+	if mv["remoteUpdate"] != false || mv["updateAvailable"] != false || mv["latestVersion"] != "" {
+		t.Fatalf("update fields = %v", mv)
+	}
+	if code, _ := h.do("POST", "/v1/machines/mch_a/update", h.keyA, map[string]any{}, "X-Fastclaw-End-User", "alice"); code != http.StatusConflict {
+		t.Fatalf("update offline: %d", code)
 	}
 }

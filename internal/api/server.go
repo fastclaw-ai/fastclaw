@@ -134,6 +134,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 			"PATCH /v1/machines/{id}":                     s.HandleUpdateMachine,
 			"DELETE /v1/machines/{id}":                    s.HandleDeleteMachine,
 			"POST /v1/machines/{id}/agents/refresh":       s.HandleRefreshMachineAgents,
+			"POST /v1/machines/{id}/update":               s.HandleUpdateMachineAgl,
 			"GET /v1/machines/{id}/agents/{agent}/models": s.HandleMachineAgentModels,
 			"POST /v1/machines/{id}/agents/{agent}/test":  s.HandleTestMachineAgent,
 		} {

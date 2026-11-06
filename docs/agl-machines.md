@@ -78,6 +78,7 @@ super_admin browses as someone else). Errors are `{"error": "<message>"}`.
 | `GET /v1/machines` | `{machines: [Machine]}`, newest first, revoked excluded |
 | `PATCH /v1/machines/{id}` | body any of `{name, allowAgents, defaultAccess, defaultCwd}` → the updated Machine; 404 unless it is this end user's active machine; 400 on invalid values |
 | `DELETE /v1/machines/{id}` | `{ok: true}`; clears the token hash, closes the link (agl then reports "revoked" and stops retrying), agents bound to it stop running |
+| `POST /v1/machines/{id}/update` | the computer's agl updates itself to the newest release (`daemon.update` with `if_idle`, so a running task is never ended): `{updated, current, latest, busy?}`; 409 offline, or `{code: "manual_update"}` for agl < 0.3.5 (run `agl update` on the computer) |
 | `POST /v1/machines/{id}/agents/refresh` | re-detects the local agents now (`agents.list`), stores them, returns the Machine; 409 when offline |
 | `GET /v1/machines/{id}/agents/{agent}/models` | `{models: [{id, name?, description?, default?, efforts?[]}]}` (`agents.models`) |
 | `POST /v1/machines/{id}/agents/{agent}/test` `{model?, effort?}` | runs the agent read-only in a throwaway session with "Reply with just: OK" (uses a little of its own quota): `{durationMs, reply, model?}`; 409 offline, 502 when it fails |
@@ -92,6 +93,9 @@ Machine:
    "path": "/Users/me/.local/bin/claude", "version": "2.1.318 (Claude Code)",
    "features": ["models", "effort", …], "installCommand": "", "guide": "",
    "enabled": true, "model": "", "effort": ""}],  // the owner's choices (PATCH agents)
+ "latestVersion": "0.3.5", // newest agl release ("" until known; checked hourly)
+ "updateAvailable": true,  // version < latestVersion
+ "remoteUpdate": false,    // agl ≥ 0.3.5: POST …/update works; older: `agl update` by hand
  "allowAgents": true,      // LLM agents may dispatch work here (tool mode); default true
  "defaultAccess": "ask",   // read_only | ask | edit | full; default "ask"
  "defaultCwd": ""}         // working dir for tool runs; "" = agl default (home), "~/" expanded by agl

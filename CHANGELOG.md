@@ -5,6 +5,14 @@ action on upgrade — read those notes before deploying.
 
 ## [Unreleased]
 
+### Added — one-click agl updates
+
+Console → Devices marks a computer whose agl is behind the newest release
+(looked up hourly) and updates it with one click (`POST
+/v1/machines/{id}/update`); a running task is never ended, the update waits
+until the computer is idle. Needs agl 0.3.5 on the computer: older ones
+show `agl update` to run there once.
+
 ### Added — connect your own computer (agl)
 
 Console → Devices links a person's own Mac or Linux computer with
