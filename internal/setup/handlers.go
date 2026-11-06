@@ -1299,6 +1299,9 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	// return, and inner-scope cancel would tear down agentCtx before the
 	// continuation's events can reach this handler's safety-net check.
 	agentCtx = agent.ContextWithStream(agentCtx, nil, s.dataStore, hub, uid, agentID, streamSessionID)
+	// The person may hand work to their own linked computers
+	// (run_local_agent); approvals come back through this page.
+	agentCtx = agent.ContextWithLocalAgentsUser(agentCtx, uid)
 
 	agentDone := make(chan struct{})
 	go func() {

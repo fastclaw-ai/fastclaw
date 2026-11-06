@@ -211,6 +211,8 @@ func (d *DBStore) migrateMachinesAddSettings(ctx context.Context) error {
 		{"allow_agents", `ALTER TABLE machines ADD COLUMN allow_agents INTEGER NOT NULL DEFAULT 1`},
 		{"default_access", `ALTER TABLE machines ADD COLUMN default_access TEXT NOT NULL DEFAULT 'ask'`},
 		{"default_cwd", `ALTER TABLE machines ADD COLUMN default_cwd TEXT NOT NULL DEFAULT ''`},
+		// Per local agent: enabled, model, effort (JSON keyed by agent id).
+		{"agent_settings", `ALTER TABLE machines ADD COLUMN agent_settings TEXT NOT NULL DEFAULT '{}'`},
 	}
 	for _, c := range cols {
 		has, err := d.tableHasColumn(ctx, "machines", c.name)
@@ -2279,7 +2281,8 @@ func (d *DBStore) migrationSQL() []string {
 			revoked_at BIGINT NOT NULL DEFAULT 0,
 			allow_agents INTEGER NOT NULL DEFAULT 1,
 			default_access TEXT NOT NULL DEFAULT 'ask',
-			default_cwd TEXT NOT NULL DEFAULT ''
+			default_cwd TEXT NOT NULL DEFAULT '',
+			agent_settings TEXT NOT NULL DEFAULT '{}'
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_machines_user ON machines (user_id, created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_machines_token ON machines (token_hash)`,

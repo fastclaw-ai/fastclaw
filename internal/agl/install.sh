@@ -138,10 +138,3 @@ say "Linking this machine to $HUB_URL"
 say "Done. This machine is now available at $HUB_URL"
 echo "  agl status        # daemon + hub link"
 echo "  agl run claude \"hello\""
-if [ -z "${AGL_NO_OPEN:-}" ]; then
-  if command -v open >/dev/null 2>&1; then
-    open "$HUB_URL/" >/dev/null 2>&1 || true
-  elif command -v xdg-open >/dev/null 2>&1 && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
-    xdg-open "$HUB_URL/" >/dev/null 2>&1 || true
-  fi
-fi

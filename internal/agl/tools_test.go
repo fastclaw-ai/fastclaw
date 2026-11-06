@@ -315,3 +315,88 @@ func TestToolsSkipsRequestsAglDecided(t *testing.T) {
 		t.Fatal("decided request was answered or left pending")
 	}
 }
+
+// A web chat gets notices (and answers with Decide) instead of IM text.
+func TestToolsRunWebNotices(t *testing.T) {
+	f := newToolsFixture(t)
+	f.tools.NoticeAfter = 30 * time.Millisecond
+	f.tools.ProgressEvery = time.Hour
+	web := ToolChat{Channel: "web", AccountID: "u_alice/agt_persona", ChatID: "sess1", AgentID: "agt_persona"}
+	notices := make(chan ToolNotice, 16)
+	res, errc := f.run(ToolRun{Chat: web, Agent: "claude", Task: "run the tests", Notify: func(n ToolNotice) { notices <- n }})
+	turn := f.promptTurn(t)
+	next := func(kind string) ToolNotice {
+		t.Helper()
+		for {
+			select {
+			case n := <-notices:
+				if n.Kind == kind {
+					return n
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatalf("no %s notice", kind)
+			}
+		}
+	}
+	f.ev(AgentEvent{Kind: "turn_started", TurnID: turn})
+	f.ev(AgentEvent{Kind: "permission_request", RequestID: "r1", Tool: "Bash", Title: "Run go test"})
+	if n := next(NoticeApproval); n.Text != "Run go test" || n.Agent != "Claude Code" || n.Machine != "MacBook" {
+		t.Fatalf("approval notice = %+v", n)
+	}
+	if p, ok := f.tools.PendingApproval(web, "u_alice"); !ok || p.Title != "Run go test" {
+		t.Fatalf("pending = %+v %v", p, ok)
+	}
+	if _, ok := f.tools.PendingApproval(web, "u_bob"); ok {
+		t.Fatal("bob sees alice's approval")
+	}
+	if found, _ := f.tools.Decide(context.Background(), web, "u_bob", "allow"); found {
+		t.Fatal("bob decided alice's approval")
+	}
+	if found, err := f.tools.Decide(context.Background(), web, "u_alice", "allow_session"); !found || err != nil {
+		t.Fatalf("decide = %v %v", found, err)
+	}
+	if n := next(NoticeApprovalResolved); n.Decision != "allow_session" {
+		t.Fatalf("resolved notice = %+v", n)
+	}
+	next(NoticeProgress)
+	f.ev(AgentEvent{Kind: "text_delta", Text: "All green."})
+	f.ev(AgentEvent{Kind: "turn_ended", TurnID: turn, Outcome: "completed"})
+	if out, err := <-res, <-errc; err != nil || !strings.Contains(out, "All green.") {
+		t.Fatalf("result = %q, %v", out, err)
+	}
+	next(NoticeDone)
+	f.out.mu.Lock()
+	sent := len(f.out.sent)
+	f.out.mu.Unlock()
+	if sent != 0 {
+		t.Fatalf("web run sent IM messages: %d", sent)
+	}
+}
+
+// The owner's per-agent settings: a disabled agent isn't offered, and a
+// configured model / effort start its sessions.
+func TestToolsHonourAgentSettings(t *testing.T) {
+	f := newToolsFixture(t)
+	ctx := context.Background()
+	if err := f.st.UpdateMachineSettings(ctx, "mch_a1", store.MachineSettings{
+		AgentSettings: map[string]store.MachineAgentSetting{"claude": {Disabled: true}}}); err != nil {
+		t.Fatal(err)
+	}
+	if ms, _ := f.tools.Machines(ctx, "u_alice"); len(ms) != 1 || len(ms[0].Agents) != 0 {
+		t.Fatalf("disabled agent offered: %+v", ms)
+	}
+	if err := f.st.UpdateMachineSettings(ctx, "mch_a1", store.MachineSettings{
+		AgentSettings: map[string]store.MachineAgentSetting{"claude": {Model: "opus", Effort: "high"}}}); err != nil {
+		t.Fatal(err)
+	}
+	res, errc := f.run(ToolRun{Agent: "claude", Task: "hi"})
+	turn := f.promptTurn(t)
+	if c := f.link.calls("session.create"); len(c) != 1 || !strings.Contains(c[0], `"model":"opus"`) || !strings.Contains(c[0], `"effort":"high"`) {
+		t.Fatalf("session.create = %v", c)
+	}
+	f.ev(AgentEvent{Kind: "turn_started", TurnID: turn})
+	f.ev(AgentEvent{Kind: "turn_ended", TurnID: turn, Outcome: "completed"})
+	if _, err := <-res, <-errc; err != nil {
+		t.Fatal(err)
+	}
+}

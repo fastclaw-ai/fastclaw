@@ -285,6 +285,8 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("POST /api/chat", auth(s.handleChat))
 	mux.HandleFunc("POST /api/chat/stream", auth(s.handleChatStream))
 	mux.HandleFunc("POST /api/chat/stop", auth(s.handleChatStop))
+	mux.HandleFunc("GET /api/chat/local-agent-approval", auth(s.handleLocalAgentApproval))
+	mux.HandleFunc("POST /api/chat/local-agent-approval", auth(s.handleLocalAgentDecision))
 	mux.HandleFunc("POST /api/chat/team/stream", auth(s.handleTeamChatStream))
 	mux.HandleFunc("POST /api/chat/team/run", auth(s.handleTeamChatRun))
 	mux.HandleFunc("GET /api/chat/team/topics", auth(s.handleTeamTopics))

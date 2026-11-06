@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -270,5 +271,87 @@ func TestUpdateMachineAPI(t *testing.T) {
 	}
 	if code, _ := h.do("PATCH", "/v1/machines/mch_alice", h.keyA, map[string]any{"name": "x"}, alice...); code != http.StatusNotFound {
 		t.Fatalf("revoked: %d", code)
+	}
+}
+
+// The dashboard (console → Devices) uses the logged-in user's session:
+// no end-user header, and only that user's own machines.
+func TestMachinesDashboardSession(t *testing.T) {
+	h, _ := newMachinesHarness(t)
+	resolver, err := auth.NewResolver(h.st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie, err := resolver.IssueSession(context.Background(), h.appA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.addMachine("alice", "mch_alice") // an end user's machine: never the dashboard user's
+	if err := h.st.CreateMachine(context.Background(), &store.MachineRecord{
+		ID: "mch_own", UserID: h.appA, AglMachineID: "mch_own", Hostname: "mini", Name: "mini",
+		TokenHash: "hash-own", AllowAgents: true, DefaultAccess: "ask",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	do := func(method, path string, body string) (int, string) {
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.AddCookie(cookie)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		h.mux.ServeHTTP(rec, req)
+		return rec.Code, rec.Body.String()
+	}
+	code, body := do("GET", "/v1/machines", "")
+	if code != http.StatusOK || !strings.Contains(body, "mch_own") || strings.Contains(body, "mch_alice") {
+		t.Fatalf("list: %d %s", code, body)
+	}
+	if code, body = do("POST", "/v1/machines/pairing", "{}"); code != http.StatusOK || !strings.Contains(body, "installCommand") {
+		t.Fatalf("pairing: %d %s", code, body)
+	}
+	if code, body = do("PATCH", "/v1/machines/mch_alice", `{"name":"x"}`); code != http.StatusNotFound {
+		t.Fatalf("patch someone else's machine: %d %s", code, body)
+	}
+	if code, body = do("PATCH", "/v1/machines/mch_own", `{"name":"studio"}`); code != http.StatusOK || !strings.Contains(body, "studio") {
+		t.Fatalf("rename own machine: %d %s", code, body)
+	}
+}
+
+func TestMachineAgentSettingsAPI(t *testing.T) {
+	h, _ := newMachinesHarness(t)
+	h.addMachine("alice", "mch_a")
+	patch := func(body map[string]any) (int, map[string]any) {
+		return h.do("PATCH", "/v1/machines/mch_a", h.keyA, body, "X-Fastclaw-End-User", "alice")
+	}
+	code, out := patch(map[string]any{"agents": map[string]any{"claude": map[string]any{"enabled": false, "model": "opus"}}})
+	if code != http.StatusOK {
+		t.Fatalf("patch: %d %v", code, out)
+	}
+	agents, _ := out["agents"].([]any)
+	a, _ := agents[0].(map[string]any)
+	if a["id"] != "claude" || a["enabled"] != false || a["model"] != "opus" || a["effort"] != "" {
+		t.Fatalf("agent view = %v", a)
+	}
+	// Merged, not replaced: re-enabling keeps the model.
+	_, out = patch(map[string]any{"agents": map[string]any{"claude": map[string]any{"enabled": true}}})
+	a = out["agents"].([]any)[0].(map[string]any)
+	if a["enabled"] != true || a["model"] != "opus" {
+		t.Fatalf("after re-enable = %v", a)
+	}
+	if code, _ := patch(map[string]any{"agents": map[string]any{"nope": map[string]any{"enabled": false}}}); code != http.StatusBadRequest {
+		t.Fatalf("unknown agent: %d", code)
+	}
+	if code, _ := patch(map[string]any{"agents": map[string]any{"claude": map[string]any{"model": "a\nb"}}}); code != http.StatusBadRequest {
+		t.Fatalf("bad model: %d", code)
+	}
+	// Offline machine: agent ops say so.
+	code, out = h.do("POST", "/v1/machines/mch_a/agents/refresh", h.keyA, map[string]any{}, "X-Fastclaw-End-User", "alice")
+	if code != http.StatusConflict {
+		t.Fatalf("refresh offline: %d %v", code, out)
+	}
+	if code, _ := h.do("POST", "/v1/machines/mch_a/agents/nope/test", h.keyA, map[string]any{}, "X-Fastclaw-End-User", "alice"); code != http.StatusNotFound {
+		t.Fatalf("test unknown agent: %d", code)
+	}
+	if code, _ := h.do("GET", "/v1/machines/mch_a/agents/claude/models", h.keyA, nil, "X-Fastclaw-End-User", "bob"); code != http.StatusNotFound {
+		t.Fatalf("bob reads alice's machine: %d", code)
 	}
 }
