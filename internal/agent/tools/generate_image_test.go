@@ -9,9 +9,11 @@ import (
 	"time"
 
 	"github.com/fastclaw-ai/fastclaw/internal/agl"
+	"github.com/fastclaw-ai/fastclaw/internal/store"
 )
 
 type fakeImageMaker struct {
+	machines []agl.LocalMachine
 	runOut   string
 	runs     []agl.ToolRun
 	fetched  []agl.FetchRun
@@ -19,7 +21,15 @@ type fakeImageMaker struct {
 }
 
 func (f *fakeImageMaker) Machines(context.Context, string) ([]agl.LocalMachine, error) {
-	return nil, nil
+	if f.machines == nil {
+		return []agl.LocalMachine{miniWithCodex(true, "0.3.6", agl.CapImageGeneration)}, nil
+	}
+	return f.machines, nil
+}
+
+func miniWithCodex(online bool, aglVersion string, caps ...string) agl.LocalMachine {
+	return agl.LocalMachine{ID: "mch_mini", Name: "mini", Online: online, AglVersion: aglVersion,
+		Agents: []store.MachineAgent{{ID: "claude", Capabilities: []string{agl.CapWebSearch}}, {ID: "codex", Capabilities: caps}}}
 }
 
 func (f *fakeImageMaker) Run(_ context.Context, r agl.ToolRun) (string, error) {
@@ -53,7 +63,7 @@ func TestGenerateImageBriefsCodexAndReturnsThePicture(t *testing.T) {
 		t.Fatalf("runs: %+v", f.runs)
 	}
 	r := f.runs[0]
-	if r.Agent != "codex" || r.Machine != "mini" || r.UserID != "u_alice" {
+	if r.Agent != "codex" || r.Machine != "mch_mini" || r.UserID != "u_alice" {
 		t.Fatalf("run: %+v", r)
 	}
 	for _, want := range []string{"image generation tool", "Do NOT draw it with code", "a woman with long hair, warm light", "portrait", "~/Downloads/20261106-150405-image.png", imageUnavailable} {
@@ -61,7 +71,7 @@ func TestGenerateImageBriefsCodexAndReturnsThePicture(t *testing.T) {
 			t.Errorf("task lacks %q:\n%s", want, r.Task)
 		}
 	}
-	if len(f.fetched) != 1 || f.fetched[0].Path != "~/Downloads/20261106-150405-image.png" || f.fetched[0].Machine != "mini" {
+	if len(f.fetched) != 1 || f.fetched[0].Path != "~/Downloads/20261106-150405-image.png" || f.fetched[0].Machine != "mch_mini" {
 		t.Fatalf("fetched: %+v", f.fetched)
 	}
 	if !strings.Contains(out, `"putInReply":"![](/workspace/saved-img.png)"`) {
@@ -94,5 +104,42 @@ func TestGenerateImageNeedsPrompt(t *testing.T) {
 	f := &fakeImageMaker{}
 	if _, err := newImageTool(f).run(context.Background(), json.RawMessage(`{"prompt":"  "}`)); err == nil || len(f.runs) != 0 {
 		t.Fatalf("empty prompt: %v %+v", err, f.runs)
+	}
+}
+
+func TestGenerateImageFollowsCapabilities(t *testing.T) {
+	cases := []struct {
+		name     string
+		machines []agl.LocalMachine
+		ok       bool
+		errHas   string
+	}{
+		{"reported", []agl.LocalMachine{miniWithCodex(true, "0.3.6", agl.CapImageGeneration)}, true, ""},
+		{"turned off", []agl.LocalMachine{miniWithCodex(true, "0.3.6")}, false, "can generate images"},
+		{"older agl assumes codex can", []agl.LocalMachine{miniWithCodex(true, "0.3.5")}, true, ""},
+		{"offline", []agl.LocalMachine{miniWithCodex(false, "0.3.6", agl.CapImageGeneration)}, false, "offline"},
+		{"online one first", []agl.LocalMachine{
+			{ID: "mch_off", Name: "off", AglVersion: "0.3.6", Agents: []store.MachineAgent{{ID: "codex", Capabilities: []string{agl.CapImageGeneration}}}},
+			miniWithCodex(true, "0.3.6", agl.CapImageGeneration),
+		}, true, ""},
+	}
+	for _, c := range cases {
+		f := &fakeImageMaker{machines: c.machines, runOut: "done"}
+		_, err := newImageTool(f).run(context.Background(), json.RawMessage(`{"prompt":"a cat"}`))
+		if c.ok {
+			if err != nil || len(f.runs) != 1 || f.runs[0].Machine != "mch_mini" {
+				t.Errorf("%s: err %v runs %+v", c.name, err, f.runs)
+			}
+			continue
+		}
+		if err == nil || !strings.Contains(err.Error(), c.errHas) || len(f.runs) != 0 {
+			t.Errorf("%s: err %v runs %+v", c.name, err, f.runs)
+		}
+	}
+	if CanGenerateImage([]agl.LocalMachine{miniWithCodex(true, "0.3.6")}) {
+		t.Error("mounted without an image-capable agent")
+	}
+	if !CanGenerateImage([]agl.LocalMachine{miniWithCodex(false, "0.3.6", agl.CapImageGeneration)}) {
+		t.Error("not mounted for an offline machine that can (the tool explains it is offline)")
 	}
 }

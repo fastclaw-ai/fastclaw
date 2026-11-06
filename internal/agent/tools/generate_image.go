@@ -15,8 +15,38 @@ import (
 // generation on the person's computer and puts it in the chat.
 const GenerateImageToolName = "generate_image"
 
-// imageAgent is the local agent that can generate images.
-const imageAgent = "codex"
+// imageBriefs are the local agents FastClaw can brief for a picture, in
+// order of preference, each with its task. Only agents that report
+// agl.CapImageGeneration on the machine are used.
+var imageBriefs = []struct {
+	agent string
+	task  func(prompt, aspect, path string) string
+}{
+	{"codex", imageTask},
+}
+
+func imageAgents() []string {
+	out := make([]string, 0, len(imageBriefs))
+	for _, b := range imageBriefs {
+		out = append(out, b.agent)
+	}
+	return out
+}
+
+func imageBrief(agent string) func(prompt, aspect, path string) string {
+	for _, b := range imageBriefs {
+		if strings.EqualFold(b.agent, agent) {
+			return b.task
+		}
+	}
+	return nil
+}
+
+// CanGenerateImage reports whether one of machines has a local agent
+// that can generate images (generate_image is mounted then).
+func CanGenerateImage(machines []agl.LocalMachine) bool {
+	return len(agl.FindCapable(machines, agl.CapImageGeneration, "", imageAgents())) > 0
+}
 
 // imageUnavailable is what the task asks Codex to answer with when it
 // can't generate images, instead of drawing one some other way.
@@ -44,7 +74,7 @@ func RegisterGenerateImage(r *Registry, svc LocalImageMaker, save SaveFileFunc, 
 		"properties": map[string]any{
 			"prompt":  map[string]any{"type": "string", "description": "What the picture shows, in detail."},
 			"aspect":  map[string]any{"type": "string", "enum": []string{"square", "portrait", "landscape"}, "description": "Shape of the picture; default square."},
-			"machine": map[string]any{"type": "string", "description": "Computer name or id; omit to use the first online computer that has Codex."},
+			"machine": map[string]any{"type": "string", "description": "Computer name or id; omit to use the first online computer that can generate images."},
 		},
 		"required": []string{"prompt"},
 	}, t.run, SourceLocalAgent)
@@ -93,10 +123,22 @@ func (t *generateImageTool) run(ctx context.Context, raw json.RawMessage) (strin
 	if a.Prompt == "" {
 		return "", &agl.ToolError{Msg: `"prompt" is required: describe the picture.`}
 	}
+	machines, err := t.svc.Machines(ctx, t.userID)
+	if err != nil {
+		return "", fmt.Errorf("generate_image: %w", err)
+	}
+	found := agl.FindCapable(machines, agl.CapImageGeneration, a.Machine, imageAgents())
+	if len(found) == 0 {
+		return "", &agl.ToolError{Msg: "None of the person's computers has a local agent that can generate images (Codex with image generation turned on). Tell them; don't draw it another way unless they ask."}
+	}
+	pick := found[0]
+	if !pick.Machine.Online {
+		return "", &agl.ToolError{Msg: fmt.Sprintf("The computer %s is offline. Tell the person to make sure it is on, connected, and agl is running (agl status), then try again.", pick.Machine.Name)}
+	}
 	path := "~/Downloads/" + t.now().Format("20060102-150405") + "-image.png"
 	out, err := t.svc.Run(ctx, agl.ToolRun{
-		UserID: t.userID, Chat: t.chat, Agent: imageAgent, Machine: a.Machine,
-		Task: imageTask(a.Prompt, a.Aspect, path), Notify: t.notify,
+		UserID: t.userID, Chat: t.chat, Agent: pick.Agent, Machine: pick.Machine.ID,
+		Task: imageBrief(pick.Agent)(a.Prompt, a.Aspect, path), Notify: t.notify,
 	})
 	if err != nil {
 		var te *agl.ToolError
@@ -110,7 +152,7 @@ func (t *generateImageTool) run(ctx context.Context, raw json.RawMessage) (strin
 		return "", &agl.ToolError{Msg: "Codex on the person's computer can't generate images right now: " + reason +
 			". Tell the person; updating Codex (npm i -g @openai/codex) and signing in again usually fixes it. Don't draw it another way unless they ask."}
 	}
-	f, err := t.svc.Fetch(ctx, agl.FetchRun{UserID: t.userID, Machine: a.Machine, Path: path})
+	f, err := t.svc.Fetch(ctx, agl.FetchRun{UserID: t.userID, Machine: pick.Machine.ID, Path: path})
 	if err != nil {
 		var te *agl.ToolError
 		if errors.As(err, &te) {

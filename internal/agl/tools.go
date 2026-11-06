@@ -65,6 +65,9 @@ type LocalMachine struct {
 	DefaultCwd    string
 	// Settings holds the owner's model / effort per agent id.
 	Settings map[string]store.MachineAgentSetting
+	// AglVersion is the machine's agl (decides whether its agents'
+	// capabilities are reported or assumed; see Capabilities).
+	AglVersion string
 }
 
 // HasAgent reports whether agent may run on m. A machine that reported
@@ -191,7 +194,7 @@ func (t *Tools) Machines(ctx context.Context, userID string) ([]LocalMachine, er
 			continue
 		}
 		lm := LocalMachine{ID: m.ID, Name: m.Name, Online: t.link.Online(m.ID), DefaultAccess: m.DefaultAccess, DefaultCwd: m.DefaultCwd,
-			Settings: m.AgentSettings}
+			Settings: m.AgentSettings, AglVersion: m.Version}
 		if lm.Name == "" {
 			lm.Name = m.Hostname
 		}

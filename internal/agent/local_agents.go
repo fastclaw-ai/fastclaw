@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
@@ -136,21 +135,9 @@ func (a *Agent) mountLocalAgents(ctx context.Context, msg bus.InboundMessage) st
 			return names[0], nil
 		}
 		tools.RegisterSendLocalFile(a.registry, fetcher, save, uid)
-		if maker, ok := svc.(tools.LocalImageMaker); ok && hasLocalAgent(machines, "codex") {
+		if maker, ok := svc.(tools.LocalImageMaker); ok && tools.CanGenerateImage(machines) {
 			tools.RegisterGenerateImage(a.registry, maker, save, uid, chat, notify)
 		}
 	}
 	return tools.LocalAgentsNote(machines)
-}
-
-// hasLocalAgent reports whether any of machines reports agent id.
-func hasLocalAgent(machines []agl.LocalMachine, id string) bool {
-	for _, m := range machines {
-		for _, a := range m.Agents {
-			if strings.EqualFold(a.ID, id) {
-				return true
-			}
-		}
-	}
-	return false
 }

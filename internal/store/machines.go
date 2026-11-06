@@ -25,6 +25,9 @@ type MachineAgent struct {
 	Status         string `json:"status,omitempty"`
 	InstallCommand string `json:"installCommand,omitempty"`
 	Guide          string `json:"guide,omitempty"`
+	// Capabilities beyond code agl detected (image_generation, web_search,
+	// browser); agl ≥ 0.3.6 only.
+	Capabilities []string `json:"capabilities,omitempty"`
 }
 
 // MachineAgentSetting is the owner's choice for one local agent on a

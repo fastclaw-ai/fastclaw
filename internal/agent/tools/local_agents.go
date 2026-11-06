@@ -145,9 +145,10 @@ func (t *localAgentsTool) list(ctx context.Context, _ json.RawMessage) (string, 
 		return "", fmt.Errorf("could not list the person's computers: %w", err)
 	}
 	type agentView struct {
-		ID        string `json:"id"`
-		Name      string `json:"name"`
-		Strengths string `json:"strengths,omitempty"`
+		ID           string   `json:"id"`
+		Name         string   `json:"name"`
+		Strengths    string   `json:"strengths,omitempty"`
+		Capabilities []string `json:"capabilities,omitempty"`
 	}
 	type machineView struct {
 		ID     string      `json:"id"`
@@ -160,7 +161,7 @@ func (t *localAgentsTool) list(ctx context.Context, _ json.RawMessage) (string, 
 	for _, m := range machines {
 		v := machineView{ID: m.ID, Name: m.Name, Online: m.Online, Access: m.DefaultAccess, Agents: []agentView{}}
 		for _, a := range m.Agents {
-			v.Agents = append(v.Agents, agentView{ID: a.ID, Name: a.Name, Strengths: agl.AgentStrengths(a.ID)})
+			v.Agents = append(v.Agents, agentView{ID: a.ID, Name: a.Name, Strengths: agl.AgentProfile(m, a), Capabilities: m.Capabilities(a)})
 		}
 		out = append(out, v)
 	}
@@ -202,7 +203,7 @@ func LocalAgentsNote(machines []agl.LocalMachine) string {
 		ids := make([]string, 0, len(m.Agents))
 		for _, a := range m.Agents {
 			ids = append(ids, a.ID)
-			if st := agl.AgentStrengths(a.ID); st != "" && !seen[a.ID] {
+			if st := agl.AgentProfile(m, a); st != "" && !seen[a.ID] {
 				seen[a.ID] = true
 				strengths = append(strengths, a.ID+": "+st)
 			}

@@ -237,6 +237,33 @@ which the gateway already uploads to the IM channel.
   the coding agent to export a PNG first.
 - Relative paths resolve against the machine's default cwd.
 
+### Capabilities and capability tools (`generate_image`)
+
+Tools are layered: the LLM agent's own tools; **capability tools** for
+something a local agent can do beyond code, where FastClaw picks the agent
+and writes its task; and `run_local_agent` for everything else. Choosing
+among them is the model's tool choice — a capability tool named after what
+the person asks for ("draw …" → `generate_image`) is picked reliably,
+where a free-form brief to `run_local_agent` drifted (models told Codex to
+"draw with pure code" instead of using its image model).
+
+- agl ≥ 0.3.6 reports each agent's `capabilities` (`image_generation` and
+  `browser` from `codex features list`, `web_search` for Claude Code);
+  stored on the machine's agents and returned by `/v1/machines`. For older
+  agl, `legacyCapabilities` assumes Codex generates images and Claude Code
+  searches the web (`internal/agl/capabilities.go`).
+- The hint and `local_agents` describe each agent with its capabilities
+  on that machine (`AgentProfile`), e.g. "image generation is turned off
+  on this computer".
+- `generate_image {prompt, aspect?, machine?}` is mounted when some
+  machine has an agent with `image_generation` that FastClaw can brief
+  (`imageBriefs`, Codex today). It runs a fixed task (use the image
+  generation tool, never code; answer `IMAGEGEN_UNAVAILABLE` instead of
+  drawing it another way), saves the PNG under `~/Downloads`, fetches it
+  into the workspace and returns `![](/workspace/<name>)`.
+- A new capability tool: add the capability to agl's detection, a phrase
+  in `capabilityPhrases`, and a tool whose brief FastClaw writes.
+
 ## IM turn semantics (passthrough agents)
 
 - agl session name `fc:<agentId>:<chatId>`, created/resumed with the

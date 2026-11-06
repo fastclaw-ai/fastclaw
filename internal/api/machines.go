@@ -85,6 +85,10 @@ func (s *Server) machineView(m *store.MachineRecord) map[string]any {
 			continue
 		}
 		set := m.AgentSetting(a.ID)
+		caps := (agl.LocalMachine{AglVersion: m.Version}).Capabilities(a)
+		if caps == nil {
+			caps = []string{}
+		}
 		feats := a.Features
 		if feats == nil {
 			feats = []string{}
@@ -93,6 +97,8 @@ func (s *Server) machineView(m *store.MachineRecord) map[string]any {
 			"id": a.ID, "name": a.Name, "available": a.Available,
 			"status": a.Status, "path": a.Path, "version": a.Version, "features": feats,
 			"installCommand": a.InstallCommand, "guide": a.Guide,
+			// What it can do beyond code (reported by agl ≥ 0.3.6, else assumed).
+			"capabilities": caps,
 			// The owner's choices (PATCH agents).
 			"enabled": !set.Disabled, "model": set.Model, "effort": set.Effort,
 		})

@@ -152,7 +152,9 @@ type agentInfo struct {
 	Path      string   `json:"path"`
 	Version   string   `json:"version"`
 	Status    string   `json:"status"`
-	Install   struct {
+	// What the agent can do beyond code (agl ≥ 0.3.6).
+	Capabilities []string `json:"capabilities"`
+	Install      struct {
 		InstallCommand string `json:"install_command"`
 		Guide          string `json:"guide"`
 	} `json:"install"`
@@ -187,6 +189,13 @@ func machineAgents(list []agentInfo) []store.MachineAgent {
 			}
 			feats = append(feats, clip(f))
 		}
+		var caps []string
+		for j, c := range a.Capabilities {
+			if j >= 16 {
+				break
+			}
+			caps = append(caps, clip(c))
+		}
 		status := clip(a.Status)
 		if status == "" { // agl ≤ 0.2.0
 			status = "not-found"
@@ -196,7 +205,7 @@ func machineAgents(list []agentInfo) []store.MachineAgent {
 		}
 		out = append(out, store.MachineAgent{ID: id, Name: name, Available: a.Available, Features: feats,
 			Path: clipN(a.Path, 1024), Version: clip(a.Version), Status: status,
-			InstallCommand: clipN(a.Install.InstallCommand, 1024), Guide: clipN(a.Install.Guide, 512)})
+			InstallCommand: clipN(a.Install.InstallCommand, 1024), Guide: clipN(a.Install.Guide, 512), Capabilities: caps})
 	}
 	return out
 }
