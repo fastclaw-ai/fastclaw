@@ -261,8 +261,20 @@ where a free-form brief to `run_local_agent` drifted (models told Codex to
   generation tool, never code; answer `IMAGEGEN_UNAVAILABLE` instead of
   drawing it another way), saves the PNG under `~/Downloads`, fetches it
   into the workspace and returns `![](/workspace/<name>)`.
-- A new capability tool: add the capability to agl's detection, a phrase
-  in `capabilityPhrases`, and a tool whose brief FastClaw writes.
+- Most capabilities need no tool: a phrase in `capabilityPhrases` puts
+  them in the hint and the model dispatches with `run_local_agent`
+  (`computer_use`: "can see and operate the apps on this computer"). A
+  dedicated tool is only for one the model keeps briefing wrong or whose
+  result FastClaw must handle (images: fetched into the chat).
+- A reported capability without a phrase is kept but not offered:
+  `browser`, because Codex's browser fails to open pages when driven
+  headless (`timeoutMs` error with Codex 0.166).
+- With FastClaw's own `image_gen` (admin-configured providers) on the
+  agent too, `image_gen` stays the default and `generate_image` is for
+  pictures the person wants from Codex / their computer, or when
+  `image_gen` fails. Without either tool the agent says it can't draw:
+  no computer linked, Codex missing, or image generation off (the hint
+  says "image generation is turned off on this computer").
 
 ## IM turn semantics (passthrough agents)
 

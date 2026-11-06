@@ -23,11 +23,15 @@ func TestCapabilitiesReportedOrAssumed(t *testing.T) {
 
 func TestAgentProfile(t *testing.T) {
 	m := LocalMachine{AglVersion: "0.3.6"}
-	on := AgentProfile(m, store.MachineAgent{ID: "codex", Capabilities: []string{CapImageGeneration, CapBrowser}})
-	for _, want := range []string{"code, files and shell", "GENERATES REAL IMAGES", "generate_image", "web browser"} {
+	on := AgentProfile(m, store.MachineAgent{ID: "codex", Capabilities: []string{CapImageGeneration, CapBrowser, CapComputerUse}})
+	for _, want := range []string{"code, files and shell", "GENERATES REAL IMAGES", "generate_image", "Computer Use"} {
 		if !strings.Contains(on, want) {
 			t.Errorf("profile lacks %q: %s", want, on)
 		}
+	}
+	// Reported but not offered: Codex's headless browser can't open pages.
+	if strings.Contains(strings.ToLower(on), "browser") {
+		t.Errorf("profile offers the browser: %s", on)
 	}
 	off := AgentProfile(m, store.MachineAgent{ID: "codex"})
 	if strings.Contains(off, "GENERATES REAL IMAGES") || !strings.Contains(off, "turned off") {

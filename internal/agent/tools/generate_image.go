@@ -62,11 +62,20 @@ type LocalImageMaker interface {
 // task itself — "use your image generation tool, never code" — because
 // models asked to brief Codex keep telling it to draw with Pillow/SVG,
 // especially once a chat has done that before.
+//
+// When the agent also has image_gen (FastClaw's own image providers),
+// that stays the default — faster, no approvals — and generate_image is
+// for pictures the person wants from their computer/Codex, or when
+// image_gen fails.
 func RegisterGenerateImage(r *Registry, svc LocalImageMaker, save SaveFileFunc, userID string, chat agl.ToolChat, notify func(agl.ToolNotice)) {
 	t := &generateImageTool{svc: svc, save: save, userID: userID, chat: chat, notify: notify, now: time.Now}
+	when := "Use it for EVERY request to draw, paint, generate or make an image — including \"让 codex 画…\" — instead of run_local_agent."
+	if r.HasTool("image_gen") {
+		when = "Use it when the person asks for the picture from Codex or their computer (\"让 codex 画…\"), or when image_gen is unavailable or fails; otherwise image_gen is faster. Never run_local_agent for a picture."
+	}
 	r.RegisterSerialFrom(GenerateImageToolName, strings.Join([]string{
 		"Generate a picture (photo, illustration, portrait, logo, poster, sticker, …) with the image generation model of Codex on the PERSON'S OWN computer, and get it ready to show in this chat.",
-		"Use it for EVERY request to draw, paint, generate or make an image — including \"让 codex 画…\" — instead of run_local_agent. Don't describe how to draw it; describe what the picture shows.",
+		when + " Don't describe how to draw it; describe what the picture shows.",
 		"Write \"prompt\" as a rich visual description: subject, style, composition, colors, mood, and any text that must appear in the image. Never ask for code, SVG or a specific drawing library.",
 		"It can take a minute or two. It returns putInReply: put that exactly in your reply so the image is shown, plus a short line of your own.",
 	}, "\n"), map[string]any{

@@ -14,6 +14,7 @@ const (
 	CapImageGeneration = "image_generation"
 	CapWebSearch       = "web_search"
 	CapBrowser         = "browser"
+	CapComputerUse     = "computer_use"
 )
 
 // MinCapabilitiesVersion is the first agl that reports capabilities. For
@@ -27,11 +28,14 @@ var legacyCapabilities = map[string][]string{
 	"claude": {CapWebSearch},
 }
 
-// capabilityPhrases describe a capability in the LLM agent's hint.
+// capabilityPhrases describe a capability in the LLM agent's hint. A
+// reported capability without a phrase is kept (API, devices page) but
+// not offered to the model: CapBrowser, because Codex's browser control
+// fails to open pages when driven headless (agl 0.3.7, Codex 0.166).
 var capabilityPhrases = map[string]string{
 	CapImageGeneration: "GENERATES REAL IMAGES with its image generation model (photos, illustrations, portraits, logos, posters) — for pictures use the generate_image tool, which runs it for you",
 	CapWebSearch:       "can search the web",
-	CapBrowser:         "can drive a web browser",
+	CapComputerUse:     "can see and operate the apps on this computer (Computer Use: read what an app shows, click, type); the person is asked to allow each app the first time",
 }
 
 // Capabilities returns what agent a can do beyond code on m.

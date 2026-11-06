@@ -143,3 +143,26 @@ func TestGenerateImageFollowsCapabilities(t *testing.T) {
 		t.Error("not mounted for an offline machine that can (the tool explains it is offline)")
 	}
 }
+
+func TestGenerateImageDefersToImageGen(t *testing.T) {
+	desc := func(withImageGen bool) string {
+		r := NewRegistry(t.TempDir(), t.TempDir())
+		if withImageGen {
+			r.Register("image_gen", "cloud images", map[string]any{"type": "object"}, func(context.Context, json.RawMessage) (string, error) { return "", nil })
+		}
+		RegisterGenerateImage(r, &fakeImageMaker{}, nil, "u", agl.ToolChat{}, nil)
+		for _, d := range r.Definitions() {
+			if d.Function.Name == GenerateImageToolName {
+				return d.Function.Description
+			}
+		}
+		t.Fatal("generate_image not registered")
+		return ""
+	}
+	if alone := desc(false); !strings.Contains(alone, "EVERY request") {
+		t.Errorf("without image_gen: %s", alone)
+	}
+	if both := desc(true); !strings.Contains(both, "image_gen is faster") || strings.Contains(both, "EVERY request") {
+		t.Errorf("with image_gen: %s", both)
+	}
+}

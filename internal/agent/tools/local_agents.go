@@ -215,7 +215,7 @@ func LocalAgentsNote(machines []agl.LocalMachine) string {
 		parts = append(parts, fmt.Sprintf("%s (%s: %s)", m.Name, state, agents))
 	}
 	return "The person has linked their own computer(s): " + strings.Join(parts, "; ") +
-		". When a request needs their computer (code, files, repos, running commands) or something you can't do yourself but a local agent can, use run_local_agent with the agent best suited; for any picture (draw, paint, generate an image) use generate_image when it is available. Answer everything else yourself. Never tell the person you can't do something a local agent here can do." +
+		". When a request needs their computer (code, files, repos, running commands) or something you can't do yourself but a local agent can, use run_local_agent with the agent best suited; for any picture (draw, paint, generate an image) use an image tool (image_gen, or generate_image for Codex on their computer — see their descriptions), never run_local_agent. Answer everything else yourself. Never tell the person you can't do something a local agent here can do." +
 		" When the person asks for Codex, Claude Code or another coding agent by name, that means run_local_agent on their computer (generate_image for a picture) — never run those CLIs with exec." +
 		" When the result is an image or file the person should see, fetch it with send_local_file and put it in your reply (ask for PNG instead of SVG)." +
 		strengthsNote(strengths)
