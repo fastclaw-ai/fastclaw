@@ -36,6 +36,14 @@ services:
       # Bind to all interfaces so the host port mapping works
       FASTCLAW_BIND: all
       FASTCLAW_PORT: "18953"
+      # Public origin of this gateway (scheme://host, no path), e.g.
+      # https://fastclaw.example.com. Users' computers download agl and
+      # link to <it>/agl through it ("connect my computer"); must be
+      # reachable from their machines over HTTPS. Required in production:
+      # unset, install commands use the origin of the request that made
+      # them, which is an internal address when a product's backend calls
+      # FastClaw.
+      FASTCLAW_PUBLIC_URL: "${FASTCLAW_PUBLIC_URL:-}"
       # Postgres backend (sqlite would also work; use it by clearing
       # these two and removing the postgres service below)
       FASTCLAW_STORAGE_TYPE: postgres

@@ -18,6 +18,15 @@ image:
 ## wall clocks and get UTC-fired schedules.
 timezone: "Asia/Shanghai"
 
+## Public origin of the gateway (scheme://host, no path), e.g.
+## https://fastclaw.example.com. Users' computers download agl and link
+## to <publicUrl>/agl through it ("connect my computer"), so it must be
+## reachable from their machines over HTTPS. Required for that feature:
+## empty, install commands use the origin of the request that made them,
+## an internal address when a product's backend calls in. The agl hub
+## keeps machine sockets in one process; route /agl to a single pod.
+publicUrl: ""
+
 ## Gateway
 gateway:
   replicas: 2

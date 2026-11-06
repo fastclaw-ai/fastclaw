@@ -9,6 +9,10 @@ data:
   FASTCLAW_BIND: "all"
   FASTCLAW_STORAGE_TYPE: "postgres"
   FASTCLAW_STORAGE_AUTO_MIGRATE: "true"
+  {{- with .Values.publicUrl }}
+  ## Public origin users' computers reach for agl (/agl).
+  FASTCLAW_PUBLIC_URL: {{ . | quote }}
+  {{- end }}
   {{- with .Values.timezone }}
   ## Server default timezone — last fallback after chatter / agent /
   ## system prefs.

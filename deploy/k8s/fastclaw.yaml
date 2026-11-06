@@ -81,6 +81,15 @@ data:
   FASTCLAW_STORAGE_TYPE: "postgres"
   FASTCLAW_STORAGE_AUTO_MIGRATE: "true"
 
+  # Public origin of this gateway (scheme://host, no path). Users'
+  # computers download agl and link to <it>/agl through it ("connect my
+  # computer"), so it must be reachable from their machines over HTTPS.
+  # Required: unset, install commands use the origin of the request that
+  # made them — an internal address when a product's backend calls in.
+  # The agl hub keeps machine sockets in one process: route /agl to a
+  # single gateway pod (see docs/agl-machines.md "Single instance").
+  FASTCLAW_PUBLIC_URL: "https://fastclaw.example.com"
+
   # Server default timezone (IANA name) — the LAST fallback in the chain
   # chatter pref → agent default → system default → TZ. Without it pods
   # run UTC, so agents whose chatters never set a timezone see UTC wall

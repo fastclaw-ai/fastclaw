@@ -195,6 +195,7 @@ database and is edited through the dashboard or `fastclaw agents config`.
 | `FASTCLAW_HOME` | `~/.fastclaw` | Where the SQLite DB and skill folders live. |
 | `FASTCLAW_PORT` | `18953` | Gateway HTTP port. |
 | `FASTCLAW_BIND` | `loopback` | `loopback` (127.0.0.1) or `all` (0.0.0.0). |
+| `FASTCLAW_PUBLIC_URL` | empty | Public origin (`https://host`, no path) users' computers reach to download agl and link through `/agl` ("connect my computer"). Required in production: empty uses the requesting origin, an internal address when a product's backend calls in. Must be HTTPS except for localhost. |
 | `FASTCLAW_STORAGE_TYPE` | `sqlite` | `sqlite` or `postgres`. |
 | `FASTCLAW_STORAGE_DSN` | empty | Postgres DSN, e.g. `postgres://u:p@host:5432/db?sslmode=disable`. Empty = sqlite at `$FASTCLAW_HOME/fastclaw.db`. |
 | `FASTCLAW_STORAGE_AUTO_MIGRATE` | `true` | Apply schema migrations on boot. |

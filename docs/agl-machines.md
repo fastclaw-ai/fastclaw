@@ -262,7 +262,7 @@ which the gateway already uploads to the IM channel.
 
 | Env | |
 | --- | --- |
-| `FASTCLAW_PUBLIC_URL` | Origin machines and install commands use, e.g. `https://fastclaw.example.com` (no `/agl`). Empty: the request's origin (honours `X-Forwarded-Proto/Host`). agl's installer requires HTTPS except for localhost. |
+| `FASTCLAW_PUBLIC_URL` | Origin machines and install commands use, e.g. `https://fastclaw.example.com` (no `/agl`). Empty: the request's origin (honours `X-Forwarded-Proto/Host`). agl's installer requires HTTPS except for localhost. **Set it in production**: a product's backend calls `/v1/machines/pairing` (and may relay `install.sh`) over an internal address, which would otherwise end up in the install command and the script's hub URL, where users' computers can't reach it. Deploy configs: `deploy/docker/docker-compose.yml`, `deploy/k8s/fastclaw.yaml`, helm `publicUrl`. Local `make dev`: put it in `.env.dev`. |
 
 ## Local test recipe (same Mac)
 
