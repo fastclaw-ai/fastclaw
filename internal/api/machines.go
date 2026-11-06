@@ -105,6 +105,10 @@ func (s *Server) machineView(m *store.MachineRecord) map[string]any {
 	if name == "" {
 		name = m.Hostname
 	}
+	latest := ""
+	if s.aglHub != nil {
+		latest = s.aglHub.LatestVersion()
+	}
 	return map[string]any{
 		"id":         m.ID,
 		"name":       name,
@@ -117,9 +121,14 @@ func (s *Server) machineView(m *store.MachineRecord) map[string]any {
 		"createdAt":  rfc3339OrNil(m.CreatedAt),
 		"agents":     agents,
 		// Tool mode settings (LLM agents dispatching to this machine).
-		"allowAgents":   m.AllowAgents,
-		"defaultAccess": firstNonEmptyStr(m.DefaultAccess, agl.AccessAsk),
-		"defaultCwd":    m.DefaultCwd,
+		// agl updates: the newest release, and whether this machine's
+		// agl takes a one-click update (daemon.update, agl ≥ 0.3.5).
+		"latestVersion":   latest,
+		"updateAvailable": agl.UpdateAvailable(m.Version, latest),
+		"remoteUpdate":    agl.RemoteUpdateSupported(m.Version),
+		"allowAgents":     m.AllowAgents,
+		"defaultAccess":   firstNonEmptyStr(m.DefaultAccess, agl.AccessAsk),
+		"defaultCwd":      m.DefaultCwd,
 	}
 }
 
@@ -435,6 +444,35 @@ func (s *Server) HandleTestMachineAgent(w http.ResponseWriter, r *http.Request) 
 	}
 	res, err := s.aglHub.TestAgent(r.Context(), m.ID, agent, strings.TrimSpace(body.Model), strings.TrimSpace(body.Effort))
 	if err != nil {
+		s.writeMachineLinkError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// HandleUpdateMachineAgl handles POST /v1/machines/{id}/update: the
+// computer's agl updates itself to the newest release. It never ends a
+// running task: {updated:false, busy:N} while one runs. agl < 0.3.5 can't
+// be updated this way (409 code "manual_update": run `agl update` there).
+func (s *Server) HandleUpdateMachineAgl(w http.ResponseWriter, r *http.Request) {
+	m, ok := s.ownMachine(w, r)
+	if !ok {
+		return
+	}
+	if !s.aglHub.Online(m.ID) {
+		writeFlatError(w, http.StatusConflict, "the computer is offline")
+		return
+	}
+	if !agl.RemoteUpdateSupported(m.Version) {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "this agl can't be updated remotely; run `agl update` on the computer", "code": "manual_update"})
+		return
+	}
+	res, err := s.aglHub.UpdateAgl(r.Context(), m.ID)
+	if err != nil {
+		if strings.Contains(err.Error(), "needs a link with more access") {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "this agl can't be updated remotely; run `agl update` on the computer", "code": "manual_update"})
+			return
+		}
 		s.writeMachineLinkError(w, err)
 		return
 	}

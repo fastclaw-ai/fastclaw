@@ -415,3 +415,43 @@ func TestHubLocalAgentOps(t *testing.T) {
 		}
 	}
 }
+
+func TestHubUpdateAgl(t *testing.T) {
+	th := newTestHub(t)
+	ctx := context.Background()
+	code, _, err := th.hub.CreatePairing(ctx, "u_alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := th.pair(code, "agl-1")
+	var got string
+	var mu sync.Mutex
+	conn := th.connect(token, "agl-1", func(method string, params json.RawMessage) any {
+		if method == "daemon.update" {
+			mu.Lock()
+			got = string(params)
+			mu.Unlock()
+			return map[string]any{"updated": true, "current": "0.3.5", "latest": "0.3.6"}
+		}
+		return map[string]any{}
+	})
+	defer conn.Close()
+	var machineID string
+	waitFor(t, "online", func() bool {
+		ms, _ := th.st.ListMachines(ctx, "u_alice")
+		if len(ms) == 1 && th.hub.Online(ms[0].ID) {
+			machineID = ms[0].ID
+			return true
+		}
+		return false
+	})
+	res, err := th.hub.UpdateAgl(ctx, machineID)
+	if err != nil || !res.Updated || res.Latest != "0.3.6" {
+		t.Fatalf("update = %+v %v", res, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if got != `{"if_idle":true}` {
+		t.Fatalf("daemon.update params = %s", got)
+	}
+}
