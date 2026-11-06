@@ -211,6 +211,8 @@ func (d *DBStore) migrateMachinesAddSettings(ctx context.Context) error {
 		{"machines", "allow_agents", `ALTER TABLE machines ADD COLUMN allow_agents INTEGER NOT NULL DEFAULT 1`},
 		{"machines", "default_access", `ALTER TABLE machines ADD COLUMN default_access TEXT NOT NULL DEFAULT 'ask'`},
 		{"machines", "default_cwd", `ALTER TABLE machines ADD COLUMN default_cwd TEXT NOT NULL DEFAULT ''`},
+		// Per local agent: enabled, model, effort (JSON keyed by agent id).
+		{"machines", "agent_settings", `ALTER TABLE machines ADD COLUMN agent_settings TEXT NOT NULL DEFAULT '{}'`},
 		// The hub address a machine paired through (per-product hubs).
 		{"machines", "hub_scope", `ALTER TABLE machines ADD COLUMN hub_scope TEXT NOT NULL DEFAULT ''`},
 		{"machine_pairings", "scope", `ALTER TABLE machine_pairings ADD COLUMN scope TEXT NOT NULL DEFAULT ''`},
@@ -2283,6 +2285,7 @@ func (d *DBStore) migrationSQL() []string {
 			allow_agents INTEGER NOT NULL DEFAULT 1,
 			default_access TEXT NOT NULL DEFAULT 'ask',
 			default_cwd TEXT NOT NULL DEFAULT '',
+			agent_settings TEXT NOT NULL DEFAULT '{}',
 			hub_scope TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_machines_user ON machines (user_id, created_at)`,

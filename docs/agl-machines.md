@@ -15,6 +15,7 @@ Gemini, … — are reachable two ways:
 ```
 product UI ──/v1/machines──▶ FastClaw ◀──wss /agl/ws/machine── agl daemon ──▶ claude / codex / …
 WeChat ──▶ LLM agent ──run_local_agent──▶ agl link ──▶ the CHATTER's machine        (tool mode)
+web chat ─▶ LLM agent ──run_local_agent──▶ agl link ──▶ the logged-in person's machine (tool mode)
 WeChat ──▶ private agent (runtime "agl") ──agl link──▶ that machine                 (passthrough)
 ```
 
@@ -44,10 +45,31 @@ WeChat ──▶ private agent (runtime "agl") ──agl link──▶ that mach
 - An end-user request never sees another end user's machines or private
   agents (`/v1/*` and the `/api/agents/{id}/…` endpoints answer 404).
 
+**Web chat.** The dashboard's streaming chat (`POST /api/chat/stream`)
+marks its turn with the logged-in person (`agent.ContextWithLocalAgentsUser`);
+the agent mounts the same tools for them when they have a machine with
+`allowAgents` (never for team chat, `message_agent`, the non-streaming
+`/api/chat`, groups or shared sessions). The run's chat is
+`agl.WebToolChat(user, agent, streamSession)`. Instead of IM text, the
+run streams `local_agent` events — `{kind: progress|approval|approval_resolved|done,
+agent, machine, text?, decision?, error?}` — and the page shows a card with
+Allow / Allow for this session / Deny buttons:
+
+| Call | |
+| --- | --- |
+| `GET /api/chat/local-agent-approval?agentId=&sessionId=` | `{pending:false}` or `{pending:true, agent, machine, title}` (a page opened mid-run) |
+| `POST /api/chat/local-agent-approval` `{agentId, sessionId, decision}` | answers the open request (`allow` / `allow_session` / `deny`); 404 when there is none for this person |
+
+The old `local-coding-agents` skill (exec of the gateway host's `codex` /
+`claude`) is gone; installed as-shipped copies are removed on startup
+(`retiredBundledSkills`). Self-hosted users link the host itself instead.
+
 ## Product API
 
-All calls: `Authorization: Bearer fc_…` **and** `X-Fastclaw-End-User`
-(else 400). Errors are `{"error": "<message>"}`.
+Callers: an integrating product — `Authorization: Bearer fc_…` **and**
+`X-Fastclaw-End-User` (else 400) — or the dashboard (console → Devices)
+with the logged-in user's session cookie, acting for that user (403 while a
+super_admin browses as someone else). Errors are `{"error": "<message>"}`.
 
 | Call | Response |
 | --- | --- |
@@ -56,13 +78,24 @@ All calls: `Authorization: Bearer fc_…` **and** `X-Fastclaw-End-User`
 | `GET /v1/machines` | `{machines: [Machine]}`, newest first, revoked excluded |
 | `PATCH /v1/machines/{id}` | body any of `{name, allowAgents, defaultAccess, defaultCwd}` → the updated Machine; 404 unless it is this end user's active machine; 400 on invalid values |
 | `DELETE /v1/machines/{id}` | `{ok: true}`; clears the token hash, closes the link (agl then reports "revoked" and stops retrying), agents bound to it stop running |
+| `POST /v1/machines/{id}/update` | the computer's agl updates itself to the newest release (`daemon.update` with `if_idle`, so a running task is never ended): `{updated, current, latest, busy?}`; 409 offline, or `{code: "manual_update"}` for agl < 0.3.5 (run `agl update` on the computer) |
+| `POST /v1/machines/{id}/agents/refresh` | re-detects the local agents now (`agents.list`), stores them, returns the Machine; 409 when offline |
+| `GET /v1/machines/{id}/agents/{agent}/models` | `{models: [{id, name?, description?, default?, efforts?[]}]}` (`agents.models`) |
+| `POST /v1/machines/{id}/agents/{agent}/test` `{model?, effort?}` | runs the agent read-only in a throwaway session with "Reply with just: OK" (uses a little of its own quota): `{durationMs, reply, model?}`; 409 offline, 502 when it fails |
 
 Machine:
 
 ```jsonc
 {"id": "mch_…", "name": "MacBook", "hostname": "MacBook-Pro", "os": "macos", "arch": "arm64",
  "version": "0.3.3", "online": true, "lastSeenAt": "…", "createdAt": "…",
- "agents": [{"id": "claude", "name": "Claude Code", "available": true}],
+ "agents": [{"id": "claude", "name": "Claude Code", "available": true,
+   "status": "ready",                       // ready | desktop-only | not-found (agl)
+   "path": "/Users/me/.local/bin/claude", "version": "2.1.318 (Claude Code)",
+   "features": ["models", "effort", …], "installCommand": "", "guide": "",
+   "enabled": true, "model": "", "effort": ""}],  // the owner's choices (PATCH agents)
+ "latestVersion": "0.3.5", // newest agl release ("" until known; checked hourly)
+ "updateAvailable": true,  // version < latestVersion
+ "remoteUpdate": false,    // agl ≥ 0.3.5: POST …/update works; older: `agl update` by hand
  "allowAgents": true,      // LLM agents may dispatch work here (tool mode); default true
  "defaultAccess": "ask",   // read_only | ask | edit | full; default "ask"
  "defaultCwd": ""}         // working dir for tool runs; "" = agl default (home), "~/" expanded by agl
@@ -70,6 +103,14 @@ Machine:
 
 `name` follows the hostname until it is set with PATCH (1–64 characters,
 one line); later hellos keep a chosen name. `defaultCwd` ≤ 1024 bytes.
+
+PATCH also takes `agents: {<agentId>: {enabled?, model?, effort?}}`, merged
+into the stored per-agent settings (`machines.agent_settings`). A disabled
+agent is left out of `local_agents` / `run_local_agent`; `model` / `effort`
+("" = the agent's default) are passed to `session.create` for new tool
+sessions. The executable and startup arguments stay agl's to decide on the
+computer (`AGL_<ID>_BIN`, `custom_agents` in `~/.agl/config.json`): agl has
+no remote method to change them.
 
 Agents (`/v1/agents`, existing error shape):
 
@@ -95,7 +136,7 @@ POST /v1/agents   (X-Fastclaw-End-User: user:42)
 | `GET /agl/download/<target>[.sha256]` | 302 to `https://github.com/thinkany-ai/agl/releases/latest/download/agl-<target>[.sha256]` |
 | `WS /agl/ws/machine?code=…&machine_id=…` | consumes the code (401 if unusable, before upgrading), sends `{"type":"paired","token"}`, stores `sha256(token)` |
 | `WS /agl/ws/machine?token=…&machine_id=…` | 401 for unknown/revoked tokens; expects `hello` within 10 s, then online |
-| `GET /agl/` | "computer linked" page (install.sh opens it) |
+| `GET /agl/` | static "computer linked" page (nothing opens it automatically; the app shows the link via pairing status) |
 
 Link handling: requests are correlated by id (30 s default timeout),
 events fan out to subscribers, the hub pings every 25 s and drops a link

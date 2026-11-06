@@ -173,3 +173,30 @@ func TestDiskTreeHash_IgnoresDotfiles(t *testing.T) {
 		t.Errorf("disk hash changed when only dotfiles were added: %s vs %s", h1, h2)
 	}
 }
+
+func TestRetireBundledSkills(t *testing.T) {
+	target := t.TempDir()
+	installBundledSkillsTo(makeBundle("old", "as shipped\n", nil), "bundled_skills", target)
+	installBundledSkillsTo(makeBundle("edited", "as shipped\n", nil), "bundled_skills", target)
+	if err := os.WriteFile(filepath.Join(target, "edited", "SKILL.md"), []byte("mine now\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A same-named skill the user wrote by hand (no sidecar).
+	if err := os.MkdirAll(filepath.Join(target, "handmade"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "handmade", "SKILL.md"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	retireBundledSkills(target, []string{"old", "edited", "handmade", "missing"})
+
+	if _, err := os.Stat(filepath.Join(target, "old")); !os.IsNotExist(err) {
+		t.Errorf("unmodified retired skill not removed: %v", err)
+	}
+	for _, keep := range []string{"edited", "handmade"} {
+		if _, err := os.Stat(filepath.Join(target, keep, "SKILL.md")); err != nil {
+			t.Errorf("%s removed: %v", keep, err)
+		}
+	}
+}

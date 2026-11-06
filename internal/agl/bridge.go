@@ -482,17 +482,25 @@ type sessionMeta struct {
 // openSession creates or resumes the chat's named session and brings its
 // access level in line with the agent's config.
 func (b *Bridge) openSession(ctx context.Context, machineID string, rc RuntimeConfig, name string) (string, bool, error) {
-	return openSession(ctx, b.link, machineID, rc.AglAgent, rc.Cwd, rc.Access, name)
+	return openSession(ctx, b.link, machineID, rc.AglAgent, rc.Cwd, rc.Access, name, store.MachineAgentSetting{})
 }
 
 // openSession creates or resumes the named session on machineID with
 // agent/cwd/access, re-applying access with session.configure when the
 // existing session runs at another level. It returns the session id and
 // whether the agent can steer a running turn.
-func openSession(ctx context.Context, link Link, machineID, agent, cwd, access, name string) (string, bool, error) {
+func openSession(ctx context.Context, link Link, machineID, agent, cwd, access, name string, set store.MachineAgentSetting) (string, bool, error) {
 	params := map[string]any{"agent": agent, "name": name, "access": access}
 	if cwd != "" {
 		params["cwd"] = cwd
+	}
+	// The owner's model / effort for this agent apply to new sessions; a
+	// reused one keeps what it started with.
+	if set.Model != "" {
+		params["model"] = set.Model
+	}
+	if set.Effort != "" {
+		params["effort"] = set.Effort
 	}
 	raw, err := link.Request(ctx, machineID, "session.create", params)
 	if err != nil {
@@ -527,11 +535,16 @@ func approve(ctx context.Context, link Link, machineID string, p *pendingApprova
 
 // approvalPrompt is the chat line for a permission_request event.
 func approvalPrompt(e AgentEvent) string {
+	return fmt.Sprintf(MsgApproval, approvalTitle(e))
+}
+
+// approvalTitle is what a permission_request asks to do.
+func approvalTitle(e AgentEvent) string {
 	title := strings.TrimSpace(e.Title)
 	if title == "" {
 		title = e.Tool
 	}
-	return fmt.Sprintf(MsgApproval, clipText(title, 300))
+	return clipText(title, 300)
 }
 
 func (b *Bridge) prompt(ctx context.Context, machineID, sessionID, text, mode, turnID string) (json.RawMessage, error) {

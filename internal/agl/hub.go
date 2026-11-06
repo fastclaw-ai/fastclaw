@@ -133,19 +133,72 @@ type wireMsg struct {
 }
 
 type helloMachine struct {
-	MachineID string `json:"machine_id"`
-	Hostname  string `json:"hostname"`
-	OS        string `json:"os"`
-	Arch      string `json:"arch"`
-	Version   string `json:"version"`
-	Protocol  int    `json:"protocol"`
-	Agents    []struct {
-		ID        string   `json:"id"`
-		Name      string   `json:"name"`
-		Available bool     `json:"available"`
-		Features  []string `json:"features"`
-	} `json:"agents"`
-	StartedAt uint64 `json:"started_at"`
+	MachineID string      `json:"machine_id"`
+	Hostname  string      `json:"hostname"`
+	OS        string      `json:"os"`
+	Arch      string      `json:"arch"`
+	Version   string      `json:"version"`
+	Protocol  int         `json:"protocol"`
+	Agents    []agentInfo `json:"agents"`
+	StartedAt uint64      `json:"started_at"`
+}
+
+// agentInfo is agl's AgentInfo (hello, agents.list), the fields we keep.
+type agentInfo struct {
+	ID        string   `json:"id"`
+	Name      string   `json:"name"`
+	Available bool     `json:"available"`
+	Features  []string `json:"features"`
+	Path      string   `json:"path"`
+	Version   string   `json:"version"`
+	Status    string   `json:"status"`
+	Install   struct {
+		InstallCommand string `json:"install_command"`
+		Guide          string `json:"guide"`
+	} `json:"install"`
+}
+
+// hiddenAgents are agl agents FastClaw doesn't offer: never stored, listed
+// or dispatched to.
+var hiddenAgents = map[string]bool{"droid": true} // Factory Droid
+
+// HiddenAgent reports whether agent id is one FastClaw doesn't offer.
+func HiddenAgent(id string) bool { return hiddenAgents[id] }
+
+// machineAgents trims agl's agent list to what we store.
+func machineAgents(list []agentInfo) []store.MachineAgent {
+	out := make([]store.MachineAgent, 0, len(list))
+	for i, a := range list {
+		if i >= maxAgents {
+			break
+		}
+		id := clip(a.ID)
+		if id == "" || HiddenAgent(id) {
+			continue
+		}
+		name := clip(a.Name)
+		if name == "" {
+			name = id
+		}
+		var feats []string
+		for j, f := range a.Features {
+			if j >= 16 {
+				break
+			}
+			feats = append(feats, clip(f))
+		}
+		status := clip(a.Status)
+		if status == "" { // agl ≤ 0.2.0
+			status = "not-found"
+			if a.Available {
+				status = "ready"
+			}
+		}
+		out = append(out, store.MachineAgent{ID: id, Name: name, Available: a.Available, Features: feats,
+			Path: clipN(a.Path, 1024), Version: clip(a.Version), Status: status,
+			InstallCommand: clipN(a.Install.InstallCommand, 1024), Guide: clipN(a.Install.Guide, 512)})
+	}
+	return out
 }
 
 type response struct {
@@ -185,6 +238,7 @@ type Hub struct {
 	store      store.MachineStore
 	publicURL  string
 	releaseURL string
+	latest     *latestRelease // newest agl release, for "update available"
 	now        func() time.Time
 	upgrader   websocket.Upgrader
 
@@ -202,6 +256,7 @@ func NewHub(st store.MachineStore, publicURL string) *Hub {
 		store:      st,
 		publicURL:  strings.TrimRight(strings.TrimSpace(publicURL), "/"),
 		releaseURL: DefaultReleaseURL,
+		latest:     newLatestRelease(DefaultLatestURL),
 		now:        func() time.Time { return time.Now().UTC() },
 		upgrader: websocket.Upgrader{
 			// Machines are not browsers; auth is the code / token.
@@ -376,7 +431,8 @@ func (h *Hub) PairingStatus(ctx context.Context, userID, code string) (status, m
 // --- HTTP endpoints ---
 
 func (h *Hub) handleIndex(w http.ResponseWriter, r *http.Request) {
-	// install.sh opens <hub>/ in a browser once linked.
+	// A plain landing page for anyone who opens <hub>/ by hand; the web
+	// app that made the pairing code shows the link itself (pairing/status).
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprint(w, `<!doctype html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>电脑已连接</title>
 <style>body{font-family:-apple-system,system-ui,sans-serif;max-width:32rem;margin:15vh auto;padding:0 16px;color:#222;background:#fff}@media(prefers-color-scheme:dark){body{color:#eee;background:#111}}</style></head>
@@ -548,12 +604,15 @@ func (h *Hub) revokeReplaced(ctx context.Context, keepID, aglID, scope string) {
 }
 
 // clip trims untrusted strings from a machine.
-func clip(s string) string {
+func clip(s string) string { return clipN(s, maxFieldLen) }
+
+// clipN trims s to at most n bytes of valid UTF-8.
+func clipN(s string, n int) string {
 	s = strings.TrimSpace(s)
-	if len(s) <= maxFieldLen {
+	if len(s) <= n {
 		return s
 	}
-	s = s[:maxFieldLen]
+	s = s[:n]
 	for !utf8.ValidString(s) {
 		s = s[:len(s)-1]
 	}
@@ -619,28 +678,7 @@ func (h *Hub) applyHello(ctx context.Context, m *store.MachineRecord, hm *helloM
 	}
 	m.Arch = clip(hm.Arch)
 	m.Version = clip(hm.Version)
-	m.Agents = m.Agents[:0]
-	for i, a := range hm.Agents {
-		if i >= maxAgents {
-			break
-		}
-		id := clip(a.ID)
-		if id == "" {
-			continue
-		}
-		name := clip(a.Name)
-		if name == "" {
-			name = id
-		}
-		var feats []string
-		for j, f := range a.Features {
-			if j >= 16 {
-				break
-			}
-			feats = append(feats, clip(f))
-		}
-		m.Agents = append(m.Agents, store.MachineAgent{ID: id, Name: name, Available: a.Available, Features: feats})
-	}
+	m.Agents = machineAgents(hm.Agents)
 	m.LastSeenAt = h.now()
 	if err := h.store.UpdateMachineHello(ctx, m); err != nil {
 		slog.Warn("agl: save hello failed", "machine", m.ID, "error", err)

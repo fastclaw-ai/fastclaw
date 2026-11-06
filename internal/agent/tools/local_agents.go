@@ -37,8 +37,14 @@ type LocalAgentRunner interface {
 // here from the turn — the model only names agents and machines among
 // that person's own. Only for 1:1 IM turns of the person the chat
 // belongs to (see Agent.mountLocalAgents).
-func RegisterLocalAgents(r *Registry, svc LocalAgentRunner, userID string, chat agl.ToolChat) {
-	t := &localAgentsTool{svc: svc, userID: userID, chat: chat}
+//
+// notify is set for a web chat: progress and approvals go to it.
+func RegisterLocalAgents(r *Registry, svc LocalAgentRunner, userID string, chat agl.ToolChat, notify func(agl.ToolNotice)) {
+	t := &localAgentsTool{svc: svc, userID: userID, chat: chat, notify: notify}
+	approvals := "the person may be asked in this chat to approve actions (they reply 1/2/3)"
+	if notify != nil {
+		approvals = "the person may be asked in this chat to approve actions (buttons in the chat)"
+	}
 
 	r.RegisterFrom(LocalAgentsToolName,
 		"List the person's own linked computers (name, online) and the local agents available on each (claude, codex, gemini, …) with what each is good at (e.g. codex can generate images). "+
@@ -52,7 +58,7 @@ func RegisterLocalAgents(r *Registry, svc LocalAgentRunner, userID string, chat 
 		"Pick the agent by its strengths, not just the first one: images → codex, and tell it to use its built-in image generation tool instead of drawing with code; code/files/analysis → any (claude is a good default).",
 		"Do NOT use it for chit-chat, general knowledge or plain text you can write yourself.",
 		"Write \"task\" as a complete, self-contained instruction for the coding agent (it does not see this chat), in the person's language. Follow-ups in this chat continue the same local session, so you can refer to earlier work.",
-		"The run can take minutes; the person may be asked in this chat to approve actions (they reply 1/2/3). Summarize the result for the person in your own words; do not paste huge outputs.",
+		"The run can take minutes; " + approvals + ". Summarize the result for the person in your own words; do not paste huge outputs.",
 		"If it returns an error (computer offline, agent missing, timeout), tell the person plainly what happened and what they can do.",
 	}, "\n"), map[string]any{
 		"type": "object",
@@ -129,6 +135,7 @@ type localAgentsTool struct {
 	svc    LocalAgentRunner
 	userID string
 	chat   agl.ToolChat
+	notify func(agl.ToolNotice)
 }
 
 func (t *localAgentsTool) list(ctx context.Context, _ json.RawMessage) (string, error) {
@@ -170,7 +177,7 @@ func (t *localAgentsTool) run(ctx context.Context, raw json.RawMessage) (string,
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
-	out, err := t.svc.Run(ctx, agl.ToolRun{UserID: t.userID, Chat: t.chat, Agent: a.Agent, Task: a.Task, Machine: a.Machine, Cwd: a.Cwd})
+	out, err := t.svc.Run(ctx, agl.ToolRun{UserID: t.userID, Chat: t.chat, Agent: a.Agent, Task: a.Task, Machine: a.Machine, Cwd: a.Cwd, Notify: t.notify})
 	if err != nil {
 		var te *agl.ToolError
 		if errors.As(err, &te) {
@@ -207,6 +214,7 @@ func LocalAgentsNote(machines []agl.LocalMachine) string {
 	}
 	return "The person has linked their own computer(s): " + strings.Join(parts, "; ") +
 		". When a request needs their computer (code, files, repos, running commands) or something you can't do yourself but a local agent can (e.g. generating an image), use run_local_agent with the agent best suited; answer everything else yourself. Never tell the person you can't do something a local agent here can do." +
+		" When the person asks for Codex, Claude Code or another coding agent by name, that means run_local_agent on their computer — never run those CLIs with exec." +
 		" When the result is an image or file the person should see, fetch it with send_local_file and put it in your reply (ask for PNG instead of SVG)." +
 		strengthsNote(strengths)
 }

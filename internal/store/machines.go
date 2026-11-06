@@ -17,6 +17,23 @@ type MachineAgent struct {
 	Name      string   `json:"name"`
 	Available bool     `json:"available"`
 	Features  []string `json:"features,omitempty"`
+	// As agl reports them (agents.list AgentInfo): the executable, its
+	// --version line, ready | desktop-only | not-found, and for a missing
+	// agent how to install it.
+	Path           string `json:"path,omitempty"`
+	Version        string `json:"version,omitempty"`
+	Status         string `json:"status,omitempty"`
+	InstallCommand string `json:"installCommand,omitempty"`
+	Guide          string `json:"guide,omitempty"`
+}
+
+// MachineAgentSetting is the owner's choice for one local agent on a
+// machine: whether LLM agents may use it, and the model / reasoning
+// effort its sessions start with ("" = the agent's own default).
+type MachineAgentSetting struct {
+	Disabled bool   `json:"disabled,omitempty"`
+	Model    string `json:"model,omitempty"`
+	Effort   string `json:"effort,omitempty"`
 }
 
 // MachineRecord is a user's own computer linked through agl. UserID is
@@ -46,6 +63,8 @@ type MachineRecord struct {
 	AllowAgents   bool
 	DefaultAccess string
 	DefaultCwd    string
+	// AgentSettings is keyed by agent id; absent = enabled, defaults.
+	AgentSettings map[string]MachineAgentSetting
 
 	// HubScope is the hub address the machine was paired through: ""
 	// for <public>/agl, else the product scope of <public>/agl/p/<scope>
@@ -55,6 +74,11 @@ type MachineRecord struct {
 	HubScope string
 }
 
+// AgentSetting returns the owner's setting for agent (zero value when unset).
+func (m *MachineRecord) AgentSetting(agent string) MachineAgentSetting {
+	return m.AgentSettings[agent]
+}
+
 // MachineSettings is a partial update of a machine's user-editable
 // fields; nil fields are left unchanged.
 type MachineSettings struct {
@@ -62,6 +86,8 @@ type MachineSettings struct {
 	AllowAgents   *bool
 	DefaultAccess *string
 	DefaultCwd    *string
+	// AgentSettings replaces the whole per-agent map when non-nil.
+	AgentSettings map[string]MachineAgentSetting
 }
 
 // Revoked reports whether the machine was revoked.
@@ -187,14 +213,14 @@ func (d *DBStore) SetMachinePairingMachine(ctx context.Context, codeHash, machin
 	return err
 }
 
-const machineColumns = `id, user_id, agl_machine_id, name, hostname, os, arch, version, agents, token_hash, last_seen_at, created_at, revoked_at, allow_agents, default_access, default_cwd, hub_scope`
+const machineColumns = `id, user_id, agl_machine_id, name, hostname, os, arch, version, agents, token_hash, last_seen_at, created_at, revoked_at, allow_agents, default_access, default_cwd, agent_settings, hub_scope`
 
 func scanMachine(scanner interface{ Scan(dest ...any) error }) (*MachineRecord, error) {
 	var m MachineRecord
-	var agents string
+	var agents, agentSettings string
 	var seen, created, revoked, allow int64
 	if err := scanner.Scan(&m.ID, &m.UserID, &m.AglMachineID, &m.Name, &m.Hostname, &m.OS, &m.Arch, &m.Version,
-		&agents, &m.TokenHash, &seen, &created, &revoked, &allow, &m.DefaultAccess, &m.DefaultCwd, &m.HubScope); err != nil {
+		&agents, &m.TokenHash, &seen, &created, &revoked, &allow, &m.DefaultAccess, &m.DefaultCwd, &agentSettings, &m.HubScope); err != nil {
 		return nil, scanErr(err)
 	}
 	m.AllowAgents = allow != 0
@@ -203,6 +229,9 @@ func scanMachine(scanner interface{ Scan(dest ...any) error }) (*MachineRecord, 
 	}
 	if agents != "" {
 		_ = json.Unmarshal([]byte(agents), &m.Agents)
+	}
+	if agentSettings != "" {
+		_ = json.Unmarshal([]byte(agentSettings), &m.AgentSettings)
 	}
 	m.LastSeenAt, m.CreatedAt, m.RevokedAt = fromMillis(seen), fromMillis(created), fromMillis(revoked)
 	return &m, nil
@@ -213,6 +242,14 @@ func marshalMachineAgents(agents []MachineAgent) string {
 		agents = []MachineAgent{}
 	}
 	blob, _ := json.Marshal(agents)
+	return string(blob)
+}
+
+func marshalAgentSettings(s map[string]MachineAgentSetting) string {
+	if s == nil {
+		s = map[string]MachineAgentSetting{}
+	}
+	blob, _ := json.Marshal(s)
 	return string(blob)
 }
 
@@ -227,12 +264,12 @@ func (d *DBStore) CreateMachine(ctx context.Context, m *MachineRecord) error {
 		m.DefaultAccess = "ask"
 	}
 	_, err := d.db.ExecContext(ctx,
-		fmt.Sprintf(`INSERT INTO machines (%s) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)`, machineColumns,
+		fmt.Sprintf(`INSERT INTO machines (%s) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)`, machineColumns,
 			d.ph(1), d.ph(2), d.ph(3), d.ph(4), d.ph(5), d.ph(6), d.ph(7), d.ph(8), d.ph(9), d.ph(10), d.ph(11), d.ph(12), d.ph(13),
-			d.ph(14), d.ph(15), d.ph(16), d.ph(17)),
+			d.ph(14), d.ph(15), d.ph(16), d.ph(17), d.ph(18)),
 		m.ID, m.UserID, m.AglMachineID, m.Name, m.Hostname, m.OS, m.Arch, m.Version, marshalMachineAgents(m.Agents),
 		m.TokenHash, toMillis(m.LastSeenAt), toMillis(m.CreatedAt), toMillis(m.RevokedAt),
-		boolInt(m.AllowAgents), m.DefaultAccess, m.DefaultCwd, m.HubScope)
+		boolInt(m.AllowAgents), m.DefaultAccess, m.DefaultCwd, marshalAgentSettings(m.AgentSettings), m.HubScope)
 	return err
 }
 
@@ -344,6 +381,9 @@ func (d *DBStore) UpdateMachineSettings(ctx context.Context, id string, s Machin
 	}
 	if s.DefaultCwd != nil {
 		add("default_cwd", *s.DefaultCwd)
+	}
+	if s.AgentSettings != nil {
+		add("agent_settings", marshalAgentSettings(s.AgentSettings))
 	}
 	if len(sets) == 0 {
 		if _, err := d.GetMachine(ctx, id); err != nil {

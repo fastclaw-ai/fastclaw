@@ -128,11 +128,15 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	// hub the machines dial into. See docs/agl-machines.md.
 	if s.aglHub != nil {
 		for pattern, h := range map[string]http.HandlerFunc{
-			"POST /v1/machines/pairing":        s.HandleCreateMachinePairing,
-			"POST /v1/machines/pairing/status": s.HandleMachinePairingStatus,
-			"GET /v1/machines":                 s.HandleListMachines,
-			"PATCH /v1/machines/{id}":          s.HandleUpdateMachine,
-			"DELETE /v1/machines/{id}":         s.HandleDeleteMachine,
+			"POST /v1/machines/pairing":                   s.HandleCreateMachinePairing,
+			"POST /v1/machines/pairing/status":            s.HandleMachinePairingStatus,
+			"GET /v1/machines":                            s.HandleListMachines,
+			"PATCH /v1/machines/{id}":                     s.HandleUpdateMachine,
+			"DELETE /v1/machines/{id}":                    s.HandleDeleteMachine,
+			"POST /v1/machines/{id}/agents/refresh":       s.HandleRefreshMachineAgents,
+			"POST /v1/machines/{id}/update":               s.HandleUpdateMachineAgl,
+			"GET /v1/machines/{id}/agents/{agent}/models": s.HandleMachineAgentModels,
+			"POST /v1/machines/{id}/agents/{agent}/test":  s.HandleTestMachineAgent,
 		} {
 			mux.HandleFunc(pattern, s.authMiddleware(rateLimitMiddleware(s.limiter, getUserID, h)))
 		}
