@@ -332,3 +332,86 @@ func TestHelloKeepsUserChosenName(t *testing.T) {
 		t.Fatalf("rename lost on hello: %+v", m)
 	}
 }
+
+// The Devices page: re-detect agents, list an agent's models, test it.
+func TestHubLocalAgentOps(t *testing.T) {
+	th := newTestHub(t)
+	ctx := context.Background()
+	code, _, err := th.hub.CreatePairing(ctx, "u_alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := th.pair(code, "agl-1")
+	var conn *websocket.Conn
+	var calls []string
+	var mu sync.Mutex
+	conn = th.connect(token, "agl-1", func(method string, params json.RawMessage) any {
+		mu.Lock()
+		calls = append(calls, method+" "+string(params))
+		mu.Unlock()
+		switch method {
+		case "agents.list":
+			return []map[string]any{
+				{"id": "codex", "name": "Codex", "available": true, "status": "ready", "path": "/usr/local/bin/codex",
+					"version": "codex-cli 0.166.0", "features": []string{"models", "effort"}},
+				{"id": "cursor", "name": "Cursor Agent", "available": false, "status": "not-found",
+					"install": map[string]any{"install_command": "curl https://cursor.com/install -fsS | bash"}},
+				// Factory Droid isn't offered: dropped.
+				{"id": "droid", "name": "Factory Droid", "available": true, "status": "ready"},
+			}
+		case "agents.models":
+			return map[string]any{"agent": "codex", "models": []map[string]any{{"id": "gpt-5.5", "default": true, "efforts": []string{"low", "high"}}}}
+		case "session.create":
+			return map[string]any{"id": "s_test", "current_model": "gpt-5.5"}
+		case "session.prompt":
+			var p struct {
+				TurnID string `json:"turn_id"`
+			}
+			_ = json.Unmarshal(params, &p)
+			for _, e := range []map[string]any{
+				{"kind": "turn_started", "turn_id": p.TurnID},
+				{"kind": "text_delta", "text": "OK"},
+				{"kind": "turn_ended", "turn_id": p.TurnID, "outcome": "completed"},
+			} {
+				_ = conn.WriteJSON(map[string]any{"type": "event", "session_id": "s_test", "seq": 1, "event": e})
+			}
+			return map[string]any{"session_id": "s_test"}
+		}
+		return map[string]any{}
+	})
+	defer conn.Close()
+	var machineID string
+	waitFor(t, "online", func() bool {
+		ms, _ := th.st.ListMachines(ctx, "u_alice")
+		if len(ms) == 1 && th.hub.Online(ms[0].ID) {
+			machineID = ms[0].ID
+			return true
+		}
+		return false
+	})
+
+	m, err := th.hub.RefreshAgents(ctx, machineID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Agents) != 2 || m.Agents[0].Path != "/usr/local/bin/codex" || m.Agents[0].Version != "codex-cli 0.166.0" ||
+		m.Agents[1].Status != "not-found" || !strings.Contains(m.Agents[1].InstallCommand, "cursor.com") {
+		t.Fatalf("agents = %+v", m.Agents)
+	}
+	models, err := th.hub.AgentModels(ctx, machineID, "codex")
+	if err != nil || len(models) != 1 || models[0].ID != "gpt-5.5" || !models[0].Default || len(models[0].Efforts) != 2 {
+		t.Fatalf("models = %+v %v", models, err)
+	}
+	res, err := th.hub.TestAgent(ctx, machineID, "codex", "gpt-5.5", "high")
+	if err != nil || res.Reply != "OK" || res.Model != "gpt-5.5" {
+		t.Fatalf("test = %+v %v", res, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	joined := strings.Join(calls, "\n")
+	for _, want := range []string{`"access":"read_only"`, `"model":"gpt-5.5"`, `"effort":"high"`, "session.close"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("calls lack %s:\n%s", want, joined)
+		}
+	}
+}

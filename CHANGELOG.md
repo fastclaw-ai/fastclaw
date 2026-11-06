@@ -5,6 +5,36 @@ action on upgrade — read those notes before deploying.
 
 ## [Unreleased]
 
+### Added — connect your own computer (agl)
+
+Console → Devices links a person's own Mac or Linux computer with
+[agl](https://github.com/thinkany-ai/agl): one install command, then the
+agents they chat with — in the web chat or a 1:1 IM chat — can hand tasks
+to the coding agents on it (Claude Code, Codex, Gemini, Kimi, Grok, …)
+with `run_local_agent`, and bring files back with `send_local_file`. When
+the coding agent asks to run a command or edit a file, the web chat shows
+Allow / Allow for this session / Deny buttons (IM chats reply 1/2/3).
+Per computer: whether agents may use it, the permissions runs start with
+and the default folder; per local agent: on/off, model and reasoning
+effort, and a test run. Integrating products get the same through
+`/v1/machines` with `X-Fastclaw-End-User`. Only the computer's owner can
+see or use it. See `docs/agl-machines.md`.
+
+### Removed — `local-coding-agents` skill
+
+The bundled skill that ran the gateway host's `codex` / `claude` CLIs with
+`exec` is gone; its unmodified installed copies are deleted on startup (an
+edited copy is kept). On a self-hosted install, link the host itself in
+Console → Devices to keep using its coding agents.
+
+### Changed — BoxLite defaults to BoxLite Cloud
+
+The BoxLite sandbox now defaults to `https://api.boxlite.ai/v1` with no
+path prefix, and its image is optional (`thinkany/fastclaw-sandbox:latest`
+when empty; any public registry image works). A URL set to the old
+`api.dev.boxlite.ai` host keeps its `default` prefix. The unused
+`FASTCLAW_SANDBOX_BOXLITE_CLIENT_ID` setting was removed.
+
 ### Added — per-turn cost in USD
 
 Each model call is now costed at the unit price of the model it actually

@@ -100,3 +100,38 @@ func TestLocalAgentToolsOfferedOnlyToChatterWithMachine(t *testing.T) {
 		t.Fatal("tools mounted without a runner")
 	}
 }
+
+// A dashboard chat stream marks its turn with the logged-in person: the
+// tools go to them, bound to the web chat, and updates become stream
+// events. Without the mark (team chat, message_agent, plain /api/chat)
+// web turns get nothing.
+func TestLocalAgentToolsOnWebChat(t *testing.T) {
+	svc := &fakeLocalAgents{byUser: map[string][]agl.LocalMachine{
+		"u_alice": {{ID: "mch_a", Name: "MacBook", Online: true}},
+	}}
+	withLocalAgents(t, svc)
+	web := bus.InboundMessage{Channel: "web", ChatID: "sess1", PeerKind: "dm", UserID: "u_alice"}
+	streamed := ContextWithStream(context.Background(), nil, nil, nil, "u_alice", "agt_persona", "sess1")
+
+	a := &Agent{name: "agt_persona", ownerUserID: "app", registry: tools.NewRegistry("", "")}
+	if a.mountLocalAgents(streamed, web) != "" {
+		t.Fatal("unmarked web turn got the tools")
+	}
+	ctx := ContextWithLocalAgentsUser(streamed, "u_alice")
+	a = &Agent{name: "agt_persona", ownerUserID: "app", registry: tools.NewRegistry("", "")}
+	if note := a.mountLocalAgents(ctx, web); !strings.Contains(note, "MacBook") {
+		t.Fatalf("note = %q", note)
+	}
+	if a.mountLocalAgents(ContextWithLocalAgentsUser(context.Background(), "u_alice"), web) != "" {
+		// no stream to report approvals to
+		t.Fatal("web turn without a stream got the tools")
+	}
+	args, _ := json.Marshal(map[string]any{"agent": "claude", "task": "ls"})
+	if _, err := a.registry.Execute(ctx, tools.RunLocalAgentToolName, string(args)); err != nil {
+		t.Fatal(err)
+	}
+	r := svc.runs[len(svc.runs)-1]
+	if r.UserID != "u_alice" || r.Chat != agl.WebToolChat("u_alice", "agt_persona", "sess1") || r.Notify == nil {
+		t.Fatalf("run = %+v", r)
+	}
+}

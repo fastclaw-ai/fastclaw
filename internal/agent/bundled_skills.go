@@ -63,6 +63,38 @@ func InstallBundledSkills() {
 		return
 	}
 	installBundledSkillsTo(bundledSkillsFS, "bundled_skills", targetDir)
+	retireBundledSkills(targetDir, retiredBundledSkills)
+}
+
+// retiredBundledSkills were bundled by older binaries and no longer are.
+// Their as-shipped copies are removed from the managed skills directory
+// on startup; a copy the user edited stays (it is theirs now).
+//
+//   - local-coding-agents: drove the gateway host's codex / claude CLIs
+//     with exec. Coding agents now run on the person's own computer
+//     through agl (run_local_agent; console → Devices).
+var retiredBundledSkills = []string{"local-coding-agents"}
+
+// retireBundledSkills deletes each named skill under targetDir when it is
+// still exactly what a bundle installed (on-disk hash == its sidecar).
+func retireBundledSkills(targetDir string, names []string) {
+	for _, name := range names {
+		dir := filepath.Join(targetDir, name)
+		sidecar, err := readBundledHash(dir)
+		if err != nil {
+			continue // absent, or never installed by a bundle
+		}
+		disk, err := diskTreeHash(dir)
+		if err != nil || disk != sidecar {
+			slog.Info("keeping retired bundled skill, user-modified", "name", name, "path", dir)
+			continue
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			slog.Warn("failed to remove retired bundled skill", "name", name, "error", err)
+			continue
+		}
+		slog.Info("removed retired bundled skill", "name", name, "path", dir)
+	}
 }
 
 // installBundledSkillsTo is the testable core: pulls bundled skills from

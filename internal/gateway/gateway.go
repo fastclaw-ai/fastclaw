@@ -1016,7 +1016,7 @@ func splitFilesFromReply(ctx context.Context, ws workspace.Store, agentID, proje
 // the gateway resolves against (sessions/<chatID>/). Turns that run
 // without a session scope — cron jobs, web-dashboard default scope,
 // and anything that shells out to a host tool whose cwd is the
-// agent-shared root (`exec`, the local-coding-agents hand-off) — drop
+// agent-shared root (`exec`) — drop
 // their files directly under <root>/<agent>/. Resolving only the
 // session scope therefore misses the file, and the image is silently
 // stripped from the reply with nothing sent to the IM channel.

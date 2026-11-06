@@ -1192,6 +1192,7 @@ export interface ChatStreamEvent {
     | "error"
     | "done"
     | "subagent_progress"
+    | "local_agent"
     | "status";
   // Per-session monotonic sequence assigned by chat_events. Lets the
   // chat page dedupe events arriving on both the active POST stream
@@ -1224,6 +1225,13 @@ export interface ChatStreamEvent {
     // failed and the backend is retrying it.
     attempt?: number;
     maxAttempts?: number;
+    // local_agent payload: run_local_agent on the person's computer.
+    kind?: "progress" | "approval" | "approval_resolved" | "done";
+    agent?: string;
+    machine?: string;
+    text?: string;
+    decision?: string;
+    error?: string;
   };
 }
 
@@ -2664,4 +2672,139 @@ export function saveConnectorsConfig(url: string, apiKey: string) {
 
 export function clearConnectorsConfig() {
   return connectorJSON<ConnectorsConfig>("/api/admin/connectors-config", jsonInit("DELETE"));
+}
+
+// ── Devices: the person's own computers linked through agl ────────────
+// (internal/api/machines.go). Agents hand work to the coding agents on
+// them (Claude Code, Codex, …) with run_local_agent.
+
+export interface MachineAgent {
+  id: string;
+  name: string;
+  available: boolean;
+  // ready | desktop-only | not-found (as agl reports it)
+  status: string;
+  path: string;
+  version: string;
+  features: string[];
+  installCommand: string;
+  guide: string;
+  // The owner's choices: whether agents may use it, and the model /
+  // reasoning effort its sessions start with ("" = its own default).
+  enabled: boolean;
+  model: string;
+  effort: string;
+}
+
+export interface MachineAgentModel {
+  id: string;
+  name?: string;
+  description?: string;
+  default?: boolean;
+  efforts?: string[];
+}
+
+export type MachineAccess = "read_only" | "ask" | "edit" | "full";
+
+export interface Machine {
+  id: string;
+  name: string;
+  hostname: string;
+  os: string;
+  arch: string;
+  version: string;
+  online: boolean;
+  lastSeenAt: string | null;
+  createdAt: string | null;
+  agents: MachineAgent[];
+  allowAgents: boolean;
+  defaultAccess: MachineAccess;
+  defaultCwd: string;
+}
+
+export interface MachinePairing {
+  code: string;
+  installCommand: string;
+  expiresAt: string;
+}
+
+async function machineJSON<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await apiFetch(path, init);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((body as { error?: string }).error || `HTTP ${res.status}`);
+  return body as T;
+}
+
+const machineInit = (method: string, body?: unknown): RequestInit => ({
+  method,
+  headers: { "Content-Type": "application/json" },
+  body: body === undefined ? undefined : JSON.stringify(body),
+});
+
+export async function listMachines(): Promise<Machine[]> {
+  return (await machineJSON<{ machines: Machine[] }>("/v1/machines")).machines;
+}
+
+export function createMachinePairing(): Promise<MachinePairing> {
+  return machineJSON<MachinePairing>("/v1/machines/pairing", machineInit("POST", {}));
+}
+
+export function getMachinePairingStatus(code: string) {
+  return machineJSON<{ status: "pending" | "connected" | "expired"; machineId?: string }>(
+    "/v1/machines/pairing/status",
+    machineInit("POST", { code }),
+  );
+}
+
+export interface MachinePatch {
+  name?: string;
+  allowAgents?: boolean;
+  defaultAccess?: MachineAccess;
+  defaultCwd?: string;
+  agents?: Record<string, { enabled?: boolean; model?: string; effort?: string }>;
+}
+
+export function updateMachine(id: string, patch: MachinePatch) {
+  return machineJSON<Machine>(`/v1/machines/${encodeURIComponent(id)}`, machineInit("PATCH", patch));
+}
+
+export function deleteMachine(id: string) {
+  return machineJSON<{ ok: boolean }>(`/v1/machines/${encodeURIComponent(id)}`, machineInit("DELETE"));
+}
+
+// Re-detect the computer's local agents now.
+export function refreshMachineAgents(id: string) {
+  return machineJSON<Machine>(`/v1/machines/${encodeURIComponent(id)}/agents/refresh`, machineInit("POST", {}));
+}
+
+export async function getMachineAgentModels(id: string, agent: string): Promise<MachineAgentModel[]> {
+  const r = await machineJSON<{ models: MachineAgentModel[] }>(
+    `/v1/machines/${encodeURIComponent(id)}/agents/${encodeURIComponent(agent)}/models`,
+  );
+  return r.models;
+}
+
+// Runs the agent read-only with a one-line prompt (uses a little of its quota).
+export function testMachineAgent(id: string, agent: string, opts: { model?: string; effort?: string }) {
+  return machineJSON<{ durationMs: number; reply: string; model?: string }>(
+    `/v1/machines/${encodeURIComponent(id)}/agents/${encodeURIComponent(agent)}/test`,
+    machineInit("POST", opts),
+  );
+}
+
+// A web chat's run_local_agent waiting for the person's approval.
+export interface LocalAgentApproval {
+  pending: boolean;
+  agent?: string;
+  machine?: string;
+  title?: string;
+}
+
+export function getLocalAgentApproval(agentId: string, sessionId: string) {
+  const q = new URLSearchParams({ agentId, sessionId });
+  return machineJSON<LocalAgentApproval>(`/api/chat/local-agent-approval?${q}`);
+}
+
+export function decideLocalAgentApproval(agentId: string, sessionId: string, decision: "allow" | "allow_session" | "deny") {
+  return machineJSON<{ ok: boolean }>("/api/chat/local-agent-approval", machineInit("POST", { agentId, sessionId, decision }));
 }

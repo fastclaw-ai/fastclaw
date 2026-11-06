@@ -48,14 +48,23 @@ type ToolChat struct {
 
 func (c ToolChat) key() string { return c.Channel + "\x00" + c.AccountID + "\x00" + c.ChatID }
 
+// WebToolChat is the chat of a dashboard conversation: userID chatting
+// agentID in the stream session sessionKey. The page that answers its
+// approvals builds the same value.
+func WebToolChat(userID, agentID, sessionKey string) ToolChat {
+	return ToolChat{Channel: "web", AccountID: userID, ChatID: agentID + "\x00" + sessionKey, AgentID: agentID}
+}
+
 // LocalMachine is one of the chatter's machines LLM agents may use.
 type LocalMachine struct {
 	ID            string
 	Name          string
 	Online        bool
-	Agents        []store.MachineAgent // available ones only
+	Agents        []store.MachineAgent // available and enabled ones only
 	DefaultAccess string
 	DefaultCwd    string
+	// Settings holds the owner's model / effort per agent id.
+	Settings map[string]store.MachineAgentSetting
 }
 
 // HasAgent reports whether agent may run on m. A machine that reported
@@ -90,6 +99,25 @@ func (m LocalMachine) canonicalAgent(agent string) string {
 	return agent
 }
 
+// Kinds of ToolNotice.
+const (
+	NoticeProgress         = "progress"          // Text: what the agent is doing
+	NoticeApproval         = "approval"          // Text: what it asks permission for
+	NoticeApprovalResolved = "approval_resolved" // Decision: allow | allow_session | deny | timeout | failed
+	NoticeDone             = "done"              // the run ended (any outcome)
+)
+
+// ToolNotice is one update of a run, for a chat that can't take IM text
+// (the web chat renders it as a card with approval buttons).
+type ToolNotice struct {
+	Kind     string
+	Agent    string // display name
+	Machine  string // display name
+	Text     string
+	Decision string
+	Error    string // approval_resolved with Decision "failed"
+}
+
 // ToolRun is one run_local_agent call.
 type ToolRun struct {
 	// UserID owns the machines: the chatter the turn runs for, never
@@ -101,6 +129,10 @@ type ToolRun struct {
 	Task    string
 	Machine string // id or name; "" = the first online one with Agent
 	Cwd     string // "" = the machine's default
+	// Notify, when set, receives progress and approval requests instead
+	// of IM messages to Chat (web chat). Approvals are then answered
+	// with Decide, not a 1/2/3 reply.
+	Notify func(ToolNotice)
 }
 
 // ToolError is a run failure the model should relay to the person.
@@ -115,6 +147,10 @@ type toolApproval struct {
 	userID    string
 	chat      ToolChat
 	p         pendingApproval
+	title     string
+	agent     string // display names, for PendingApproval
+	machine   string
+	notify    func(ToolNotice) // nil: IM chat
 }
 
 // Tools runs tool-mode turns on users' machines.
@@ -154,7 +190,8 @@ func (t *Tools) Machines(ctx context.Context, userID string) ([]LocalMachine, er
 		if m.Revoked() || !m.AllowAgents || m.UserID != userID {
 			continue
 		}
-		lm := LocalMachine{ID: m.ID, Name: m.Name, Online: t.link.Online(m.ID), DefaultAccess: m.DefaultAccess, DefaultCwd: m.DefaultCwd}
+		lm := LocalMachine{ID: m.ID, Name: m.Name, Online: t.link.Online(m.ID), DefaultAccess: m.DefaultAccess, DefaultCwd: m.DefaultCwd,
+			Settings: m.AgentSettings}
 		if lm.Name == "" {
 			lm.Name = m.Hostname
 		}
@@ -165,7 +202,7 @@ func (t *Tools) Machines(ctx context.Context, userID string) ([]LocalMachine, er
 			lm.DefaultAccess = AccessAsk
 		}
 		for _, a := range m.Agents {
-			if a.Available {
+			if a.Available && !HiddenAgent(a.ID) && !m.AgentSetting(a.ID).Disabled {
 				lm.Agents = append(lm.Agents, a)
 			}
 		}
@@ -290,7 +327,7 @@ func (t *Tools) Run(ctx context.Context, r ToolRun) (string, error) {
 	defer unsubscribe()
 
 	name := ToolSessionName(m.ID, agent, r.Chat)
-	sid, _, err := openSession(runCtx, t.link, m.ID, agent, cwd, m.DefaultAccess, name)
+	sid, _, err := openSession(runCtx, t.link, m.ID, agent, cwd, m.DefaultAccess, name, m.Settings[agent])
 	if err != nil {
 		if errors.Is(err, ErrOffline) {
 			return "", toolErr("The computer %s went offline. Tell the person to check it and try again.", m.Name)
@@ -327,7 +364,21 @@ func (t *Tools) Run(ctx context.Context, r ToolRun) (string, error) {
 		}
 	}()
 	prog := newProgress(time.Now())
-	t.typing(r.Chat)
+	// say reports progress: a notice for the web, an IM message otherwise.
+	say := func(text string) {
+		if r.Notify != nil {
+			r.Notify(ToolNotice{Kind: NoticeProgress, Agent: agentName, Machine: m.Name, Text: text})
+			return
+		}
+		t.send(r.Chat, text)
+		// A bot message ends the client's typing cue; restart it.
+		t.typing(r.Chat)
+	}
+	if r.Notify != nil {
+		defer r.Notify(ToolNotice{Kind: NoticeDone, Agent: agentName, Machine: m.Name})
+	} else {
+		t.typing(r.Chat)
+	}
 
 	var buf strings.Builder
 	ours := false
@@ -340,12 +391,12 @@ func (t *Tools) Run(ctx context.Context, r ToolRun) (string, error) {
 			}
 			return partial(buf.String()), toolErr("%s on %s did not finish within %s and was stopped. Tell the person; they can ask again with a smaller task.", agentName, m.Name, budget.Round(time.Second))
 		case <-typing.C:
-			t.typing(r.Chat)
+			if r.Notify == nil {
+				t.typing(r.Chat)
+			}
 		case <-notice.C:
 			if !t.hasApproval(r.Chat) {
-				t.send(r.Chat, prog.first(agentName, time.Now()))
-				// A bot message ends the client's typing cue; restart it.
-				t.typing(r.Chat)
+				say(prog.first(agentName, time.Now()))
 			}
 			updateTicker = time.NewTicker(t.ProgressEvery)
 			updates = updateTicker.C
@@ -354,8 +405,7 @@ func (t *Tools) Run(ctx context.Context, r ToolRun) (string, error) {
 				continue
 			}
 			if msg := prog.update(agentName, time.Now()); msg != "" {
-				t.send(r.Chat, msg)
-				t.typing(r.Chat)
+				say(msg)
 			}
 		case ev := <-events:
 			if ev.Disconnected {
@@ -384,11 +434,17 @@ func (t *Tools) Run(ctx context.Context, r ToolRun) (string, error) {
 					autoApprove(t.link, m.ID, sid, e.RequestID)
 					continue
 				}
+				title := approvalTitle(e)
 				t.mu.Lock()
 				t.pending[r.Chat.key()] = &toolApproval{machineID: m.ID, userID: r.UserID, chat: r.Chat,
-					p: pendingApproval{sessionID: sid, requestID: e.RequestID}}
+					p:     pendingApproval{sessionID: sid, requestID: e.RequestID},
+					title: title, agent: agentName, machine: m.Name, notify: r.Notify}
 				t.mu.Unlock()
-				t.send(r.Chat, approvalPrompt(e))
+				if r.Notify != nil {
+					r.Notify(ToolNotice{Kind: NoticeApproval, Agent: agentName, Machine: m.Name, Text: title})
+				} else {
+					t.send(r.Chat, approvalPrompt(e))
+				}
 			case "permission_resolved":
 				t.mu.Lock()
 				a := t.pending[r.Chat.key()]
@@ -398,7 +454,11 @@ func (t *Tools) Run(ctx context.Context, r ToolRun) (string, error) {
 				}
 				t.mu.Unlock()
 				if cleared && e.By == "timeout" {
-					t.send(r.Chat, MsgApprovalTimeout)
+					if r.Notify != nil {
+						r.Notify(ToolNotice{Kind: NoticeApprovalResolved, Agent: agentName, Machine: m.Name, Decision: "timeout"})
+					} else {
+						t.send(r.Chat, MsgApprovalTimeout)
+					}
 				}
 			case "turn_ended":
 				if e.TurnID != turnID {
@@ -489,11 +549,48 @@ func (t *Tools) InterceptApproval(ctx context.Context, chat ToolChat, senderUser
 	if !ok {
 		return false
 	}
+	found, _ := t.Decide(ctx, chat, senderUserID, decision)
+	return found
+}
+
+// PendingToolApproval is a chat's open permission request.
+type PendingToolApproval struct {
+	Agent   string `json:"agent"`
+	Machine string `json:"machine"`
+	Title   string `json:"title"`
+}
+
+// PendingApproval returns chat's open permission request if userID owns
+// the machine it came from.
+func (t *Tools) PendingApproval(chat ToolChat, userID string) (PendingToolApproval, bool) {
+	if t == nil {
+		return PendingToolApproval{}, false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	a := t.pending[chat.key()]
+	if a == nil || a.userID != userID {
+		return PendingToolApproval{}, false
+	}
+	return PendingToolApproval{Agent: a.agent, Machine: a.machine, Title: a.title}, true
+}
+
+// Decide answers chat's open permission request with decision (allow |
+// allow_session | deny) and reports it to the chat. found is false when
+// the chat has no open request that userID may answer; err is set when
+// the computer couldn't take the answer.
+func (t *Tools) Decide(ctx context.Context, chat ToolChat, userID, decision string) (found bool, err error) {
+	if t == nil {
+		return false, nil
+	}
+	if _, ok := approvalAck[decision]; !ok {
+		return false, fmt.Errorf("unknown decision %q", decision)
+	}
 	t.mu.Lock()
 	a := t.pending[chat.key()]
-	if a == nil || a.userID != senderUserID {
+	if a == nil || a.userID != userID {
 		t.mu.Unlock()
-		return false
+		return false, nil
 	}
 	delete(t.pending, chat.key())
 	t.mu.Unlock()
@@ -501,10 +598,18 @@ func (t *Tools) InterceptApproval(ctx context.Context, chat ToolChat, senderUser
 	defer cancel()
 	if err := approve(ctx, t.link, a.machineID, &a.p, decision); err != nil {
 		slog.Warn("agl: tool approval failed", "machine", a.machineID, "error", err)
-		t.send(a.chat, fmt.Sprintf(MsgFailed, err))
-		return true
+		if a.notify != nil {
+			a.notify(ToolNotice{Kind: NoticeApprovalResolved, Agent: a.agent, Machine: a.machine, Decision: "failed", Error: err.Error()})
+		} else {
+			t.send(a.chat, fmt.Sprintf(MsgFailed, err))
+		}
+		return true, err
 	}
 	t.grants.note(a.machineID, a.p.sessionID, decision)
-	t.send(a.chat, approvalAck[decision])
-	return true
+	if a.notify != nil {
+		a.notify(ToolNotice{Kind: NoticeApprovalResolved, Agent: a.agent, Machine: a.machine, Decision: decision})
+	} else {
+		t.send(a.chat, approvalAck[decision])
+	}
+	return true, nil
 }
