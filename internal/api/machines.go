@@ -180,9 +180,13 @@ func (s *Server) HandleCreateMachinePairing(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	// Each product gets its own hub address (see agl.ProductScope), so
-	// its link on a computer doesn't replace another product's.
-	scope := agl.ProductScope(ident.AccountID())
+	// Each integrating product (api key account) gets its own hub
+	// address (agl.ProductScope), so its link on a computer doesn't
+	// replace another product's; Fastclaw's own users keep /agl.
+	scope := ""
+	if ident.AuthMethod == "apikey" && ident.EndUser != "" {
+		scope = agl.ProductScope(ident.AccountID())
+	}
 	code, exp, err := s.aglHub.CreateScopedPairing(r.Context(), ident.UserID, scope)
 	if err != nil {
 		writeFlatError(w, http.StatusInternalServerError, err.Error())
