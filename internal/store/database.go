@@ -207,13 +207,16 @@ func (d *DBStore) Migrate(ctx context.Context) error {
 // honour when they dispatch to the machine (docs/agl-machines.md "Tool
 // mode"): allow_agents, default_access, default_cwd. Idempotent.
 func (d *DBStore) migrateMachinesAddSettings(ctx context.Context) error {
-	cols := []struct{ name, ddl string }{
-		{"allow_agents", `ALTER TABLE machines ADD COLUMN allow_agents INTEGER NOT NULL DEFAULT 1`},
-		{"default_access", `ALTER TABLE machines ADD COLUMN default_access TEXT NOT NULL DEFAULT 'ask'`},
-		{"default_cwd", `ALTER TABLE machines ADD COLUMN default_cwd TEXT NOT NULL DEFAULT ''`},
+	cols := []struct{ table, name, ddl string }{
+		{"machines", "allow_agents", `ALTER TABLE machines ADD COLUMN allow_agents INTEGER NOT NULL DEFAULT 1`},
+		{"machines", "default_access", `ALTER TABLE machines ADD COLUMN default_access TEXT NOT NULL DEFAULT 'ask'`},
+		{"machines", "default_cwd", `ALTER TABLE machines ADD COLUMN default_cwd TEXT NOT NULL DEFAULT ''`},
+		// The hub address a machine paired through (per-product hubs).
+		{"machines", "hub_scope", `ALTER TABLE machines ADD COLUMN hub_scope TEXT NOT NULL DEFAULT ''`},
+		{"machine_pairings", "scope", `ALTER TABLE machine_pairings ADD COLUMN scope TEXT NOT NULL DEFAULT ''`},
 	}
 	for _, c := range cols {
-		has, err := d.tableHasColumn(ctx, "machines", c.name)
+		has, err := d.tableHasColumn(ctx, c.table, c.name)
 		if err != nil {
 			return err
 		}
@@ -221,7 +224,7 @@ func (d *DBStore) migrateMachinesAddSettings(ctx context.Context) error {
 			continue
 		}
 		if _, err := d.db.ExecContext(ctx, c.ddl); err != nil {
-			return fmt.Errorf("add machines.%s: %w", c.name, err)
+			return fmt.Errorf("add %s.%s: %w", c.table, c.name, err)
 		}
 	}
 	return nil
@@ -2279,10 +2282,12 @@ func (d *DBStore) migrationSQL() []string {
 			revoked_at BIGINT NOT NULL DEFAULT 0,
 			allow_agents INTEGER NOT NULL DEFAULT 1,
 			default_access TEXT NOT NULL DEFAULT 'ask',
-			default_cwd TEXT NOT NULL DEFAULT ''
+			default_cwd TEXT NOT NULL DEFAULT '',
+			hub_scope TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_machines_user ON machines (user_id, created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_machines_token ON machines (token_hash)`,
+		`CREATE INDEX IF NOT EXISTS idx_machines_agl ON machines (agl_machine_id)`,
 		// machine_pairings holds one-time pairing codes (only their
 		// sha256 is stored): 10 minutes, single use.
 		`CREATE TABLE IF NOT EXISTS machine_pairings (
@@ -2291,7 +2296,8 @@ func (d *DBStore) migrationSQL() []string {
 			expires_at BIGINT NOT NULL,
 			used_at BIGINT NOT NULL DEFAULT 0,
 			machine_id TEXT NOT NULL DEFAULT '',
-			created_at BIGINT NOT NULL DEFAULT 0
+			created_at BIGINT NOT NULL DEFAULT 0,
+			scope TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_machine_pairings_user ON machine_pairings (user_id)`,
 	}

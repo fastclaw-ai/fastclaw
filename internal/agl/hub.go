@@ -9,6 +9,13 @@
 //   - GET /agl/download/<target>[.sha256] 302 to the agl GitHub release
 //   - WS  /agl/ws/machine?code=…|token=…&machine_id=…  machines dial in here
 //
+// The same endpoints also live under /agl/p/<scope>/ — one hub address
+// per integrating product (ProductScope). agl keeps one link per hub URL
+// on a computer, so two products sharing this Fastclaw must not hand out
+// the same URL, or linking the computer to one would replace the other's
+// link. A machine and its pairing code are bound to the address they
+// were made for.
+//
 // Pairing: the product asks for a one-time code (10 min, only its hash
 // is stored); the install command carries it; the machine connects with
 // ?code=, receives its own token (`paired`, only sha256(token) is
@@ -205,12 +212,38 @@ func NewHub(st store.MachineStore, publicURL string) *Hub {
 	}
 }
 
-// RegisterRoutes mounts the hub's endpoints under /agl.
+// RegisterRoutes mounts the hub's endpoints under /agl and under each
+// product's /agl/p/{scope}.
 func (h *Hub) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET "+MountPath+"/{$}", h.handleIndex)
-	mux.HandleFunc("GET "+MountPath+"/install.sh", h.handleInstallScript)
-	mux.HandleFunc("GET "+MountPath+"/download/{target}", h.handleDownload)
-	mux.HandleFunc("GET "+MountPath+"/ws/machine", h.handleMachineWS)
+	for _, base := range []string{MountPath, MountPath + "/p/{scope}"} {
+		mux.HandleFunc("GET "+base+"/{$}", h.handleIndex)
+		mux.HandleFunc("GET "+base+"/install.sh", h.handleInstallScript)
+		mux.HandleFunc("GET "+base+"/download/{target}", h.handleDownload)
+		mux.HandleFunc("GET "+base+"/ws/machine", h.handleMachineWS)
+	}
+}
+
+// scopeRE is what a product scope looks like (ProductScope).
+var scopeRE = regexp.MustCompile(`^[0-9a-f]{16}$`)
+
+// ProductScope is the hub scope of an integrating product's account:
+// its machines pair through <public>/agl/p/<scope>. Derived (not the
+// raw account id) so the URL doesn't reveal internal ids.
+func ProductScope(accountID string) string {
+	if accountID == "" {
+		return ""
+	}
+	return sha256Hex("agl-hub-scope:" + accountID)[:16]
+}
+
+// requestScope is the scope of the hub address r came in on; ok=false
+// for a malformed one.
+func requestScope(r *http.Request) (string, bool) {
+	sc := r.PathValue("scope")
+	if sc == "" {
+		return "", true
+	}
+	return sc, scopeRE.MatchString(sc)
 }
 
 // PublicURL is FASTCLAW_PUBLIC_URL, or the origin r was addressed to.
@@ -236,11 +269,25 @@ func (h *Hub) PublicURL(r *http.Request) string {
 }
 
 // HubURL is the URL agl connects to: <public URL>/agl.
-func (h *Hub) HubURL(r *http.Request) string { return h.PublicURL(r) + MountPath }
+func (h *Hub) HubURL(r *http.Request) string { return h.ScopedHubURL(r, "") }
+
+// ScopedHubURL is the hub URL of scope: <public URL>/agl/p/<scope>, or
+// /agl for "".
+func (h *Hub) ScopedHubURL(r *http.Request, scope string) string {
+	if scope == "" {
+		return h.PublicURL(r) + MountPath
+	}
+	return h.PublicURL(r) + MountPath + "/p/" + scope
+}
 
 // InstallCommand is the one-liner a user runs to link a machine.
 func (h *Hub) InstallCommand(r *http.Request, code string) string {
-	return fmt.Sprintf(`curl -fsSL "%s/install.sh?code=%s" | sh`, h.HubURL(r), code)
+	return h.ScopedInstallCommand(r, code, "")
+}
+
+// ScopedInstallCommand is InstallCommand for a code made with scope.
+func (h *Hub) ScopedInstallCommand(r *http.Request, code, scope string) string {
+	return fmt.Sprintf(`curl -fsSL "%s/install.sh?code=%s" | sh`, h.ScopedHubURL(r, scope), code)
 }
 
 // --- pairing ---
@@ -262,8 +309,17 @@ func randomHex(n int) (string, error) {
 // before touching the store.
 var codeRE = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
-// CreatePairing mints a one-time code for userID.
+// CreatePairing mints a one-time code for userID on the /agl hub.
 func (h *Hub) CreatePairing(ctx context.Context, userID string) (code string, expiresAt time.Time, err error) {
+	return h.CreateScopedPairing(ctx, userID, "")
+}
+
+// CreateScopedPairing mints a one-time code for userID whose machine
+// links to the hub address of scope (ProductScope; "" = /agl).
+func (h *Hub) CreateScopedPairing(ctx context.Context, userID, scope string) (code string, expiresAt time.Time, err error) {
+	if scope != "" && !scopeRE.MatchString(scope) {
+		return "", time.Time{}, fmt.Errorf("agl: bad hub scope %q", scope)
+	}
 	code, err = randomHex(16)
 	if err != nil {
 		return "", time.Time{}, err
@@ -271,7 +327,7 @@ func (h *Hub) CreatePairing(ctx context.Context, userID string) (code string, ex
 	now := h.now()
 	expiresAt = now.Add(PairingTTL)
 	if err := h.store.CreateMachinePairing(ctx, &store.MachinePairingRecord{
-		CodeHash: sha256Hex(code), UserID: userID, ExpiresAt: expiresAt, CreatedAt: now,
+		CodeHash: sha256Hex(code), UserID: userID, ExpiresAt: expiresAt, CreatedAt: now, Scope: scope,
 	}); err != nil {
 		return "", time.Time{}, err
 	}
@@ -331,10 +387,10 @@ func (h *Hub) handleInstallScript(w http.ResponseWriter, r *http.Request) {
 	code := strings.TrimSpace(r.URL.Query().Get("code"))
 	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	valid := false
-	if codeRE.MatchString(code) {
-		if p, err := h.store.GetMachinePairing(r.Context(), sha256Hex(code)); err == nil && p.UsedAt.IsZero() && h.now().Before(p.ExpiresAt) {
-			valid = true
+	valid, scope := false, ""
+	if pathScope, ok := requestScope(r); ok && codeRE.MatchString(code) {
+		if p, err := h.store.GetMachinePairing(r.Context(), sha256Hex(code)); err == nil && p.UsedAt.IsZero() && h.now().Before(p.ExpiresAt) && p.Scope == pathScope {
+			valid, scope = true, p.Scope
 		}
 	}
 	if !valid {
@@ -342,8 +398,12 @@ func (h *Hub) handleInstallScript(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "#!/bin/sh\necho 'agl: this install link is invalid or has expired; copy a new one from the web page' >&2\nexit 1\n")
 		return
 	}
-	script := strings.ReplaceAll(installScript, "__HUB_URL__", h.HubURL(r))
-	script = strings.ReplaceAll(script, "__CONNECT_ARGS__", "--code "+code)
+	script := strings.ReplaceAll(installScript, "__HUB_URL__", h.ScopedHubURL(r, scope))
+	// --private: this hub sees only the sessions it starts itself, not
+	// the ones the person runs locally (agl run, desktop apps) — those
+	// are none of a web app's business, and with several apps linked to
+	// one computer each would otherwise see them all.
+	script = strings.ReplaceAll(script, "__CONNECT_ARGS__", "--code "+code+" --private")
 	fmt.Fprint(w, script)
 }
 
@@ -370,10 +430,21 @@ func (h *Hub) handleMachineWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
+	scope, ok := requestScope(r)
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
 	if code := q.Get("code"); code != "" {
 		// Pairing: validate and consume the code BEFORE upgrading, so a
-		// bad code is a plain 401 (agl treats it as final).
+		// bad code is a plain 401 (agl treats it as final). A code only
+		// pairs at the hub address it was made for, so agl stores the
+		// link under that URL.
 		if !codeRE.MatchString(code) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if p, err := h.store.GetMachinePairing(ctx, sha256Hex(code)); err != nil || p.Scope != scope {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -395,7 +466,7 @@ func (h *Hub) handleMachineWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	m, err := h.store.GetMachineByTokenHash(ctx, sha256Hex(token))
-	if err != nil || m.Revoked() || m.AglMachineID != aglID {
+	if err != nil || m.Revoked() || m.AglMachineID != aglID || m.HubScope != scope {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -416,10 +487,12 @@ func (h *Hub) pair(ctx context.Context, ws *websocket.Conn, p *store.MachinePair
 	token = "aglm_" + token
 	hash := sha256Hex(token)
 	// The same computer paired again by the same user keeps its id (and
-	// the agents bound to it); its old token stops working.
+	// the agents bound to it); its old token stops working. Its scope
+	// moves to the code's: a link made at the old address then gets 401
+	// and agl drops it.
 	machineID := ""
 	if prev, err := h.store.FindActiveMachine(ctx, p.UserID, aglID); err == nil && prev != nil {
-		if err := h.store.SetMachineToken(ctx, prev.ID, hash); err != nil {
+		if err := h.store.SetMachineToken(ctx, prev.ID, hash, p.Scope); err != nil {
 			slog.Warn("agl: re-pair failed", "machine", prev.ID, "error", err)
 			return
 		}
@@ -433,12 +506,13 @@ func (h *Hub) pair(ctx context.Context, ws *websocket.Conn, p *store.MachinePair
 		machineID = "mch_" + id
 		if err := h.store.CreateMachine(ctx, &store.MachineRecord{
 			ID: machineID, UserID: p.UserID, AglMachineID: aglID, TokenHash: hash, CreatedAt: h.now(),
-			AllowAgents: true, DefaultAccess: AccessAsk,
+			AllowAgents: true, DefaultAccess: AccessAsk, HubScope: p.Scope,
 		}); err != nil {
 			slog.Warn("agl: create machine failed", "error", err)
 			return
 		}
 	}
+	h.revokeReplaced(ctx, machineID, aglID, p.Scope)
 	if err := h.store.SetMachinePairingMachine(ctx, p.CodeHash, machineID); err != nil {
 		slog.Warn("agl: record pairing failed", "machine", machineID, "error", err)
 	}
@@ -447,6 +521,30 @@ func (h *Hub) pair(ctx context.Context, ws *websocket.Conn, p *store.MachinePair
 	_ = ws.WriteMessage(websocket.TextMessage, blob)
 	_ = ws.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	slog.Info("agl: machine paired", "machine", machineID, "user", p.UserID)
+}
+
+// revokeReplaced revokes other accounts' records of the same computer at
+// the same hub address. agl keeps one link per hub URL, so pairing there
+// for another account replaced theirs on the computer: their record
+// could never come online again, and would only sit there "offline".
+func (h *Hub) revokeReplaced(ctx context.Context, keepID, aglID, scope string) {
+	others, err := h.store.ListActiveMachinesByAglID(ctx, aglID)
+	if err != nil {
+		slog.Warn("agl: list machines for re-pair failed", "agl_machine", aglID, "error", err)
+		return
+	}
+	for i := range others {
+		m := &others[i]
+		if m.ID == keepID || m.HubScope != scope {
+			continue
+		}
+		if err := h.store.RevokeMachine(ctx, m.ID, h.now()); err != nil && !errors.Is(err, store.ErrNotFound) {
+			slog.Warn("agl: revoke replaced machine failed", "machine", m.ID, "error", err)
+			continue
+		}
+		h.disconnect(m.ID)
+		slog.Info("agl: machine linked to another account; revoked the old record", "machine", m.ID, "user", m.UserID, "by", keepID)
+	}
 }
 
 // clip trims untrusted strings from a machine.

@@ -91,7 +91,7 @@ POST /v1/agents   (X-Fastclaw-End-User: user:42)
 
 | Endpoint | |
 | --- | --- |
-| `GET /agl/install.sh?code=` | agl's `assets/install.sh` with `__HUB_URL__` = `<public>/agl`, `__CONNECT_ARGS__` = `--code <code>`; invalid/used/expired code → 401 + a script that prints an error and exits 1 |
+| `GET /agl/install.sh?code=` | agl's `assets/install.sh` with `__HUB_URL__` = the code's hub address, `__CONNECT_ARGS__` = `--code <code> --private`; a code made for another address → invalid/used/expired code → 401 + a script that prints an error and exits 1 |
 | `GET /agl/download/<target>[.sha256]` | 302 to `https://github.com/thinkany-ai/agl/releases/latest/download/agl-<target>[.sha256]` |
 | `WS /agl/ws/machine?code=…&machine_id=…` | consumes the code (401 if unusable, before upgrading), sends `{"type":"paired","token"}`, stores `sha256(token)` |
 | `WS /agl/ws/machine?token=…&machine_id=…` | 401 for unknown/revoked tokens; expects `hello` within 10 s, then online |
@@ -102,6 +102,28 @@ events fan out to subscribers, the hub pings every 25 s and drops a link
 silent for 75 s (agl pings every 20 s). Frames are capped at 8 MiB;
 `hello` strings at 128 chars and 64 agents. Re-pairing the same computer
 (same agl machine id, same user) keeps its `mch_` id and replaces the token.
+
+**One hub address per product.** agl keeps one link per hub URL on a
+computer, and re-connecting a URL replaces that link. So `/v1/machines/pairing`
+hands each product (api key account) its own address,
+`<public>/agl/p/<scope>` with `scope = sha256("agl-hub-scope:" + account)[:16]`
+(`agl.ProductScope`); every endpoint above also lives there. A pairing
+code and the machine it pairs are bound to that address (`hub_scope`):
+codes pair, and tokens connect, only there. Consequences:
+
+- Two products on the same FastClaw linked to one computer get two links
+  that don't touch each other.
+- The same product, a second account, same computer: agl replaces the
+  first account's link, so pairing revokes the first account's record
+  (its token is gone from the computer anyway) instead of leaving it
+  "offline" forever.
+- The same account pairing again at a new address keeps the `mch_` id
+  and moves it there; the old link then gets 401 and agl drops it.
+- Machines paired before this (scope `""`) keep using `/agl`.
+
+`--private` keeps each product out of the sessions the person runs
+locally (`agl run`, desktop apps); a product sees only the sessions it
+starts.
 
 **Single instance.** Machine sockets live in the process that accepted
 them. Running several FastClaw instances needs a sticky socket holder (or

@@ -180,14 +180,17 @@ func (s *Server) HandleCreateMachinePairing(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	code, exp, err := s.aglHub.CreatePairing(r.Context(), ident.UserID)
+	// Each product gets its own hub address (see agl.ProductScope), so
+	// its link on a computer doesn't replace another product's.
+	scope := agl.ProductScope(ident.AccountID())
+	code, exp, err := s.aglHub.CreateScopedPairing(r.Context(), ident.UserID, scope)
 	if err != nil {
 		writeFlatError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"code":           code,
-		"installCommand": s.aglHub.InstallCommand(r, code),
+		"installCommand": s.aglHub.ScopedInstallCommand(r, code, scope),
 		"expiresAt":      exp.UTC().Format(time.RFC3339),
 	})
 }

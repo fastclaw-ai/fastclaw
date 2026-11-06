@@ -46,6 +46,13 @@ type MachineRecord struct {
 	AllowAgents   bool
 	DefaultAccess string
 	DefaultCwd    string
+
+	// HubScope is the hub address the machine was paired through: ""
+	// for <public>/agl, else the product scope of <public>/agl/p/<scope>
+	// (see agl.ProductScope). agl keeps one link per hub URL, so each
+	// product gets its own and products sharing a Fastclaw don't
+	// replace each other's link on the same computer.
+	HubScope string
 }
 
 // MachineSettings is a partial update of a machine's user-editable
@@ -68,6 +75,7 @@ type MachinePairingRecord struct {
 	UsedAt    time.Time // zero while unused
 	MachineID string    // set once the code paired a machine
 	CreatedAt time.Time
+	Scope     string // hub scope the machine pairs into (MachineRecord.HubScope)
 }
 
 // MachineStore persists linked machines and their pairing codes. It is
@@ -89,9 +97,14 @@ type MachineStore interface {
 	// FindActiveMachine returns userID's active machine with that agl
 	// machine id, for re-pairing the same computer.
 	FindActiveMachine(ctx context.Context, userID, aglMachineID string) (*MachineRecord, error)
+	// ListActiveMachinesByAglID lists every user's active machines with
+	// that agl machine id (one computer linked to several accounts).
+	ListActiveMachinesByAglID(ctx context.Context, aglMachineID string) ([]MachineRecord, error)
 	// ListMachines lists userID's active machines, newest first.
 	ListMachines(ctx context.Context, userID string) ([]MachineRecord, error)
-	SetMachineToken(ctx context.Context, id, tokenHash string) error
+	// SetMachineToken replaces an active machine's token (re-pairing)
+	// and records the hub scope it paired through.
+	SetMachineToken(ctx context.Context, id, tokenHash, hubScope string) error
 	UpdateMachineHello(ctx context.Context, m *MachineRecord) error
 	TouchMachine(ctx context.Context, id string, seen time.Time) error
 	// RevokeMachine clears the token hash and stamps revoked_at.
@@ -128,23 +141,23 @@ func (d *DBStore) CreateMachinePairing(ctx context.Context, p *MachinePairingRec
 	_, _ = d.db.ExecContext(ctx, fmt.Sprintf(`DELETE FROM machine_pairings WHERE expires_at < %s`, d.ph(1)),
 		time.Now().Add(-24*time.Hour).UnixMilli())
 	_, err := d.db.ExecContext(ctx,
-		fmt.Sprintf(`INSERT INTO machine_pairings (code_hash, user_id, expires_at, used_at, machine_id, created_at) VALUES (%s, %s, %s, 0, '', %s)`,
-			d.ph(1), d.ph(2), d.ph(3), d.ph(4)),
-		p.CodeHash, p.UserID, toMillis(p.ExpiresAt), toMillis(p.CreatedAt))
+		fmt.Sprintf(`INSERT INTO machine_pairings (code_hash, user_id, expires_at, used_at, machine_id, created_at, scope) VALUES (%s, %s, %s, 0, '', %s, %s)`,
+			d.ph(1), d.ph(2), d.ph(3), d.ph(4), d.ph(5)),
+		p.CodeHash, p.UserID, toMillis(p.ExpiresAt), toMillis(p.CreatedAt), p.Scope)
 	return err
 }
 
 func (d *DBStore) scanPairing(row *sql.Row) (*MachinePairingRecord, error) {
 	var p MachinePairingRecord
 	var exp, used, created int64
-	if err := row.Scan(&p.CodeHash, &p.UserID, &exp, &used, &p.MachineID, &created); err != nil {
+	if err := row.Scan(&p.CodeHash, &p.UserID, &exp, &used, &p.MachineID, &created, &p.Scope); err != nil {
 		return nil, scanErr(err)
 	}
 	p.ExpiresAt, p.UsedAt, p.CreatedAt = fromMillis(exp), fromMillis(used), fromMillis(created)
 	return &p, nil
 }
 
-const pairingColumns = `code_hash, user_id, expires_at, used_at, machine_id, created_at`
+const pairingColumns = `code_hash, user_id, expires_at, used_at, machine_id, created_at, scope`
 
 func (d *DBStore) GetMachinePairing(ctx context.Context, codeHash string) (*MachinePairingRecord, error) {
 	return d.scanPairing(d.db.QueryRowContext(ctx,
@@ -174,14 +187,14 @@ func (d *DBStore) SetMachinePairingMachine(ctx context.Context, codeHash, machin
 	return err
 }
 
-const machineColumns = `id, user_id, agl_machine_id, name, hostname, os, arch, version, agents, token_hash, last_seen_at, created_at, revoked_at, allow_agents, default_access, default_cwd`
+const machineColumns = `id, user_id, agl_machine_id, name, hostname, os, arch, version, agents, token_hash, last_seen_at, created_at, revoked_at, allow_agents, default_access, default_cwd, hub_scope`
 
 func scanMachine(scanner interface{ Scan(dest ...any) error }) (*MachineRecord, error) {
 	var m MachineRecord
 	var agents string
 	var seen, created, revoked, allow int64
 	if err := scanner.Scan(&m.ID, &m.UserID, &m.AglMachineID, &m.Name, &m.Hostname, &m.OS, &m.Arch, &m.Version,
-		&agents, &m.TokenHash, &seen, &created, &revoked, &allow, &m.DefaultAccess, &m.DefaultCwd); err != nil {
+		&agents, &m.TokenHash, &seen, &created, &revoked, &allow, &m.DefaultAccess, &m.DefaultCwd, &m.HubScope); err != nil {
 		return nil, scanErr(err)
 	}
 	m.AllowAgents = allow != 0
@@ -214,12 +227,12 @@ func (d *DBStore) CreateMachine(ctx context.Context, m *MachineRecord) error {
 		m.DefaultAccess = "ask"
 	}
 	_, err := d.db.ExecContext(ctx,
-		fmt.Sprintf(`INSERT INTO machines (%s) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)`, machineColumns,
+		fmt.Sprintf(`INSERT INTO machines (%s) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)`, machineColumns,
 			d.ph(1), d.ph(2), d.ph(3), d.ph(4), d.ph(5), d.ph(6), d.ph(7), d.ph(8), d.ph(9), d.ph(10), d.ph(11), d.ph(12), d.ph(13),
-			d.ph(14), d.ph(15), d.ph(16)),
+			d.ph(14), d.ph(15), d.ph(16), d.ph(17)),
 		m.ID, m.UserID, m.AglMachineID, m.Name, m.Hostname, m.OS, m.Arch, m.Version, marshalMachineAgents(m.Agents),
 		m.TokenHash, toMillis(m.LastSeenAt), toMillis(m.CreatedAt), toMillis(m.RevokedAt),
-		boolInt(m.AllowAgents), m.DefaultAccess, m.DefaultCwd)
+		boolInt(m.AllowAgents), m.DefaultAccess, m.DefaultCwd, m.HubScope)
 	return err
 }
 
@@ -243,8 +256,20 @@ func (d *DBStore) FindActiveMachine(ctx context.Context, userID, aglMachineID st
 }
 
 func (d *DBStore) ListMachines(ctx context.Context, userID string) ([]MachineRecord, error) {
-	rows, err := d.db.QueryContext(ctx,
+	return d.queryMachines(ctx,
 		fmt.Sprintf(`SELECT %s FROM machines WHERE user_id = %s AND revoked_at = 0 ORDER BY created_at DESC, id DESC`, machineColumns, d.ph(1)), userID)
+}
+
+func (d *DBStore) ListActiveMachinesByAglID(ctx context.Context, aglMachineID string) ([]MachineRecord, error) {
+	if aglMachineID == "" {
+		return nil, nil
+	}
+	return d.queryMachines(ctx,
+		fmt.Sprintf(`SELECT %s FROM machines WHERE agl_machine_id = %s AND revoked_at = 0 ORDER BY created_at DESC, id DESC`, machineColumns, d.ph(1)), aglMachineID)
+}
+
+func (d *DBStore) queryMachines(ctx context.Context, query string, args ...any) ([]MachineRecord, error) {
+	rows, err := d.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -260,9 +285,10 @@ func (d *DBStore) ListMachines(ctx context.Context, userID string) ([]MachineRec
 	return out, rows.Err()
 }
 
-func (d *DBStore) SetMachineToken(ctx context.Context, id, tokenHash string) error {
+func (d *DBStore) SetMachineToken(ctx context.Context, id, tokenHash, hubScope string) error {
 	_, err := d.db.ExecContext(ctx,
-		fmt.Sprintf(`UPDATE machines SET token_hash = %s WHERE id = %s AND revoked_at = 0`, d.ph(1), d.ph(2)), tokenHash, id)
+		fmt.Sprintf(`UPDATE machines SET token_hash = %s, hub_scope = %s WHERE id = %s AND revoked_at = 0`, d.ph(1), d.ph(2), d.ph(3)),
+		tokenHash, hubScope, id)
 	return err
 }
 

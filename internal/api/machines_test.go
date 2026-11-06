@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -66,9 +67,14 @@ func TestMachinePairingAPI(t *testing.T) {
 		t.Fatalf("pairing: %d %v", code, out)
 	}
 	pc, _ := out["code"].(string)
-	want := `curl -fsSL "https://fc.example.com/agl/install.sh?code=` + pc + `" | sh`
-	if pc == "" || out["installCommand"] != want || out["expiresAt"] == nil {
+	// Each product pairs through its own hub address /agl/p/<scope>.
+	cmd, _ := out["installCommand"].(string)
+	m := regexp.MustCompile(`^curl -fsSL "https://fc\.example\.com/agl/p/([0-9a-f]{16})/install\.sh\?code=` + pc + `" \| sh$`).FindStringSubmatch(cmd)
+	if pc == "" || m == nil || out["expiresAt"] == nil {
 		t.Fatalf("pairing response: %v", out)
+	}
+	if _, again := h.do("POST", "/v1/machines/pairing", h.keyA, map[string]any{}, "X-Fastclaw-End-User", "bob"); !strings.Contains(again["installCommand"].(string), "/agl/p/"+m[1]+"/") {
+		t.Fatalf("same product, another end user, different hub address: %v", again)
 	}
 	code, out = h.do("POST", "/v1/machines/pairing/status", h.keyA, map[string]any{"code": pc}, "X-Fastclaw-End-User", "alice")
 	if code != http.StatusOK || out["status"] != "pending" {
