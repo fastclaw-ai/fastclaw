@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -751,26 +752,19 @@ func (g *Gateway) Run() error {
 		}
 	}()
 
-	var wg sync.WaitGroup
+	var wg workers
 	if err := g.bus.Start(ctx); err != nil {
 		return fmt.Errorf("start message bus: %w", err)
 	}
-	wg.Add(1)
-	go func() { defer wg.Done(); g.users.startEvictor(ctx) }()
-	wg.Add(1)
-	go func() { defer wg.Done(); g.cleanupDedup(ctx) }()
-	wg.Add(1)
-	go func() { defer wg.Done(); g.processInbound(ctx) }()
-	wg.Add(1)
-	go func() { defer wg.Done(); g.chanMgr.Start(ctx) }()
+	wg.Go("evictor", func() { g.users.startEvictor(ctx) })
+	wg.Go("dedup-cleanup", func() { g.cleanupDedup(ctx) })
+	wg.Go("inbound", func() { g.processInbound(ctx) })
+	wg.Go("channels", func() { g.chanMgr.Start(ctx) })
 	if g.scheduler != nil {
-		wg.Add(1)
-		go func() { defer wg.Done(); g.scheduler.Start(ctx) }()
+		wg.Go("scheduler", func() { g.scheduler.Start(ctx) })
 	}
 	if g.webhookSrv != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go("webhook-server", func() {
 			port := readSystemHooks(g.store).Port
 			if port == 0 {
 				port = 18954
@@ -779,7 +773,7 @@ func (g *Gateway) Run() error {
 			if err := g.webhookSrv.ListenAndServe(ctx, addr); err != nil {
 				slog.Error("webhook server error", "error", err)
 			}
-		}()
+		})
 	}
 	if g.pluginMgr != nil {
 		if err := g.pluginMgr.StartAll(ctx); err != nil {
@@ -792,7 +786,14 @@ func (g *Gateway) Run() error {
 		plugin.RegisterPluginProviders(ctx, g.pluginMgr, toolProviderRegistry)
 	}
 	slog.Info("gateway started")
-	wg.Wait()
+	<-ctx.Done()
+	// Every worker watches ctx, but a stuck one (a channel adapter blocked
+	// in a library call) must not keep the process alive: it would hold
+	// agl WebSockets and channel pollers until the pod is killed, so
+	// devices look offline to the new pod meanwhile.
+	if stuck := wg.Wait(shutdownGrace()); len(stuck) > 0 {
+		slog.Warn("workers did not stop in time, exiting anyway", "workers", stuck)
+	}
 	if g.taskQueue != nil {
 		g.taskQueue.Stop()
 	}
@@ -804,6 +805,59 @@ func (g *Gateway) Run() error {
 	}
 	slog.Info("gateway stopped")
 	return nil
+}
+
+// shutdownGrace bounds how long shutdown waits for the gateway's workers
+// after the turns have drained.
+func shutdownGrace() time.Duration { return 15 * time.Second }
+
+// workers is a WaitGroup that remembers which named workers are running,
+// so a shutdown that gives up can say what was stuck.
+type workers struct {
+	wg   sync.WaitGroup
+	mu   sync.Mutex
+	live map[string]int
+}
+
+func (w *workers) Go(name string, fn func()) {
+	w.mu.Lock()
+	if w.live == nil {
+		w.live = map[string]int{}
+	}
+	w.live[name]++
+	w.mu.Unlock()
+	w.wg.Add(1)
+	go func() {
+		defer func() {
+			w.mu.Lock()
+			if w.live[name]--; w.live[name] <= 0 {
+				delete(w.live, name)
+			}
+			w.mu.Unlock()
+			w.wg.Done()
+		}()
+		fn()
+	}()
+}
+
+// Wait waits up to d for every worker to return and lists the ones
+// still running (nil when all stopped).
+func (w *workers) Wait(d time.Duration) []string {
+	done := make(chan struct{})
+	go func() { w.wg.Wait(); close(done) }()
+	select {
+	case <-done:
+		return nil
+	case <-time.After(d):
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	names := make([]string, 0, len(w.live))
+	for n := range w.live {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // drainTimeout is how long shutdown waits for running turns:
