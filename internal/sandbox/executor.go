@@ -49,6 +49,13 @@ type ExecutorPool interface {
 	Backend() string
 }
 
+// LivenessReporter is an optional ExecutorPool capability: Live reports
+// whether a scope's sandbox is already running, so a caller can skip
+// work that would otherwise create one (LifecyclePool).
+type LivenessReporter interface {
+	Live(agentID, projectID, sessionID string) bool
+}
+
 // WorkspaceSnapshotter is an optional capability an Executor can implement
 // to support flush-on-evict. Returns a map of sandbox-relative path →
 // file contents for everything under /workspace.

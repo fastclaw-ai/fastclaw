@@ -233,6 +233,16 @@ func (p *LifecyclePool) Get(ctx context.Context, agentID, projectID, sessionID s
 	return &lazyExecutor{pool: p, scope: sandboxScope{agentID: agentID, projectID: projectID, sessionID: sessionID}}, nil
 }
 
+// Live reports whether the scope's sandbox exists (or is being created)
+// right now. Callers that only need to drop a file in /workspace use it
+// to avoid paying a cold start: when nothing is live, a file already in
+// the workspace store reaches the sandbox through hydrate-on-create.
+func (p *LifecyclePool) Live(agentID, projectID, sessionID string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.hydrated[poolKey(agentID, projectID, sessionID)]
+}
+
 // Release forwards to the inner pool and drops the lastUsed entry. Useful
 // for explicit teardown (agent deletion) — normal flow relies on idle
 // eviction.

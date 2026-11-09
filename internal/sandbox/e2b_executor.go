@@ -47,6 +47,10 @@ type E2BExecutor struct {
 	agentID   string
 	projectID string
 	sessionID string
+	// browserWarm is closed when the background camoufox warmup
+	// finishes (nil = none running). Browser commands wait for it so
+	// they attach to the warmed daemon instead of racing to spawn one.
+	browserWarm chan struct{}
 }
 
 func newE2BExecutor(ctx context.Context, apiKey, template string, timeout time.Duration) (*E2BExecutor, error) {
@@ -446,6 +450,13 @@ func (e *E2BExecutor) Exec(ctx context.Context, command string, timeout time.Dur
 	// Hydrate creates /workspace before any agent Exec runs, and
 	// recreate() re-hydrates after a sandbox replacement, so `cd` is
 	// guaranteed to succeed here.
+	if ch := e.browserWarm; ch != nil && strings.Contains(command, "camoufox") {
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
 	wrapped := "cd /workspace && " + command
 	result, err := e.execOnce(ctx, wrapped, timeout)
 	if err != nil && strings.Contains(err.Error(), "HTTP 502") || strings.Contains(fmt.Sprint(err), "HTTP 404") {
@@ -980,7 +991,15 @@ func (p *E2BExecutorPool) Get(ctx context.Context, agentID, projectID, sessionID
 		_ = ex.Close()
 		return nil, fmt.Errorf("e2b sandbox unusable: %w", err)
 	}
-	warmupCamoufoxDaemon(ctx, ex)
+	// Warm the browser in the background: it takes tens of seconds and
+	// most turns never open it. Holding Get (and p.mu) for it made every
+	// first tool call — even writing an attachment — wait the full warmup.
+	warm := make(chan struct{})
+	ex.browserWarm = warm
+	go func() {
+		defer close(warm)
+		warmupCamoufoxDaemon(context.WithoutCancel(ctx), ex)
+	}()
 	p.executors[key] = ex
 	return ex, nil
 }

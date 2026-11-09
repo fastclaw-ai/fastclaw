@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/fastclaw-ai/fastclaw/internal/sandbox"
 )
 
 // maxAttachmentBytes caps a single attachment regardless of whether it
@@ -122,8 +124,12 @@ func (a *Agent) WriteSessionAttachments(ctx context.Context, sessionID, projectI
 
 		// 3. Live sandbox (covers E2B mid-session). Best-effort; missing
 		// pool / get failure just means the next exec will pull from the
-		// store via hydrate-on-create.
-		if a.sandboxPool != nil {
+		// store via hydrate-on-create. Only a sandbox that is already
+		// running: creating one here made every image message wait for
+		// a cold start (tens of seconds on E2B) even when the model just
+		// looks at the picture. With the store write above, a sandbox
+		// created later hydrates the file anyway.
+		if a.sandboxPool != nil && a.attachmentNeedsSandboxWrite(projectID, sessionID) {
 			if ex, gErr := a.sandboxPool.Get(ctx, a.name, projectID, sessionID); gErr == nil && ex != nil {
 				if _, wErr := ex.WriteFile(ctx, "/workspace/"+name, string(data)); wErr != nil {
 					slog.Warn("attachment sandbox write failed", "agent", a.name, "session", sessionID, "path", name, "error", wErr)
@@ -385,4 +391,19 @@ func contentTypeFromExt(ext string) string {
 		return "application/zip"
 	}
 	return ""
+}
+
+// attachmentNeedsSandboxWrite reports whether WriteSessionAttachments
+// should also write into the sandbox: when it is already live, or when
+// there is no workspace store to hydrate a later sandbox from (or the
+// pool can't say whether one is live).
+func (a *Agent) attachmentNeedsSandboxWrite(projectID, sessionID string) bool {
+	if a.workspaceStore == nil {
+		return true
+	}
+	lr, ok := a.sandboxPool.(sandbox.LivenessReporter)
+	if !ok {
+		return true
+	}
+	return lr.Live(a.name, projectID, sessionID)
 }
