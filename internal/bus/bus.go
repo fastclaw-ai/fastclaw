@@ -88,6 +88,12 @@ type InboundMessage struct {
 	// agent-loop side to decide whether the turn should fire downstream
 	// reactions that are only valid for genuine user input.
 	Source string
+	// ChatReply marks an API turn whose caller shows the reply in a chat
+	// app (POST /v1/chat/completions with reply_format "chat"): the turn
+	// gets the same reply-format hint as an IM channel, and the reply
+	// keeps SplitMessageMarker between its messages for the caller to
+	// send as separate bubbles.
+	ChatReply bool
 	// SharedIdentity is set by the gateway when the channel has
 	// shared_identity enabled. The agent loop uses this to resolve
 	// sessions by owner identity instead of by channel triple, so

@@ -22,6 +22,7 @@ func TestRenderChannelHintsForMultiBubbleReplies(t *testing.T) {
 	tests := []struct {
 		name    string
 		channel string
+		chat    bool
 		enabled bool
 		want    bool
 	}{
@@ -29,11 +30,13 @@ func TestRenderChannelHintsForMultiBubbleReplies(t *testing.T) {
 		{name: "enabled on IM", channel: "telegram", enabled: true, want: true},
 		{name: "disabled on web", channel: "web", enabled: false, want: false},
 		{name: "not injected into API responses", channel: "api", enabled: true, want: false},
+		{name: "API caller relaying into a chat", channel: "api", chat: true, enabled: true, want: true},
+		{name: "chat API caller, agent opted out", channel: "api", chat: true, enabled: false, want: false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			hint := renderChannelHints(bus.InboundMessage{Channel: tt.channel}, tt.enabled)
+			hint := renderChannelHints(bus.InboundMessage{Channel: tt.channel, ChatReply: tt.chat}, tt.enabled)
 			if (hint != "") != tt.want {
 				t.Fatalf("renderChannelHints() = %q, want non-empty=%v", hint, tt.want)
 			}

@@ -325,6 +325,26 @@ Updates arrive as chunks with an empty delta and a top-level
 
 The turn's stream stays open while it waits for the decision.
 
+### Replies for a chat app (IM bots)
+
+If you relay the reply into a chat app (a WeChat or Telegram bot of your
+own), send `"reply_format": "chat"`. The agent then answers the way it does
+on FastClaw's own IM channels — a few short conversational messages instead
+of one long, formatted answer — and the reply keeps a line holding only
+`<|split|>` between messages:
+
+```
+有结果了。
+<|split|>
+他主要在做 AI 应用。
+```
+
+Send each part as its own message. With `"stream": true` the markers stream
+as they are written, so you can send each message as soon as the next
+marker arrives instead of waiting for the whole reply. A marker inside a
+Markdown code block is text, not a split. Without `reply_format` the reply
+comes back as one text, its messages joined by blank lines.
+
 ## 6. Usage and quotas
 
 - `GET /v1/usage` — per-day token usage. Query: `days` (1–90, default 30),

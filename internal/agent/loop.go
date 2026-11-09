@@ -1662,9 +1662,10 @@ func renderChatbotPersistenceReminder(mode, displayName, userMD, memoryMD string
 // stay in lockstep.
 //
 // Returns "" for non-chat transports such as API calls, where inserting
-// a UI control token into the response would be surprising.
+// a UI control token into the response would be surprising — unless the
+// API caller said it relays the reply into a chat (msg.ChatReply).
 func renderChannelHints(msg bus.InboundMessage, splitEnabled bool) string {
-	if !splitEnabled || (msg.Channel != "web" && !isIMChannel(msg.Channel)) {
+	if !splitEnabled || (msg.Channel != "web" && !isIMChannel(msg.Channel) && !msg.ChatReply) {
 		return ""
 	}
 	return "## Reply Format\n\n" +

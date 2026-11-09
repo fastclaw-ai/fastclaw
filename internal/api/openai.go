@@ -87,6 +87,13 @@ type chatCompletionRequest struct {
 	// stream back as `local_agent` chunks, and the caller answers an
 	// approval with POST /v1/local-agents/approval.
 	LocalAgents bool `json:"local_agents,omitempty"`
+	// ReplyFormat (FastClaw extension) "chat": the caller relays the
+	// reply into a chat app (an IM bot). The agent answers like it does
+	// on an IM channel — short conversational messages — and the reply
+	// keeps a "<|split|>" line between its messages (streamed as it is
+	// written) for the caller to send as separate bubbles. Anything else:
+	// one reply, messages joined by blank lines.
+	ReplyFormat string `json:"reply_format,omitempty"`
 }
 
 // attachmentRequest is the wire form of a single attachment.
@@ -527,6 +534,7 @@ func (s *Server) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		PeerKind:  "dm",
 		Params:    turnParams(req.Params),
 		PhotoURLs: req.inlineImageURLs(),
+		ChatReply: req.ReplyFormat == "chat",
 		ProjectID: projectID,
 	}
 
@@ -587,7 +595,7 @@ func runAgentTurn(ctx context.Context, ag *agent.Agent, msg bus.InboundMessage, 
 		ctx = agent.ContextWithStream(ctx, events, nil, nil, "", ag.Name(), "")
 	}
 	replyCh := make(chan string, 1)
-	go func() { replyCh <- apiReplyText(ag.HandleMessage(ctx, msg)) }()
+	go func() { replyCh <- replyTextFor(msg, ag.HandleMessage(ctx, msg)) }()
 
 	tick := time.NewTicker(15 * time.Second)
 	defer tick.Stop()
@@ -653,7 +661,12 @@ func (s *Server) streamResponseFromAgent(w http.ResponseWriter, r *http.Request,
 			return
 		}
 		if !roundOpen && streamed.Len() > 0 {
-			text = "\n\n" + text
+			// A new model round (after tool calls) is a new message.
+			if msg.ChatReply {
+				text = "\n" + channels.SplitMessageMarker + "\n" + text
+			} else {
+				text = "\n\n" + text
+			}
 		}
 		roundOpen = true
 		streamed.WriteString(text)
@@ -672,7 +685,7 @@ func (s *Server) streamResponseFromAgent(w http.ResponseWriter, r *http.Request,
 		case "content":
 			// The round's full text; already relayed when it streamed.
 			if c, _ := evt.Data["content"].(string); !roundOpen && strings.TrimSpace(c) != "" {
-				writeText(apiReplyText(c))
+				writeText(replyTextFor(msg, c))
 			}
 			roundOpen = false
 		case "local_agent":
@@ -727,6 +740,15 @@ func (s *Server) streamResponseFromAgent(w http.ResponseWriter, r *http.Request,
 // split marker is for chat channels that send them as separate bubbles.
 func apiReplyText(reply string) string {
 	return strings.ReplaceAll(reply, channels.SplitMessageMarker, "\n\n")
+}
+
+// replyTextFor is the reply as the caller asked for it: markers kept
+// for a chat caller (reply_format "chat"), joined otherwise.
+func replyTextFor(msg bus.InboundMessage, reply string) string {
+	if msg.ChatReply {
+		return reply
+	}
+	return apiReplyText(reply)
 }
 
 func (s *Server) writeSSEChunk(w http.ResponseWriter, id, model string, created int64, role, content string, finishReason *string, extras *chunkExtras) {
