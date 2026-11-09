@@ -552,6 +552,12 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 		// send {} to clear, or send the full desired map to replace.
 		MCPServers      map[string]config.MCPServerConfig `json:"mcpServers,omitempty"`
 		MCPServersReset bool                              `json:"mcpServersReset,omitempty"`
+		// End-user reach (store.AgentReachableByEndUser): which of the
+		// account's end users may reach this agent from another agent.
+		// nil = unchanged, "" = clear. Visibility: "public" | "private".
+		// Owner: the end user's X-Fastclaw-End-User value.
+		EndUserVisibility *string `json:"endUserVisibility,omitempty"`
+		EndUserOwner      *string `json:"endUserOwner,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
@@ -607,6 +613,22 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 		} else {
 			rec.Config["mcpServers"] = req.MCPServers
 		}
+	}
+	if req.EndUserVisibility != nil {
+		v := strings.TrimSpace(*req.EndUserVisibility)
+		if v != "" && v != store.EndUserVisibilityPublic && v != store.EndUserVisibilityPrivate {
+			jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "endUserVisibility must be one of: public, private"})
+			return
+		}
+		setAgentConfigString(rec, store.AgentCfgEndUserVisibility, v)
+	}
+	if req.EndUserOwner != nil {
+		v := strings.TrimSpace(*req.EndUserOwner)
+		if len(v) > 256 {
+			jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "endUserOwner is too long"})
+			return
+		}
+		setAgentConfigString(rec, store.AgentCfgEndUserOwner, v)
 	}
 	if err := s.dataStore.SaveAgent(r.Context(), rec); err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
@@ -1749,4 +1771,19 @@ func (s *Server) handleListAgentRegisteredTools(w http.ResponseWriter, r *http.R
 		toolList = []tools.ToolInfo{}
 	}
 	jsonResponse(w, http.StatusOK, map[string]any{"tools": toolList})
+}
+
+// setAgentConfigString sets key in rec's config blob, or removes it when v
+// is empty.
+func setAgentConfigString(rec *store.AgentRecord, key, v string) {
+	if v == "" {
+		if rec.Config != nil {
+			delete(rec.Config, key)
+		}
+		return
+	}
+	if rec.Config == nil {
+		rec.Config = map[string]interface{}{}
+	}
+	rec.Config[key] = v
 }

@@ -162,6 +162,16 @@ Any of `name`, `description`, `instructions`, `model`, `metadata`; omitted
 fields are unchanged. `model: ""` clears the override. `metadata` merges; a key
 set to `null` or `""` is removed.
 
+Account callers (no end user) can also set who among their end users may
+reach one of their agents from another agent (`message_agent`, e.g. "ask 小微
+to tell me a joke" while chatting with another agent):
+`endUserVisibility: "public"` (every end user) or `"private"`, and
+`endUserOwner: "<the end user's X-Fastclaw-End-User value>"` (that end user,
+e.g. a draft only its creator may use). `""` clears either. Neither set: no
+end user reaches the agent that way, so mark your published agents `public`
+and each user's own agents with `endUserOwner`. An end user's own private
+agents are never reachable from the account's agents.
+
 ### Identity files — `PUT /v1/agents/{id}/system-files/{name}`
 
 Body `{"content": "..."}`. `name` is one of `SOUL.md`, `IDENTITY.md`,

@@ -747,9 +747,10 @@ func loadUserSpace(ctx context.Context, userID string, mb *bus.MessageBus, st st
 	}
 	// An app_user space runs agents owned by the app (the api key's owner
 	// account); remember the owner so EnsureAgent treats them as owned.
-	appOwner := ""
+	appOwner, appExternalID := "", ""
 	if u, uerr := st.GetUser(ctx, userID); uerr == nil && u != nil && u.Role == users.RoleAppUser {
 		appOwner = u.OwnerUserID
+		appExternalID = u.ExternalID
 	}
 
 	// Public agents owned by other users are NOT loaded eagerly here —
@@ -910,7 +911,7 @@ func loadUserSpace(ctx context.Context, userID string, mb *bus.MessageBus, st st
 			return agentToolAvailability(cfg, agentID), nil
 		}),
 		// message_agent's lookup, scoped to this space's owner.
-		agent.WithAgentResolver(messageAgentResolver(func() *UserSpace { return space }, st, mb, ws, userID, appOwner)),
+		agent.WithAgentResolver(messageAgentResolver(func() *UserSpace { return space }, st, mb, ws, userID, appOwner, appExternalID)),
 	}
 	if ws != nil {
 		managerOpts = append(managerOpts, agent.WithWorkspaceStore(ws))
@@ -1430,21 +1431,27 @@ func backgroundAgents(ctx context.Context, st store.Store, userID string, bindin
 
 // messageAgentResolver is message_agent's lookup for the space of userID:
 // another agent by id or display name, loaded on demand (agents may be
-// evicted when idle). The target is always owned by userID. In an
-// end-user's (app_user, appOwner != "") space the calling agent must be
-// owned by userID too: a private agent reaches only its owner's other
-// agents, and the account's platform agents running there for the
-// end-user reach none of them.
-func messageAgentResolver(space func() *UserSpace, st store.Store, mb *bus.MessageBus, ws workspace.Store, userID, appOwner string) agent.AgentResolver {
+// evicted when idle).
+//
+// In a plain account space the target is owned by userID. In an end
+// user's (app_user, appOwner != "") space the caller is one of the end
+// user's own agents or one of the account's agents running for them, and
+// the target is one the end user may reach: the account's agents the
+// product marked public to its end users or as this end user's
+// (store.AgentReachableByEndUser, keyed by externalID, their
+// X-Fastclaw-End-User value), plus — for the end user's own agents only —
+// their other own agents. Never another end user's private agents, and an
+// account agent never reaches the end user's own private agents.
+func messageAgentResolver(space func() *UserSpace, st store.Store, mb *bus.MessageBus, ws workspace.Store, userID, appOwner, externalID string) agent.AgentResolver {
 	return func(ctx context.Context, callerOwner, ref string) (*agent.Agent, error) {
 		sp := space()
 		if sp == nil {
 			return nil, fmt.Errorf("user space is still loading")
 		}
-		if appOwner != "" && callerOwner != userID {
+		if callerOwner != userID && (appOwner == "" || callerOwner != appOwner) {
 			return nil, fmt.Errorf("no agent named %q exists", ref)
 		}
-		id, err := resolveOwnedAgentRef(ctx, st, userID, ref)
+		id, err := resolveReachableAgentRef(ctx, st, userID, appOwner, externalID, callerOwner == userID, ref)
 		if err != nil {
 			return nil, err
 		}
@@ -1458,22 +1465,55 @@ func messageAgentResolver(space func() *UserSpace, st store.Store, mb *bus.Messa
 	}
 }
 
-// resolveOwnedAgentRef maps a message_agent target — an agent id or a
-// case-insensitive display name — to the id of an agent owned by userID.
-func resolveOwnedAgentRef(ctx context.Context, st store.Store, userID, ref string) (string, error) {
+// reachableAgents lists the agents message_agent may reach in the space
+// of userID (see messageAgentResolver).
+// ownAgents: include userID's own agents (false for an account agent
+// calling from an end user's space).
+func reachableAgents(ctx context.Context, st store.Store, userID, appOwner, externalID string, ownAgents bool) ([]store.AgentRecord, error) {
+	var recs []store.AgentRecord
+	if ownAgents || appOwner == "" {
+		own, err := st.ListAgents(ctx, userID)
+		if err != nil {
+			return nil, err
+		}
+		recs = own
+	}
+	if appOwner == "" {
+		return recs, nil
+	}
+	shared, err := st.ListAgents(ctx, appOwner)
+	if err != nil {
+		return nil, err
+	}
+	for i := range shared {
+		if store.AgentReachableByEndUser(&shared[i], externalID) {
+			recs = append(recs, shared[i])
+		}
+	}
+	return recs, nil
+}
+
+// resolveReachableAgentRef maps a message_agent target — an agent id or a
+// case-insensitive display name — to the id of an agent the space may
+// reach. The error for an unknown name lists the reachable ones, so the
+// model can retry with a real name instead of guessing.
+func resolveReachableAgentRef(ctx context.Context, st store.Store, userID, appOwner, externalID string, ownAgents bool, ref string) (string, error) {
 	if st == nil {
 		return "", fmt.Errorf("agent lookup unavailable")
 	}
-	if rec, err := st.GetAgent(ctx, ref); err == nil && rec != nil && rec.UserID == userID {
-		return rec.ID, nil
-	}
-	recs, err := st.ListAgents(ctx, userID)
+	recs, err := reachableAgents(ctx, st, userID, appOwner, externalID, ownAgents)
 	if err != nil {
 		return "", err
 	}
+	ref = strings.TrimSpace(ref)
+	for _, rec := range recs {
+		if rec.ID == ref {
+			return rec.ID, nil
+		}
+	}
 	match := ""
 	for _, rec := range recs {
-		if strings.EqualFold(strings.TrimSpace(rec.Name), strings.TrimSpace(ref)) {
+		if strings.EqualFold(strings.TrimSpace(rec.Name), ref) {
 			if match != "" {
 				return "", fmt.Errorf("more than one agent is named %q; use its id", ref)
 			}
@@ -1481,7 +1521,17 @@ func resolveOwnedAgentRef(ctx context.Context, st store.Store, userID, ref strin
 		}
 	}
 	if match == "" {
-		return "", fmt.Errorf("no agent named %q exists", ref)
+		names := make([]string, 0, len(recs))
+		for _, rec := range recs {
+			if len(names) == 30 {
+				break
+			}
+			names = append(names, rec.Name)
+		}
+		if len(names) == 0 {
+			return "", fmt.Errorf("no agent named %q exists, and there are no other agents to message", ref)
+		}
+		return "", fmt.Errorf("no agent named %q exists. Agents you can message: %s", ref, strings.Join(names, ", "))
 	}
 	return match, nil
 }

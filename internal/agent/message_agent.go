@@ -53,7 +53,11 @@ func (a *Agent) messageAgent(ctx context.Context, resolve AgentResolver, ownerUs
 	}
 	target, err := resolve(ctx, ownerUserID, strings.TrimSpace(ref))
 	if err != nil || target == nil {
-		return "", fmt.Errorf("no agent named %q exists. message_agent only reaches the user's FastClaw agents; if %q is a program on the host (e.g. the codex or claude CLI), run it with exec instead", ref, ref)
+		why := fmt.Sprintf("no agent named %q exists", ref)
+		if err != nil {
+			why = err.Error()
+		}
+		return "", fmt.Errorf("%s. message_agent only reaches FastClaw agents; coding agents such as Codex or Claude Code on the person's computer run through run_local_agent, and a program on the host runs with exec", why)
 	}
 	if target == a || (target.agentID != "" && target.agentID == a.agentID) {
 		return "", fmt.Errorf("you cannot message yourself")
@@ -71,7 +75,7 @@ func (a *Agent) messageAgent(ctx context.Context, resolve AgentResolver, ownerUs
 	params := map[string]any{PrivateFromParamKey: map[string]any{
 		"kind": "agent", "id": a.agentID, "name": senderName, "content": message,
 	}}
-	reply := strings.TrimSpace(target.HandleWebChat(context.WithValue(ctx, messageAgentDepthKey{}, depth+1), sessionID, "", ownerUserID, prompt, nil, params))
+	reply := strings.TrimSpace(target.HandleWebChat(context.WithValue(ctx, messageAgentDepthKey{}, depth+1), sessionID, "", a.messageAgentTurnUser(ownerUserID), prompt, nil, params))
 	if reply == "" {
 		return "", fmt.Errorf("%s received the message but returned no reply", targetName)
 	}
@@ -102,4 +106,20 @@ func (a *Agent) latestDirectSession() string {
 		return best
 	}
 	return fmt.Sprintf("s-%d-%s", time.Now().UnixMilli(), strconv.FormatInt(rand.Int63n(36*36*36*36*36*36), 36))
+}
+
+// messageAgentTurnUser is the user the recipient's turn runs for. In the
+// owner's own space that is the owner (unchanged). An account agent
+// running in an end user's space (a product's platform agent chatting
+// with one of its users) acts for that end user, so the recipient's turn
+// — its session, memory and usage — is theirs, not the account's.
+func (a *Agent) messageAgentTurnUser(ownerUserID string) string {
+	if a.registry == nil {
+		return ownerUserID
+	}
+	space := a.registry.OwnerUserID()
+	if space == "" || space == ownerUserID {
+		return ownerUserID
+	}
+	return a.registry.ChatterUserID()
 }

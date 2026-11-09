@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,7 +51,7 @@ func TestMessageAgentStaysWithinOwner(t *testing.T) {
 	if !alice.Agents.Has("agt_a1") || !alice.Agents.Has("agt_a2") || alice.Agents.Has("agt_b1") {
 		t.Fatalf("alice's space loaded %v, want exactly her private agents", alice.Agents.Names())
 	}
-	resolve := messageAgentResolver(func() *UserSpace { return alice }, st, mb, nil, "u_alice", "app")
+	resolve := messageAgentResolver(func() *UserSpace { return alice }, st, mb, nil, "u_alice", "app", "u_alice")
 
 	for _, ref := range []string{"agt_a2", "reviewer"} {
 		ag, err := resolve(ctx, "u_alice", ref)
@@ -84,7 +85,7 @@ func TestMessageAgentStaysWithinOwner(t *testing.T) {
 	if app.Agents.Has("agt_a1") || app.Agents.Has("agt_b1") {
 		t.Fatalf("account space loaded private agents: %v", app.Agents.Names())
 	}
-	resolveApp := messageAgentResolver(func() *UserSpace { return app }, st, mb, nil, "app", "")
+	resolveApp := messageAgentResolver(func() *UserSpace { return app }, st, mb, nil, "app", "", "")
 	if ag, err := resolveApp(ctx, "app", "Billing"); err != nil || ag.Name() != "agt_plat2" {
 		t.Fatalf("platform → platform: %v %v", ag, err)
 	}
@@ -124,5 +125,63 @@ func TestPrivateAgentBackgroundWorkBelongsToOwner(t *testing.T) {
 	}
 	if app.IsPinned("agt_a1") || app.Agents.Has("agt_a1") {
 		t.Fatal("the account's space must not run its end-users' private agents")
+	}
+}
+
+// An account's agents marked for its end users (endUserVisibility /
+// endUserOwner) are reachable through message_agent in an end user's
+// space: public ones by everyone, an owned one (e.g. a draft) only by its
+// end user, unmarked ones by no one; and the account's agents running
+// there still never reach the end user's own private agents.
+func TestMessageAgentReachesMarkedAccountAgents(t *testing.T) {
+	st := privateAgentFixture(t)
+	ctx := context.Background()
+	for _, a := range []store.AgentRecord{
+		{ID: "agt_pub", UserID: "app", Name: "小微", Config: map[string]any{store.AgentCfgEndUserVisibility: store.EndUserVisibilityPublic}},
+		{ID: "agt_adraft", UserID: "app", Name: "Alice Draft", Config: map[string]any{store.AgentCfgEndUserVisibility: store.EndUserVisibilityPrivate, store.AgentCfgEndUserOwner: "u_alice"}},
+		{ID: "agt_bdraft", UserID: "app", Name: "Bob Draft", Config: map[string]any{store.AgentCfgEndUserVisibility: store.EndUserVisibilityPrivate, store.AgentCfgEndUserOwner: "u_bob"}},
+	} {
+		a := a
+		if err := st.SaveAgent(ctx, &a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mb := bus.New()
+	alice, err := loadUserSpace(ctx, "u_alice", mb, st, nil, nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolve := messageAgentResolver(func() *UserSpace { return alice }, st, mb, nil, "u_alice", "app", "u_alice")
+
+	for _, c := range []struct{ caller, ref, want string }{
+		{"app", "小微", "agt_pub"},
+		{"app", "agt_pub", "agt_pub"},
+		{"app", "alice draft", "agt_adraft"},
+		{"u_alice", "小微", "agt_pub"},
+		{"u_alice", "Reviewer", "agt_a2"},
+	} {
+		ag, err := resolve(ctx, c.caller, c.ref)
+		if err != nil || ag == nil || ag.Name() != c.want {
+			t.Fatalf("%s → %q: got %v, %v; want %s", c.caller, c.ref, ag, err, c.want)
+		}
+	}
+	for _, c := range []struct{ caller, ref, why string }{
+		{"app", "Bob Draft", "bob's draft by name"},
+		{"app", "agt_bdraft", "bob's draft by id"},
+		{"u_alice", "agt_bdraft", "bob's draft from alice's own agent"},
+		{"app", "Billing", "an unmarked account agent"},
+		{"app", "agt_a2", "account agent → alice's private agent"},
+		{"app", "Writer", "account agent → alice's private agent by name"},
+		{"u_bob", "小微", "a caller that isn't this space's"},
+	} {
+		if ag, err := resolve(ctx, c.caller, c.ref); err == nil {
+			t.Fatalf("%s resolved to %v", c.why, ag.Name())
+		}
+	}
+	// An unknown name lists what may be reached, and nothing more.
+	_, err = resolve(ctx, "app", "nobody")
+	if err == nil || !strings.Contains(err.Error(), "小微") || !strings.Contains(err.Error(), "Alice Draft") ||
+		strings.Contains(err.Error(), "Bob Draft") || strings.Contains(err.Error(), "Billing") || strings.Contains(err.Error(), "Writer") {
+		t.Fatalf("unknown-name error = %v", err)
 	}
 }

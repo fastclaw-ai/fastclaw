@@ -4001,6 +4001,11 @@ var chatbotBuiltinAllowlist = []string{
 	// extension mechanism — without exec the chatbot can't run them.
 	"exec",
 	"load_skill",
+	// message_agent: "ask 小微 to …" from a chat persona. It reaches only
+	// agents the space may reach (the owner's own; for a product's end
+	// user, the agents the product marked for them), so a chatbot with
+	// nothing reachable just gets an error listing none.
+	"message_agent",
 }
 
 // builtinAllowForMode returns the built-in tool name allowlist for the

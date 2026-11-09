@@ -263,6 +263,11 @@ type updateAgentRequest struct {
 	// RuntimeConfig is merged into a runtime "agl" agent's config (keys
 	// present replace), then validated like on create.
 	RuntimeConfig map[string]interface{} `json:"runtimeConfig,omitempty"`
+	// EndUserVisibility / EndUserOwner: which of the account's end users
+	// may reach this agent from another agent (message_agent); see
+	// store.AgentReachableByEndUser. "" clears. Account callers only.
+	EndUserVisibility *string `json:"endUserVisibility,omitempty"`
+	EndUserOwner      *string `json:"endUserOwner,omitempty"`
 }
 
 // mergeRuntimeConfig applies patch onto base. Every value must be a
@@ -672,6 +677,29 @@ func (s *Server) HandleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 		}
 		rec.Config["runtimeConfig"] = rc.Map()
 	}
+	if req.EndUserVisibility != nil || req.EndUserOwner != nil {
+		// Set by the account for its own agents, never by an end user.
+		if ident.Role == users.RoleAppUser || rec.UserID != ident.UserID {
+			writeBadRequest(w, "endUserVisibility / endUserOwner are set by the account on its own agents, without an end user")
+			return
+		}
+		if req.EndUserVisibility != nil {
+			v := strings.TrimSpace(*req.EndUserVisibility)
+			if v != "" && v != store.EndUserVisibilityPublic && v != store.EndUserVisibilityPrivate {
+				writeBadRequest(w, "endUserVisibility must be one of: public, private")
+				return
+			}
+			setConfigString(rec.Config, store.AgentCfgEndUserVisibility, v)
+		}
+		if req.EndUserOwner != nil {
+			v := strings.TrimSpace(*req.EndUserOwner)
+			if len(v) > 256 {
+				writeBadRequest(w, "endUserOwner is too long")
+				return
+			}
+			setConfigString(rec.Config, store.AgentCfgEndUserOwner, v)
+		}
+	}
 	ctx := r.Context()
 	if err := s.store.SaveAgent(ctx, rec); err != nil {
 		writeServerError(w, err)
@@ -959,4 +987,13 @@ func newAgentID() (string, error) {
 		return "", err
 	}
 	return "agt_" + hex.EncodeToString(buf[:]), nil
+}
+
+// setConfigString sets key in cfg, or removes it when v is empty.
+func setConfigString(cfg map[string]interface{}, key, v string) {
+	if v == "" {
+		delete(cfg, key)
+		return
+	}
+	cfg[key] = v
 }

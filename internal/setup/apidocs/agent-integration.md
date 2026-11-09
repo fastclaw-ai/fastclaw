@@ -162,6 +162,16 @@ Any of `name`, `description`, `instructions`, `model`, `metadata`; omitted
 fields are unchanged. `model: ""` clears the override. `metadata` merges; a key
 set to `null` or `""` is removed.
 
+Account callers (no end user) can also set who among their end users may
+reach one of their agents from another agent (`message_agent`, e.g. "ask 小微
+to tell me a joke" while chatting with another agent):
+`endUserVisibility: "public"` (every end user) or `"private"`, and
+`endUserOwner: "<the end user's X-Fastclaw-End-User value>"` (that end user,
+e.g. a draft only its creator may use). `""` clears either. Neither set: no
+end user reaches the agent that way, so mark your published agents `public`
+and each user's own agents with `endUserOwner`. An end user's own private
+agents are never reachable from the account's agents.
+
 ### Identity files — `PUT /v1/agents/{id}/system-files/{name}`
 
 Body `{"content": "..."}`. `name` is one of `SOUL.md`, `IDENTITY.md`,
@@ -324,26 +334,6 @@ Updates arrive as chunks with an empty delta and a top-level
 - `{"kind":"approval_resolved","decision"}` and `{"kind":"done"}`.
 
 The turn's stream stays open while it waits for the decision.
-
-### Replies for a chat app (IM bots)
-
-If you relay the reply into a chat app (a WeChat or Telegram bot of your
-own), send `"reply_format": "chat"`. The agent then answers the way it does
-on FastClaw's own IM channels — a few short conversational messages instead
-of one long, formatted answer — and the reply keeps a line holding only
-`<|split|>` between messages:
-
-```
-有结果了。
-<|split|>
-他主要在做 AI 应用。
-```
-
-Send each part as its own message. With `"stream": true` the markers stream
-as they are written, so you can send each message as soon as the next
-marker arrives instead of waiting for the whole reply. A marker inside a
-Markdown code block is text, not a split. Without `reply_format` the reply
-comes back as one text, its messages joined by blank lines.
 
 ## 6. Usage and quotas
 
