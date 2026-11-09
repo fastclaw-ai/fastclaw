@@ -27,6 +27,7 @@ import (
 	"github.com/fastclaw-ai/fastclaw/internal/auth"
 	"github.com/fastclaw-ai/fastclaw/internal/bus"
 	"github.com/fastclaw-ai/fastclaw/internal/config"
+	"github.com/fastclaw-ai/fastclaw/internal/drain"
 )
 
 const (
@@ -291,6 +292,7 @@ func (s *Server) executeACPRun(ctx context.Context, state *acpRunState, ag *agen
 		PeerKind: "dm", PhotoURLs: input.images,
 	}
 
+	defer drain.Track()() // the stream is consumed in this handler
 	stream := ag.HandleMessageStream(ctx, msg)
 	messageStarted := false
 	var messageCreatedAt time.Time

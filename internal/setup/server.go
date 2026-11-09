@@ -21,6 +21,7 @@ import (
 	"github.com/fastclaw-ai/fastclaw/internal/bus"
 	"github.com/fastclaw-ai/fastclaw/internal/channels"
 	"github.com/fastclaw-ai/fastclaw/internal/config"
+	"github.com/fastclaw-ai/fastclaw/internal/drain"
 	"github.com/fastclaw-ai/fastclaw/internal/push"
 	"github.com/fastclaw-ai/fastclaw/internal/runtime"
 	"github.com/fastclaw-ai/fastclaw/internal/session"
@@ -245,7 +246,16 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	mux.HandleFunc("GET /healthz", healthz)
 	mux.HandleFunc("GET /livez", healthz)
-	mux.HandleFunc("GET /readyz", healthz)
+	// Not ready while draining: the load balancer stops routing new
+	// requests here; turns already running finish.
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+		if drain.Draining() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("draining"))
+			return
+		}
+		healthz(w, r)
+	})
 
 	auth := s.authMiddleware
 	opt := s.optionalAuth

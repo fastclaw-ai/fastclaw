@@ -31,6 +31,7 @@ import (
 	"github.com/fastclaw-ai/fastclaw/internal/channels"
 	"github.com/fastclaw-ai/fastclaw/internal/config"
 	"github.com/fastclaw-ai/fastclaw/internal/cron"
+	"github.com/fastclaw-ai/fastclaw/internal/drain"
 	"github.com/fastclaw-ai/fastclaw/internal/plugin"
 	"github.com/fastclaw-ai/fastclaw/internal/rediscoord"
 	coderuntime "github.com/fastclaw-ai/fastclaw/internal/runtime"
@@ -710,7 +711,26 @@ func (g *Gateway) Run() error {
 	signal.Notify(stopCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		sig := <-stopCh
-		slog.Info("received signal, shutting down", "signal", sig)
+		// Finish the turns already running first (a rolling deploy must
+		// not cut them off); a second signal stops at once.
+		drain.Start()
+		timeout := drainTimeout()
+		slog.Info("received signal, draining running turns", "signal", sig, "active", drain.Active(), "timeout", timeout)
+		waitCtx, stopWaiting := context.WithCancel(context.Background())
+		go func() {
+			select {
+			case sig := <-stopCh:
+				slog.Warn("second signal, not waiting for running turns", "signal", sig)
+				stopWaiting()
+			case <-waitCtx.Done():
+			}
+		}()
+		if drain.Wait(waitCtx, timeout) {
+			slog.Info("all turns finished, shutting down")
+		} else {
+			slog.Warn("shutting down with turns still running", "active", drain.Active())
+		}
+		stopWaiting()
 		cancel()
 	}()
 
@@ -784,6 +804,19 @@ func (g *Gateway) Run() error {
 	}
 	slog.Info("gateway stopped")
 	return nil
+}
+
+// drainTimeout is how long shutdown waits for running turns:
+// FASTCLAW_DRAIN_TIMEOUT (a Go duration, e.g. "10m"; "0" = don't wait),
+// default 10 minutes. Keep the pod's terminationGracePeriodSeconds above it.
+func drainTimeout() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("FASTCLAW_DRAIN_TIMEOUT")); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d >= 0 {
+			return d
+		}
+		slog.Warn("invalid FASTCLAW_DRAIN_TIMEOUT, using the default", "value", v)
+	}
+	return 10 * time.Minute
 }
 
 // makeStoreFirstAgentFileLoader returns a loader that reads per-agent
