@@ -98,7 +98,7 @@ func (a *Agent) messageAgent(ctx context.Context, resolve AgentResolver, ownerUs
 	params := map[string]any{PrivateFromParamKey: map[string]any{
 		"kind": "agent", "id": a.agentID, "name": senderName, "content": message,
 	}}
-	reply := strings.TrimSpace(target.HandleWebChat(context.WithValue(ctx, messageAgentDepthKey{}, depth+1), sessionID, "", a.messageAgentTurnUser(ownerUserID), prompt, nil, params))
+	reply := strings.TrimSpace(target.HandleWebChat(recipientTurnContext(ctx, depth+1), sessionID, "", a.messageAgentTurnUser(ownerUserID), prompt, nil, params))
 	if reply == "" {
 		return "", fmt.Errorf("%s received the message but returned no reply", targetName)
 	}
@@ -210,4 +210,21 @@ func rosterDescription(d string) string {
 		return string(r[:60]) + "…"
 	}
 	return d
+}
+
+// recipientTurnContext is the context the recipient's turn runs in: the
+// caller's cancellation and metering, but none of the caller's turn
+// plumbing. Without this the recipient's events went out on the caller's
+// stream, so its raw reply reached the person (e.g. as its own WeChat
+// message) before the caller's answer, and its end-of-turn could cut the
+// caller's stream short. The recipient's reply comes back only as the
+// tool result; its turn also uses its own model and no web local-agents
+// session of the caller.
+func recipientTurnContext(ctx context.Context, depth int) context.Context {
+	ctx = context.WithValue(ctx, messageAgentDepthKey{}, depth)
+	ctx = context.WithValue(ctx, streamCtxKey{}, (*streamCtx)(nil))
+	ctx = context.WithValue(ctx, chatEventsKey{}, (chan<- ChatEvent)(nil))
+	ctx = context.WithValue(ctx, turnModelKey{}, "")
+	ctx = context.WithValue(ctx, localAgentsWebKey{}, "")
+	return ctx
 }
