@@ -63,11 +63,14 @@ type Agent struct {
 	// even after the operator explicitly chose chatbot/customize.
 	// PromptMode also drives the per-turn tool filter via
 	// builtinAllowForMode below.
-	promptMode    string
-	homePath      string // agent's home: SOUL.md, sessions, memory, skills
-	workspacePath string // working dir where agent creates user files
-	homeDir       string // FastClaw root, ~/.fastclaw
-	ownerUserID   string // the UserSpace user the agent runs for (hook / data namespacing)
+	promptMode string
+	// listReachableAgents: the message_agent roster (nil = none). Set by
+	// registerMessageAgent.
+	listReachableAgents func(ctx context.Context) ([]AgentBrief, error)
+	homePath            string // agent's home: SOUL.md, sessions, memory, skills
+	workspacePath       string // working dir where agent creates user files
+	homeDir             string // FastClaw root, ~/.fastclaw
+	ownerUserID         string // the UserSpace user the agent runs for (hook / data namespacing)
 	// agentOwnerID is agents.user_id — the account that actually owns the
 	// agent. It differs from ownerUserID whenever the agent runs in another
 	// user's space (an app's end-user, a public-link visitor, an admin
@@ -2464,6 +2467,8 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 	// The person's own computers (agl): run_local_agent on 1:1 IM turns
 	// of the person the chat belongs to; see mountLocalAgents.
 	localAgentsNote := a.mountLocalAgents(ctx, msg)
+	// The other FastClaw agents message_agent can reach (roster).
+	agentsNote := a.reachableAgentsNote(ctx, msg)
 
 	// Steering: mark a turn in-flight so messages arriving mid-run are
 	// buffered onto the session (drained between tool iterations below)
@@ -2545,6 +2550,9 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 	}
 	if connectorNote != "" {
 		messages = append(messages, provider.Message{Role: "system", Content: connectorNote})
+	}
+	if agentsNote != "" {
+		messages = append(messages, provider.Message{Role: "system", Content: agentsNote})
 	}
 	if localAgentsNote != "" {
 		messages = append(messages, provider.Message{Role: "system", Content: localAgentsNote})

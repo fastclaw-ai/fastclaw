@@ -24,6 +24,7 @@ func RegisterMessageAgent(r *Registry, send MessageAgentFunc) {
 			"or to consult a specialist agent. The recipient runs in its own chat, where a copy is kept, and its answer is returned to you. "+
 			"Answer the user in your own voice, attributing the findings to the recipient; do not paste its reply verbatim. "+
 			"Never pretend to have contacted an agent without calling this tool, and do not ask the user to relay the message. "+
+			"Agents can be added at any time: when the person names an agent, call this tool (the roster of agents you can message, when present, is current) rather than repeating an earlier \"no such agent\". "+
 			"Only reaches FastClaw agents: coding agents such as Codex or Claude Code are not FastClaw agents — they run on the person's own linked computer through run_local_agent (only offered when the person has linked one).",
 		map[string]interface{}{
 			"type": "object",

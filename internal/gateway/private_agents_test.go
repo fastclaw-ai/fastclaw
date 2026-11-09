@@ -185,3 +185,45 @@ func TestMessageAgentReachesMarkedAccountAgents(t *testing.T) {
 		t.Fatalf("unknown-name error = %v", err)
 	}
 }
+
+// The roster matches what message_agent resolves: in alice's space an
+// account agent sees the marked account agents (hers first, then public),
+// never bob's draft, unmarked ones or her private agents; her own agent
+// also sees her other own agents, listed first.
+func TestMessageAgentRoster(t *testing.T) {
+	st := privateAgentFixture(t)
+	ctx := context.Background()
+	for _, a := range []store.AgentRecord{
+		{ID: "agt_pub", UserID: "app", Name: "小微", Config: map[string]any{store.AgentCfgEndUserVisibility: store.EndUserVisibilityPublic, "description": "爱夸人的陪聊"}},
+		{ID: "agt_adraft", UserID: "app", Name: "Alice Draft", Config: map[string]any{store.AgentCfgEndUserVisibility: store.EndUserVisibilityPrivate, store.AgentCfgEndUserOwner: "u_alice"}},
+		{ID: "agt_bdraft", UserID: "app", Name: "Bob Draft", Config: map[string]any{store.AgentCfgEndUserOwner: "u_bob"}},
+	} {
+		a := a
+		if err := st.SaveAgent(ctx, &a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list := messageAgentLister(st, "u_alice", "app", "u_alice")
+	names := func(caller string) []string {
+		got, err := list(ctx, caller)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := []string{}
+		for _, a := range got {
+			out = append(out, a.Name)
+		}
+		return out
+	}
+	if got := strings.Join(names("app"), ","); got != "Alice Draft,小微" {
+		t.Fatalf("account agent's roster = %s", got)
+	}
+	got := names("u_alice")
+	if len(got) != 4 || got[2] != "Alice Draft" || got[3] != "小微" ||
+		!strings.Contains(strings.Join(got[:2], ","), "Writer") || !strings.Contains(strings.Join(got[:2], ","), "Reviewer") {
+		t.Fatalf("alice's own agent's roster = %v", got)
+	}
+	if got := names("u_bob"); len(got) != 0 {
+		t.Fatalf("foreign caller's roster = %v", got)
+	}
+}

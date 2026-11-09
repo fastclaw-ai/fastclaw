@@ -3,12 +3,15 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"math/rand"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/fastclaw-ai/fastclaw/internal/agent/tools"
+	"github.com/fastclaw-ai/fastclaw/internal/bus"
 )
 
 // PrivateFromParamKey carries the source of a private message ({kind,
@@ -30,12 +33,32 @@ type messageAgentDepthKey struct{}
 // agents, never the account's platform agents or another end-user's.
 type AgentResolver func(ctx context.Context, ownerUserID, ref string) (*Agent, error)
 
+// AgentBrief is one entry of the message_agent roster.
+type AgentBrief struct {
+	ID          string
+	Name        string
+	Description string
+}
+
+// AgentLister lists the agents a caller owned by ownerUserID may reach
+// with message_agent, the caller's own first. Same rules as AgentResolver.
+type AgentLister func(ctx context.Context, ownerUserID string) ([]AgentBrief, error)
+
+// maxRosterAgents caps the roster put in the prompt; message_agent still
+// finds any reachable agent by exact name.
+const maxRosterAgents = 20
+
 // registerMessageAgent wires message_agent for this agent: a real private
 // message to another of the owner's agents, run in that agent's direct
 // chat (where a copy stays), whose reply comes back as the tool result.
-func (a *Agent) registerMessageAgent(resolve AgentResolver, ownerUserID string) {
+func (a *Agent) registerMessageAgent(resolve AgentResolver, list AgentLister, ownerUserID string) {
 	if a.registry == nil || resolve == nil {
 		return
+	}
+	if list != nil {
+		a.listReachableAgents = func(ctx context.Context) ([]AgentBrief, error) {
+			return list(ctx, ownerUserID)
+		}
 	}
 	tools.RegisterMessageAgent(a.registry, func(ctx context.Context, ref, message string) (string, error) {
 		return a.messageAgent(ctx, resolve, ownerUserID, ref, message)
@@ -122,4 +145,69 @@ func (a *Agent) messageAgentTurnUser(ownerUserID string) string {
 		return ownerUserID
 	}
 	return a.registry.ChatterUserID()
+}
+
+// reachableAgentsNote is the per-turn roster of the other FastClaw agents
+// this agent can reach with message_agent, so "which agents do I have?"
+// and "ask 小微 …" don't depend on the model guessing names — and so a
+// chat that once said an agent didn't exist doesn't keep saying so. Only
+// where message_agent is offered (not in group chats); "" when nothing is
+// reachable.
+func (a *Agent) reachableAgentsNote(ctx context.Context, msg bus.InboundMessage) string {
+	if a.listReachableAgents == nil || a.registry == nil || !a.registry.HasTool("message_agent") {
+		return ""
+	}
+	// Customize mode exposes no built-ins, so message_agent isn't offered.
+	if allow := builtinAllowForMode(a.promptMode); allow != nil && !slices.Contains(allow, "message_agent") {
+		return ""
+	}
+	if _, group := msg.Params["__fastclawGroupChat"]; group || msg.PeerKind == "group" {
+		return ""
+	}
+	lctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	agents, err := a.listReachableAgents(lctx)
+	if err != nil {
+		slog.Warn("message_agent roster failed", "agent", a.name, "error", err)
+		return ""
+	}
+	var b strings.Builder
+	n := 0
+	for _, ag := range agents {
+		if ag.ID == a.agentID || ag.ID == a.name {
+			continue
+		}
+		if n == maxRosterAgents {
+			n++
+			break
+		}
+		n++
+		fmt.Fprintf(&b, "\n- %s", ag.Name)
+		if d := rosterDescription(ag.Description); d != "" {
+			fmt.Fprintf(&b, ": %s", d)
+		}
+	}
+	if n == 0 {
+		return ""
+	}
+	more := ""
+	if n > maxRosterAgents {
+		more = "\n(More exist; message_agent also finds any other by its exact name.)"
+	}
+	return "## Other FastClaw agents you can message\n" +
+		"These are cloud agents (personas), separate from the coding agents on the person's own computer " +
+		"(those, when linked, run through run_local_agent). When the person asks which agents they have, list these " +
+		"as their agents here (and the computer's coding agents separately, if any). To involve one, call message_agent " +
+		"with its name. This list is current: agents can be added at any time, so if the chat earlier said an agent " +
+		"didn't exist, trust this list and message_agent instead." + b.String() + more
+}
+
+// rosterDescription is a one-line, short form of an agent description.
+func rosterDescription(d string) string {
+	d = strings.Join(strings.Fields(d), " ")
+	r := []rune(d)
+	if len(r) > 60 {
+		return string(r[:60]) + "…"
+	}
+	return d
 }

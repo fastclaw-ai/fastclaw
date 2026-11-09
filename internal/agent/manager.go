@@ -67,6 +67,9 @@ type managerOpts struct {
 	// agentResolver finds (loading on demand) another agent of the same
 	// account for message_agent. Nil leaves the tool unregistered.
 	agentResolver AgentResolver
+	// agentLister lists the agents message_agent may reach, for the
+	// per-turn roster. Nil: no roster.
+	agentLister AgentLister
 	// onAgentChanged is invoked after in-chat provisioning mutates an
 	// agent, so a running gateway can reload rather than require a
 	// restart.
@@ -77,6 +80,12 @@ type managerOpts struct {
 // the same account by id or display name, loaded if it was evicted.
 func WithAgentResolver(fn AgentResolver) ManagerOption {
 	return func(o *managerOpts) { o.agentResolver = fn }
+}
+
+// WithAgentLister supplies the roster behind message_agent: the agents a
+// caller may reach (see AgentLister).
+func WithAgentLister(fn AgentLister) ManagerOption {
+	return func(o *managerOpts) { o.agentLister = fn }
 }
 
 // WithToolAvailability supplies the capability probe behind check_agent.
@@ -354,7 +363,7 @@ func (m *Manager) buildAgentWithSkillsCfg(rc config.ResolvedAgent, prov provider
 		})
 		// Agent-to-agent private messages (message_agent), scoped to the
 		// same owner account as provisioning.
-		ag.registerMessageAgent(m.opts.agentResolver, ownerID)
+		ag.registerMessageAgent(m.opts.agentResolver, m.opts.agentLister, ownerID)
 		// install_skill / search_skills were written but never registered —
 		// the tools existed as dead code, which is why provisioning had to
 		// shell out to the CLI in the first place.

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -912,6 +913,7 @@ func loadUserSpace(ctx context.Context, userID string, mb *bus.MessageBus, st st
 		}),
 		// message_agent's lookup, scoped to this space's owner.
 		agent.WithAgentResolver(messageAgentResolver(func() *UserSpace { return space }, st, mb, ws, userID, appOwner, appExternalID)),
+		agent.WithAgentLister(messageAgentLister(st, userID, appOwner, appExternalID)),
 	}
 	if ws != nil {
 		managerOpts = append(managerOpts, agent.WithWorkspaceStore(ws))
@@ -1462,6 +1464,42 @@ func messageAgentResolver(space func() *UserSpace, st store.Store, mb *bus.Messa
 			return ag, nil
 		}
 		return nil, fmt.Errorf("agent %q is not available", ref)
+	}
+}
+
+// messageAgentLister is message_agent's roster for the space of userID:
+// what messageAgentResolver would resolve for a caller owned by
+// callerOwner, the end user's own agents first (their own private agents,
+// then the account's agents marked as theirs, then the public ones).
+func messageAgentLister(st store.Store, userID, appOwner, externalID string) agent.AgentLister {
+	return func(ctx context.Context, callerOwner string) ([]agent.AgentBrief, error) {
+		if st == nil {
+			return nil, nil
+		}
+		if callerOwner != userID && (appOwner == "" || callerOwner != appOwner) {
+			return nil, nil
+		}
+		recs, err := reachableAgents(ctx, st, userID, appOwner, externalID, callerOwner == userID)
+		if err != nil {
+			return nil, err
+		}
+		rank := func(rec *store.AgentRecord) int {
+			switch {
+			case rec.UserID == userID:
+				return 0
+			case externalID != "" && store.AgentEndUserOwner(rec) == externalID:
+				return 1
+			default:
+				return 2
+			}
+		}
+		sort.SliceStable(recs, func(i, j int) bool { return rank(&recs[i]) < rank(&recs[j]) })
+		out := make([]agent.AgentBrief, 0, len(recs))
+		for _, rec := range recs {
+			desc, _ := rec.Config["description"].(string)
+			out = append(out, agent.AgentBrief{ID: rec.ID, Name: rec.Name, Description: desc})
+		}
+		return out, nil
 	}
 }
 
