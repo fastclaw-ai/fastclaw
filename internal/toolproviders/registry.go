@@ -163,6 +163,7 @@ func (c *Chain) Execute(ctx context.Context, args map[string]any) (Response, err
 		return Response{}, fmt.Errorf("no providers configured for %q", c.Category)
 	}
 	var errs []error
+	authorized := false
 	for i, ref := range c.Order {
 		name, model := parseRef(ref)
 		p := c.Registry.Get(c.Category, name)
@@ -182,8 +183,17 @@ func (c *Chain) Execute(ctx context.Context, args map[string]any) (Response, err
 			}
 			continue
 		}
+		if !authorized {
+			// Costly categories ask the account's billing hook once, before
+			// the first provider actually runs.
+			authorized = true
+			if err := authorizeCall(ctx, c.Category, name, model, args); err != nil {
+				return Response{}, err
+			}
+		}
 		resp, err := p.Execute(ctx, Request{Args: args, Config: cfg})
 		if err == nil && !isEmpty(resp) {
+			meterCall(ctx, c.Category, name, model, args, resp)
 			return resp, nil
 		}
 		if err == nil {

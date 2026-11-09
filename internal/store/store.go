@@ -119,6 +119,16 @@ type Store interface {
 	// afterID, oldest first (≤ limit). Rows become visible a few seconds
 	// after they are written, so incremental readers never skip one.
 	ListUsageEvents(ctx context.Context, afterID int64, limit int) ([]UsageEvent, error)
+	// InsertMeteredEvent / ListAccountUsageEvents back usage metering
+	// (usage_events, docs/usage-metering.md): every billable thing an
+	// agent did, exported to the account that pays for it.
+	InsertMeteredEvent(ctx context.Context, e *MeteredEvent) error
+	ListAccountUsageEvents(ctx context.Context, accountID string, afterID int64, limit int) ([]MeteredEvent, error)
+	// BillingTarget resolves the account that pays for a namespace user
+	// and that account's billing hook.
+	BillingTarget(ctx context.Context, userID string) (BillingTarget, error)
+	GetBillingHook(ctx context.Context, accountID string) (url, secret string, err error)
+	SetBillingHook(ctx context.Context, accountID, url, secret string) error
 	// CreateLoginToken / ConsumeLoginToken back single-use console
 	// sign-in links. Consume deletes the token and returns its user;
 	// ErrNotFound when unknown or expired.

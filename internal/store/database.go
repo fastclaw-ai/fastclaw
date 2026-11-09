@@ -197,6 +197,9 @@ func (d *DBStore) Migrate(ctx context.Context) error {
 	if err := d.migrateBillingHooks(ctx); err != nil {
 		return fmt.Errorf("migrate billing hooks: %w", err)
 	}
+	if err := d.migrateUsageEvents(ctx); err != nil {
+		return fmt.Errorf("migrate usage events: %w", err)
+	}
 	if err := d.migrateMachinesAddSettings(ctx); err != nil {
 		return fmt.Errorf("migrate machines settings: %w", err)
 	}

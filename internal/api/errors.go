@@ -23,6 +23,8 @@ const (
 	codeNotConfigured      = "not_configured"
 	codePaymentRequired    = "payment_required"
 	codeInternal           = "internal_error"
+	// codeNoPendingApproval: nothing waits for a local-agent decision.
+	codeNoPendingApproval = "no_pending_approval"
 	// codeAgentError: the agent's turn failed, e.g. its model API
 	// returned an error.
 	codeAgentError = "agent_error"

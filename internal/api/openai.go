@@ -80,6 +80,13 @@ type chatCompletionRequest struct {
 	// (small files only). Files the agent produced always come back in
 	// `files` with a download URL.
 	ReturnFiles string `json:"return_files,omitempty"`
+	// LocalAgents (FastClaw extension) lets the agent hand work to the
+	// end user's own linked computers (run_local_agent over agl) in this
+	// turn. Only for streaming requests made as an end user with an
+	// explicit x-fastclaw-session-key: progress and approval requests
+	// stream back as `local_agent` chunks, and the caller answers an
+	// approval with POST /v1/local-agents/approval.
+	LocalAgents bool `json:"local_agents,omitempty"`
 }
 
 // attachmentRequest is the wire form of a single attachment.
@@ -230,6 +237,14 @@ type chatCompletionChunk struct {
 	// Error (FastClaw extension), on the final chunk, says the turn failed
 	// (e.g. the model API returned an error); same shape as an error body.
 	Error *apiError `json:"error,omitempty"`
+	// LocalAgent (FastClaw extension, with local_agents) is a
+	// run_local_agent update on a chunk whose delta is empty:
+	// {"kind": "progress"|"approval"|"approval_resolved"|"done",
+	//  "agent", "machine", "text"?, "decision"?, "error"?}.
+	LocalAgent map[string]any `json:"local_agent,omitempty"`
+	// TurnID (FastClaw extension), on the final chunk, is the id every
+	// usage event of this turn carries (GET /v1/usage/events).
+	TurnID string `json:"turn_id,omitempty"`
 }
 
 // apiError is the /v1 error object (see writeAPIError).
@@ -250,10 +265,12 @@ type chunkTool struct {
 // chunkExtras is what only some chunks carry: usage and files on the
 // final one, a tool step on its own.
 type chunkExtras struct {
-	Usage *completionUsage
-	Files []turnFile
-	Tool  *chunkTool
-	Error *apiError
+	Usage      *completionUsage
+	Files      []turnFile
+	Tool       *chunkTool
+	Error      *apiError
+	LocalAgent map[string]any
+	TurnID     string
 }
 
 type chunkChoice struct {
@@ -277,6 +294,9 @@ type chatCompletionResponse struct {
 	Usage   completionUsage    `json:"usage"`
 	// Files (FastClaw extension): files the agent produced this turn.
 	Files []turnFile `json:"files,omitempty"`
+	// TurnID (FastClaw extension) is the id every usage event of this
+	// turn carries (GET /v1/usage/events).
+	TurnID string `json:"turn_id,omitempty"`
 }
 
 type completionChoice struct {
@@ -429,6 +449,50 @@ func (s *Server) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// X-Fastclaw-Channel lets callers override the reply channel so
+	// cron jobs created during this turn route through the right
+	// adapter (e.g. "pinclaw" → plugin channel.send → Cloud API).
+	channel := r.Header.Get("x-fastclaw-channel")
+	if channel == "" {
+		channel = "api"
+	}
+	// The chatter decides whose USER.md and personal memory the turn
+	// reads and writes. With an end-user it's that end-user's app_user;
+	// without one, every call shares the agent's own "api-user" memory.
+	chatter := "api-user"
+	if ident.EndUser != "" {
+		chatter = ident.EffectiveUserID()
+	}
+
+	// The request's `model` runs this turn when the agent can reach it
+	// ("<provider>/<model>" with that provider configured). Anything else
+	// — e.g. the placeholder names OpenAI SDKs require — is ignored and
+	// the agent's own model answers. The response always names the model
+	// that actually ran.
+	model := ag.Model()
+	if req.Model != "" && req.Model != model {
+		if _, ok := ag.ResolveTurnModel(req.Model); ok {
+			model = strings.TrimSpace(req.Model)
+			r = r.WithContext(agent.WithTurnModel(r.Context(), model))
+		} else {
+			slog.Info("chat completion: ignoring unusable request model",
+				"agent", ag.Name(), "requested", req.Model, "using", model)
+		}
+	}
+
+	// Billing hook (docs/usage-metering.md): the paying account is asked
+	// before anything of the turn runs; a refusal is a 402 with its
+	// message. The authorized turn rides on ctx, so the agent loop
+	// doesn't ask again, and its id comes back with the reply.
+	turnCtx, turnID, deny := ag.AuthorizeTurn(r.Context(), bus.InboundMessage{
+		Channel: channel, ChatID: sessionKey, UserID: chatter, PeerKind: "dm", ProjectID: projectID,
+	})
+	if deny != "" {
+		writeAPIError(w, http.StatusPaymentRequired, "billing_error", codePaymentRequired, deny)
+		return
+	}
+	r = r.WithContext(turnCtx)
+
 	// Materialize attached images into the agent's session workspace and
 	// prepend the same `[Attached: /workspace/<file>]` breadcrumb the web
 	// UI uses (web/src/app/agents/[id]/chat/page.tsx:639-645) so the wire
@@ -455,20 +519,6 @@ func (s *Server) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build inbound message.
-	// X-Fastclaw-Channel lets callers override the reply channel so
-	// cron jobs created during this turn route through the right
-	// adapter (e.g. "pinclaw" → plugin channel.send → Cloud API).
-	channel := r.Header.Get("x-fastclaw-channel")
-	if channel == "" {
-		channel = "api"
-	}
-	// The chatter decides whose USER.md and personal memory the turn
-	// reads and writes. With an end-user it's that end-user's app_user;
-	// without one, every call shares the agent's own "api-user" memory.
-	chatter := "api-user"
-	if ident.EndUser != "" {
-		chatter = ident.EffectiveUserID()
-	}
 	msg := bus.InboundMessage{
 		Channel:   channel,
 		ChatID:    sessionKey,
@@ -487,21 +537,6 @@ func (s *Server) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		"stream", req.Stream != nil && *req.Stream,
 	)
 
-	// The request's `model` runs this turn when the agent can reach it
-	// ("<provider>/<model>" with that provider configured). Anything else
-	// — e.g. the placeholder names OpenAI SDKs require — is ignored and
-	// the agent's own model answers. The response always names the model
-	// that actually ran.
-	model := ag.Model()
-	if req.Model != "" && req.Model != model {
-		if _, ok := ag.ResolveTurnModel(req.Model); ok {
-			model = strings.TrimSpace(req.Model)
-			r = r.WithContext(agent.WithTurnModel(r.Context(), model))
-		} else {
-			slog.Info("chat completion: ignoring unusable request model",
-				"agent", ag.Name(), "requested", req.Model, "using", model)
-		}
-	}
 	chatID := fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano())
 	now := time.Now().Unix()
 
@@ -513,8 +548,15 @@ func (s *Server) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return s.turnFiles(r.Context(), r, ag.Name(), projectID, sessionKey, wsBefore, reply, attachmentPaths, inline)
 	}
 	isStream := req.Stream != nil && *req.Stream
+	if req.LocalAgents {
+		if uid, ok := localAgentsUser(ident, isStream, r.Header.Get("x-fastclaw-session-key")); ok {
+			r = r.WithContext(withLocalTurn(r.Context(), uid, sessionKey))
+		} else {
+			slog.Info("chat completion: local_agents ignored (needs stream, an end user and a session key)", "agent", ag.Name())
+		}
+	}
 	if isStream {
-		s.streamResponseFromAgent(w, r, ag, msg, chatID, model, now, files, collector)
+		s.streamResponseFromAgent(w, r, ag, msg, chatID, model, now, files, collector, turnID)
 	} else {
 		var turnErr string
 		reply := runAgentTurn(r.Context(), ag, msg, func(evt agent.ChatEvent) {
@@ -526,7 +568,7 @@ func (s *Server) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, http.StatusBadGateway, errTypeServer, codeAgentError, turnErr)
 			return
 		}
-		s.fullResponse(w, reply, chatID, model, now, files(reply), usageFromCollector(collector))
+		s.fullResponse(w, reply, chatID, model, now, files(reply), usageFromCollector(collector), turnID)
 	}
 }
 
@@ -536,7 +578,14 @@ func (s *Server) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 // separate messages joined by blank lines.
 func runAgentTurn(ctx context.Context, ag *agent.Agent, msg bus.InboundMessage, onEvent func(agent.ChatEvent), onIdle func()) string {
 	events := make(chan agent.ChatEvent, 256)
-	ctx = agent.ContextWithStream(ctx, events, nil, nil, "", ag.Name(), "")
+	if lt, ok := localTurnFrom(ctx); ok {
+		// The end user's computers: the turn is addressed like a web chat
+		// (user, agent, session) so approvals can be answered by key.
+		ctx = agent.ContextWithStream(ctx, events, nil, nil, lt.userID, ag.Name(), lt.sessionKey)
+		ctx = agent.ContextWithLocalAgentsUser(ctx, lt.userID)
+	} else {
+		ctx = agent.ContextWithStream(ctx, events, nil, nil, "", ag.Name(), "")
+	}
 	replyCh := make(chan string, 1)
 	go func() { replyCh <- apiReplyText(ag.HandleMessage(ctx, msg)) }()
 
@@ -580,7 +629,7 @@ func eventMessage(evt agent.ChatEvent) string {
 // as a FastClaw extension, each tool call as a top-level `tool` object on
 // a chunk with an empty delta — once when it starts and once when it
 // finishes. The final chunk carries usage and files.
-func (s *Server) streamResponseFromAgent(w http.ResponseWriter, r *http.Request, ag *agent.Agent, msg bus.InboundMessage, chatID, model string, created int64, files func(reply string) []turnFile, collector *usage.Collector) {
+func (s *Server) streamResponseFromAgent(w http.ResponseWriter, r *http.Request, ag *agent.Agent, msg bus.InboundMessage, chatID, model string, created int64, files func(reply string) []turnFile, collector *usage.Collector, turnID string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -626,6 +675,10 @@ func (s *Server) streamResponseFromAgent(w http.ResponseWriter, r *http.Request,
 				writeText(apiReplyText(c))
 			}
 			roundOpen = false
+		case "local_agent":
+			// run_local_agent progress / approval requests (local_agents).
+			s.writeSSEChunk(w, chatID, model, created, "", "", nil, &chunkExtras{LocalAgent: evt.Data})
+			flush()
 		case "tool_call", "tool_result":
 			id, _ := evt.Data["id"].(string)
 			name, _ := evt.Data["name"].(string)
@@ -650,7 +703,7 @@ func (s *Server) streamResponseFromAgent(w http.ResponseWriter, r *http.Request,
 	if turnErr != "" {
 		// The reply is then an apology around the error; the caller gets
 		// the error itself instead.
-		s.writeSSEChunk(w, chatID, model, created, "", "", &done, &chunkExtras{Usage: &u, Error: &apiError{Type: errTypeServer, Code: codeAgentError, Message: turnErr}})
+		s.writeSSEChunk(w, chatID, model, created, "", "", &done, &chunkExtras{Usage: &u, Error: &apiError{Type: errTypeServer, Code: codeAgentError, Message: turnErr}, TurnID: turnID})
 		fmt.Fprint(w, "data: [DONE]\n\n")
 		flush()
 		return
@@ -665,7 +718,7 @@ func (s *Server) streamResponseFromAgent(w http.ResponseWriter, r *http.Request,
 		s.writeSSEChunk(w, chatID, model, created, "", reply, nil, nil)
 	}
 
-	s.writeSSEChunk(w, chatID, model, created, "", "", &done, &chunkExtras{Usage: &u, Files: files(reply)})
+	s.writeSSEChunk(w, chatID, model, created, "", "", &done, &chunkExtras{Usage: &u, Files: files(reply), TurnID: turnID})
 	fmt.Fprint(w, "data: [DONE]\n\n")
 	flush()
 }
@@ -698,12 +751,14 @@ func (s *Server) writeSSEChunk(w http.ResponseWriter, id, model string, created 
 		chunk.Files = extras.Files
 		chunk.Tool = extras.Tool
 		chunk.Error = extras.Error
+		chunk.LocalAgent = extras.LocalAgent
+		chunk.TurnID = extras.TurnID
 	}
 	data, _ := json.Marshal(chunk)
 	fmt.Fprintf(w, "data: %s\n\n", data)
 }
 
-func (s *Server) fullResponse(w http.ResponseWriter, reply, chatID, model string, created int64, files []turnFile, u completionUsage) {
+func (s *Server) fullResponse(w http.ResponseWriter, reply, chatID, model string, created int64, files []turnFile, u completionUsage, turnID string) {
 	resp := chatCompletionResponse{
 		ID:      chatID,
 		Object:  "chat.completion",
@@ -716,8 +771,9 @@ func (s *Server) fullResponse(w http.ResponseWriter, reply, chatID, model string
 				FinishReason: "stop",
 			},
 		},
-		Usage: u,
-		Files: files,
+		Usage:  u,
+		Files:  files,
+		TurnID: turnID,
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

@@ -306,6 +306,25 @@ on the final chunk, the one with `finish_reason`). Files the reply links as
 - Don't rely on the agent to put files anywhere else: FastClaw instructs it
   not to upload your users' files to third-party services.
 
+### Local agents (the end user's own computer)
+
+When your end user linked a computer (agl; `/v1/machines`), the agent can
+hand work to the coding agents on it (Codex, Claude Code, …). Opt in per
+turn: send `"local_agents": true` with `"stream": true`, as the end user
+(`X-Fastclaw-End-User`) and with an explicit `x-fastclaw-session-key`.
+Updates arrive as chunks with an empty delta and a top-level
+`local_agent` object:
+
+- `{"kind":"progress","agent","machine","text"}` — what it's doing (show it);
+- `{"kind":"approval","agent","machine","text":"<what it asks to do>"}` —
+  ask your user, then answer with `POST /v1/local-agents/approval`
+  `{"agent_id","session_key","decision":"allow"|"allow_session"|"deny"}`
+  (same end user header; `GET …/approval?agent_id=&session_key=` shows the
+  open request). Unanswered requests are denied after a timeout;
+- `{"kind":"approval_resolved","decision"}` and `{"kind":"done"}`.
+
+The turn's stream stays open while it waits for the decision.
+
 ## 6. Usage and quotas
 
 - `GET /v1/usage` — per-day token usage. Query: `days` (1–90, default 30),
@@ -314,6 +333,32 @@ on the final chunk, the one with `finish_reason`). Files the reply links as
   bill your users.
 - `PUT|GET|DELETE /v1/quota` — monthly token / request limits for an end-user
   (`user_id` from `POST /v1/users` with `{"external_id": "<your user id>"}`).
+
+### Metering and billing authorization (when your app charges per use)
+
+FastClaw meters, your app prices. Full contract: `docs/usage-metering.md` in
+the FastClaw repo. In short:
+
+- `GET /v1/usage/events?after=<id>&limit=<n>` (account API key) — every
+  billable thing your account and its end users caused, oldest first: `kind`
+  `llm` (tokens), `image`, `tts`, `search`, `fetch`, `sandbox`, `local_agent`
+  (`units` + `unit`), with `end_user`, `agent_id`, `session_key`, `channel`
+  and `turn_id`. Store `next_after` as your cursor in the same transaction as
+  the debits it caused. Events appear a few seconds after the work.
+- The final chunk of a streamed chat (and a non-streamed response) carries
+  `turn_id`, so you can link a reply to its events.
+- `PUT /v1/billing/hook` `{"url": "https://…", "secret": "<≥ 32 chars>"}`
+  (`{"url": ""}` removes it; `GET` returns `{"url", "secret_set"}`). FastClaw
+  then POSTs `{"id","stage":"turn"|"tool","kind","provider","model",
+  "estimate"?,"end_user","agent_id","session_key","channel","turn_id"}` with
+  `X-Fastclaw-Signature: t=<unix>,v1=<hex hmac-sha256(secret, t + "." + body)>`
+  before every agent turn and before `image_gen`, `tts` and sandbox commands.
+  Answer `200 {"allow": true}` or `{"allow": false, "message": "…"}` within
+  5 s. Verify the signature and reject an old `t`. A refused `/v1` turn is a
+  `402 payment_required` carrying your message; on other channels your
+  message is the reply; a refused tool returns it to the model. If the hook
+  is unreachable, FastClaw allows the work (unless the deployment sets
+  `FASTCLAW_BILLING_HOOK_FAIL_CLOSED=true`).
 
 ## 7. Errors
 
@@ -327,7 +372,7 @@ Every `/v1` error is `{"error": {"type", "code", "message"}}`. Branch on
 | 403 | `forbidden` | The key may not do this (e.g. an agent key creating agents). |
 | 403 | `agent_quota_exceeded` | The account reached its agent quota. |
 | 404 | `agent_not_found` | No such agent for this key — or another end-user's private agent. |
-| 402 | `payment_required` | The FastClaw account is on billing hold (its balance ran out). Tell your user the service is paused; retrying won't help until it's topped up. |
+| 402 | `payment_required` | The FastClaw account is on billing hold (its balance ran out), or your billing hook refused the turn (`message` is the hook's). Tell your user the service is paused; retrying won't help until it's topped up. |
 | 404 | `project_not_found` | Unknown `project_id`. |
 | 429 | `rate_limited` | Slow down and retry with backoff. |
 | 503 | `not_configured` | That feature isn't enabled on this FastClaw. |

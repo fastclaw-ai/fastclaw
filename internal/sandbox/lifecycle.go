@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fastclaw-ai/fastclaw/internal/billing"
 	"github.com/fastclaw-ai/fastclaw/internal/workspace"
 )
 
@@ -309,11 +310,20 @@ type lazyExecutor struct {
 }
 
 func (l *lazyExecutor) Exec(ctx context.Context, command string, timeout time.Duration) (string, error) {
+	// Starting a sandbox command is a costly call: the account's billing
+	// hook may refuse it (the message goes back to the model).
+	if err := billing.AuthorizeTool(ctx, billing.KindSandbox, l.Backend(), "",
+		billing.Estimate{Units: timeout.Seconds(), Unit: "second"}); err != nil {
+		return "", err
+	}
 	ex, err := l.pool.getInner(ctx, l.scope)
 	if err != nil {
 		return "", err
 	}
+	started := time.Now()
 	out, execErr := ex.Exec(ctx, command, timeout)
+	// The sandbox ran the command (a non-zero exit is still sandbox time).
+	l.meter(ctx, "exec", started)
 	// Post-exec sync only for cloud sandboxes (RemoteWorkspace marker).
 	// Docker's /workspace is bind-mounted to host so files appear
 	// instantly with no sync needed; rerunning the snapshot+Put cycle
@@ -334,7 +344,21 @@ func (l *lazyExecutor) ReadFile(ctx context.Context, path string) (string, error
 	if err != nil {
 		return "", err
 	}
-	return ex.ReadFile(ctx, path)
+	started := time.Now()
+	out, readErr := ex.ReadFile(ctx, path)
+	if readErr == nil {
+		l.meter(ctx, "read_file", started)
+	}
+	return out, readErr
+}
+
+// meter records one sandbox operation's wall time as a usage event.
+func (l *lazyExecutor) meter(ctx context.Context, op string, started time.Time) {
+	billing.Record(ctx, billing.Event{
+		Kind: billing.KindSandbox, Provider: l.Backend(),
+		Units: time.Since(started).Seconds(), Unit: "second",
+		Detail: map[string]any{"op": op},
+	})
 }
 
 func (l *lazyExecutor) WriteFile(ctx context.Context, path, content string) (string, error) {
@@ -342,7 +366,11 @@ func (l *lazyExecutor) WriteFile(ctx context.Context, path, content string) (str
 	if err != nil {
 		return "", err
 	}
+	started := time.Now()
 	out, writeErr := ex.WriteFile(ctx, path, content)
+	if writeErr == nil {
+		l.meter(ctx, "write_file", started)
+	}
 	// Mirror writes to the durable store on cloud sandboxes — same
 	// reasoning as the post-exec sync above. Without this, write_file
 	// (and apply_patch) calls that fall through to ex.WriteFile (any
@@ -393,7 +421,12 @@ func (l *lazyExecutor) ListDir(ctx context.Context, path string) (string, error)
 	if err != nil {
 		return "", err
 	}
-	return ex.ListDir(ctx, path)
+	started := time.Now()
+	out, listErr := ex.ListDir(ctx, path)
+	if listErr == nil {
+		l.meter(ctx, "list_dir", started)
+	}
+	return out, listErr
 }
 
 // Close on a lazy proxy is a no-op — the underlying executor's lifetime is

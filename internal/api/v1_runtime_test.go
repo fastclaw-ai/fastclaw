@@ -19,6 +19,7 @@ import (
 
 	"github.com/fastclaw-ai/fastclaw/internal/agent"
 	"github.com/fastclaw-ai/fastclaw/internal/auth"
+	"github.com/fastclaw-ai/fastclaw/internal/billing"
 	"github.com/fastclaw-ai/fastclaw/internal/bus"
 	"github.com/fastclaw-ai/fastclaw/internal/config"
 	"github.com/fastclaw-ai/fastclaw/internal/provider"
@@ -168,7 +169,8 @@ func (f *fakeRuntime) manager(uid string) *agent.Manager {
 	if m, ok := f.spaces[uid]; ok {
 		return m
 	}
-	opts := []agent.ManagerOption{agent.WithUserID(uid)}
+	// Every agent meters usage events into the store (no hook → no calls).
+	opts := []agent.ManagerOption{agent.WithUserID(uid), agent.WithBilling(billing.NewService(f.st))}
 	if f.meter != nil {
 		opts = append(opts, agent.WithMeter(f.meter))
 	}
