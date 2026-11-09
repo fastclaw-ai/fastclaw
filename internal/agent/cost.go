@@ -98,10 +98,11 @@ func (a *Agent) meterTokens(ctx context.Context, sessionKey, model string, u pro
 	} else {
 		usage.CollectorFrom(ctx).Add(t, 0, false)
 	}
+	prov, mdl := a.meterProviderModel(model)
+	a.meterLLMEvent(ctx, sessionKey, prov, mdl, u, cost)
 	if a.meter == nil {
 		return
 	}
-	prov, mdl := a.meterProviderModel(model)
 	if err := a.meter.RecordTokens(ctx, a.ownerUserID, a.agentID, sessionKey, prov, mdl, t); err != nil {
 		slog.Warn("meter record failed", "agent", a.name, "error", err)
 	}

@@ -18,6 +18,7 @@ import (
 
 	"github.com/fastclaw-ai/fastclaw/internal/agent/goal"
 	"github.com/fastclaw-ai/fastclaw/internal/agent/tools"
+	"github.com/fastclaw-ai/fastclaw/internal/billing"
 	"github.com/fastclaw-ai/fastclaw/internal/buildinfo"
 	"github.com/fastclaw-ai/fastclaw/internal/bus"
 	"github.com/fastclaw-ai/fastclaw/internal/channels"
@@ -128,6 +129,10 @@ type Agent struct {
 	// agent loop checks the owner's quota before processing a turn.
 	// Nil means no quota enforcement (unlimited).
 	quotaStore usage.QuotaStore
+	// billing records usage events and asks the paying account's billing
+	// hook before turns and costly tools (docs/usage-metering.md). Nil
+	// records nothing and allows everything.
+	billing *billing.Service
 	// sandboxPool is the per-user (agent + session) sandbox pool. Set
 	// once at boot/hot-reload by attachSandboxToAgents; bindSession
 	// pulls a session-scoped executor from it at the top of every turn
@@ -2364,6 +2369,15 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 		emitEvent(ctx, ChatEvent{Type: "done"})
 		return rejection
 	}
+	// Billing hook (docs/usage-metering.md): the paying account may
+	// refuse the turn; its message is the reply. Also starts the turn's
+	// metering scope (turn_id) for every usage event below.
+	ctx, billingRejection := a.beginBillingTurn(ctx, msg)
+	if billingRejection != "" {
+		emitEvent(ctx, ChatEvent{Type: "content", Data: map[string]any{"content": billingRejection}})
+		emitEvent(ctx, ChatEvent{Type: "done"})
+		return billingRejection
+	}
 
 	// Plan mode short-circuits the ReAct loop: tools off, the model
 	// emits a numbered plan, the user reviews it and replies normally
@@ -3305,6 +3319,10 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 	// Quota gate — mirrors the check in HandleMessage.
 	if rejection := a.checkQuota(ctx); rejection != "" {
 		return a.stringStream(rejection)
+	}
+	ctx, billingRejection := a.beginBillingTurn(ctx, msg)
+	if billingRejection != "" {
+		return a.stringStream(billingRejection)
 	}
 
 	chatterUID := a.chatterUserID(msg)

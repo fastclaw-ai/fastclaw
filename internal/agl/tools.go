@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/fastclaw-ai/fastclaw/internal/billing"
 	"github.com/fastclaw-ai/fastclaw/internal/bus"
 	"github.com/fastclaw-ai/fastclaw/internal/store"
 )
@@ -304,6 +305,7 @@ func (t *Tools) Run(ctx context.Context, r ToolRun) (string, error) {
 	if !ValidCwd(r.Cwd) {
 		return "", toolErr(`"cwd" is invalid.`)
 	}
+	started := time.Now()
 	m, err := t.pick(ctx, r)
 	if err != nil {
 		return "", err
@@ -481,6 +483,11 @@ func (t *Tools) Run(ctx context.Context, r ToolRun) (string, error) {
 				if text == "" {
 					text = "(finished with no text reply)"
 				}
+				billing.Record(ctx, billing.Event{
+					Kind: billing.KindLocalAgent, Provider: "agl", Model: agent,
+					Units: 1, Unit: "run",
+					Detail: map[string]any{"duration_ms": time.Since(started).Milliseconds(), "machine": m.ID},
+				})
 				return fmt.Sprintf("[%s on %s]\n%s", agentName, m.Name, capResult(text)), nil
 			}
 		}

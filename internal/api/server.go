@@ -123,6 +123,20 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 		s.authMiddleware(rateLimitMiddleware(s.limiter, getUserID, s.HandleGetQuota)))
 	mux.HandleFunc("DELETE /v1/quota",
 		s.authMiddleware(rateLimitMiddleware(s.limiter, getUserID, s.HandleDeleteQuota)))
+	// Local agents over /v1 (local_agents): answer run_local_agent approvals.
+	mux.HandleFunc("GET /v1/local-agents/approval",
+		s.authMiddleware(rateLimitMiddleware(s.limiter, getUserID, s.HandleGetLocalAgentApproval)))
+	mux.HandleFunc("POST /v1/local-agents/approval",
+		s.authMiddleware(rateLimitMiddleware(s.limiter, getUserID, s.HandleLocalAgentDecision)))
+	// Usage metering + billing hook (docs/usage-metering.md): the
+	// account's usage events, and the hook asked before turns and costly
+	// tool calls.
+	mux.HandleFunc("GET /v1/usage/events",
+		s.authMiddleware(rateLimitMiddleware(s.limiter, getUserID, s.HandleListUsageEvents)))
+	mux.HandleFunc("GET /v1/billing/hook",
+		s.authMiddleware(rateLimitMiddleware(s.limiter, getUserID, s.HandleGetBillingHook)))
+	mux.HandleFunc("PUT /v1/billing/hook",
+		s.authMiddleware(rateLimitMiddleware(s.limiter, getUserID, s.HandlePutBillingHook)))
 
 	// Machines linked through agl ("connect my computer") and the agl
 	// hub the machines dial into. See docs/agl-machines.md.

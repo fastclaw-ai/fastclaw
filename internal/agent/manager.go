@@ -12,6 +12,7 @@ import (
 
 	"github.com/fastclaw-ai/fastclaw/internal/agent/tools"
 	"github.com/fastclaw-ai/fastclaw/internal/agentcli"
+	"github.com/fastclaw-ai/fastclaw/internal/billing"
 	"github.com/fastclaw-ai/fastclaw/internal/bus"
 	"github.com/fastclaw-ai/fastclaw/internal/config"
 	"github.com/fastclaw-ai/fastclaw/internal/provider"
@@ -54,6 +55,7 @@ type managerOpts struct {
 	dataStore       store.Store
 	meter           usage.Meter
 	quotaStore      usage.QuotaStore
+	billing         *billing.Service
 	userID          string
 	globalSkillsCfg config.SkillsCfg
 	// toolAvailability answers "which tools would agent X have at
@@ -127,6 +129,13 @@ func WithDataStore(st store.Store) ManagerOption {
 // to disable metering (tests, single-user dev runs).
 func WithMeter(m usage.Meter) ManagerOption {
 	return func(o *managerOpts) { o.meter = m }
+}
+
+// WithBilling installs usage metering and billing authorization
+// (docs/usage-metering.md) on every agent. Without it, agents with a data
+// store meter into that store.
+func WithBilling(svc *billing.Service) ManagerOption {
+	return func(o *managerOpts) { o.billing = svc }
 }
 
 // WithQuotaStore installs per-user billing quota enforcement on every
@@ -365,6 +374,10 @@ func (m *Manager) buildAgentWithSkillsCfg(rc config.ResolvedAgent, prov provider
 	}
 	if m.opts.quotaStore != nil {
 		ag.SetQuotaStore(m.opts.quotaStore)
+	}
+	ag.billing = m.opts.billing
+	if ag.billing == nil && m.opts.dataStore != nil {
+		ag.billing = billing.NewService(m.opts.dataStore)
 	}
 	return ag
 }
