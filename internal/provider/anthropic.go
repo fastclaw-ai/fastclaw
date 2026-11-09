@@ -87,7 +87,17 @@ func toAnthropicMessages(msgs []Message) (string, []anthropicMessage) {
 
 	for i, m := range msgs {
 		if m.Role == "system" {
-			system = m.Content
+			// Anthropic takes one system string: join every system
+			// message in order. Keeping only the last one silently
+			// dropped the main prompt whenever the loop added a note
+			// (channel hints, connectors, local agents, the agent
+			// roster, the persistence reminder) after it.
+			if c := strings.TrimSpace(m.Content); c != "" {
+				if system != "" {
+					system += "\n\n"
+				}
+				system += m.Content
+			}
 			continue
 		}
 		if orphanTool[i] {
