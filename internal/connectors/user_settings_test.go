@@ -82,11 +82,35 @@ func TestForPrefersTheUsersOwnService(t *testing.T) {
 		t.Fatalf("u1 → %q (same service %v), want own", src, svc == own)
 	}
 
+	// A product's end user runs on the product account's Connany, never
+	// their own key; a chatter (also owner-linked) is not an end user.
+	for _, u := range []*store.UserRecord{
+		{ID: "u1", Username: "u1", Email: "u1@x", Role: "user", Status: "active"},
+		{ID: "eu1", Username: "eu1", Email: "eu1@x", Role: "app_user", Status: "active", OwnerUserID: "u1", ExternalID: "user:1"},
+		{ID: "ch1", Username: "ch1", Email: "ch1@x", Role: "chatter", Status: "active", OwnerUserID: "u1"},
+	} {
+		if err := st.CreateUser(ctx, u); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := SaveUserSettings(ctx, st, "eu1", Settings{URL: srv.URL, APIKey: "other"}); err != nil {
+		t.Fatal(err)
+	}
+	if svc, src := ForWithSource(ctx, "eu1"); src != "account" || svc != own {
+		t.Fatalf("end user → %q (account's service %v), want account", src, svc == own)
+	}
+	if _, src := ForWithSource(ctx, "ch1"); src != "system" {
+		t.Fatalf("chatter → %q, want system", src)
+	}
+
 	if err := ClearUserSettings(ctx, st, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	if _, src := ForWithSource(ctx, "u1"); src != "system" {
 		t.Fatalf("after clear → %q, want system", src)
+	}
+	if _, src := ForWithSource(ctx, "eu1"); src != "system" {
+		t.Fatalf("end user after the account cleared → %q, want system", src)
 	}
 	// The system row is untouched by a user's save / clear.
 	if _, ok, _ := LoadSettings(ctx, st); ok {

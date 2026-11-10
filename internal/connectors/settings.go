@@ -194,17 +194,55 @@ func ProbePublic(ctx context.Context, baseURL, apiKey string) error {
 	return probe(ctx, client)
 }
 
+// appOwners caches app_user → owning account (it never changes).
+var appOwners sync.Map
+
+// appOwnerOf is the account that owns userID when userID is a product's
+// end user (app_user), else "".
+func appOwnerOf(ctx context.Context, userID string) string {
+	if userID == "" {
+		return ""
+	}
+	if v, ok := appOwners.Load(userID); ok {
+		return v.(string)
+	}
+	defaultMu.RLock()
+	st := settingsStore
+	defaultMu.RUnlock()
+	if st == nil {
+		return ""
+	}
+	u, err := st.GetUser(ctx, userID)
+	if err != nil || u == nil {
+		return "" // not cached: retry on the next call
+	}
+	owner := ""
+	if u.Role == "app_user" {
+		owner = u.OwnerUserID
+	}
+	appOwners.Store(userID, owner)
+	return owner
+}
+
 // For returns the service that holds userID's accounts: their own Connany
-// when they saved one, else the deployment's (Get). nil when neither.
+// when they saved one — for a product's end user (app_user), the product
+// account's — else the deployment's (Get). nil when none.
 func For(ctx context.Context, userID string) *Service {
 	svc, _ := ForWithSource(ctx, userID)
 	return svc
 }
 
 // ForWithSource is For plus where the service comes from: "user",
-// "system" or "" (none).
+// "account" (an end user on their product account's Connany), "system" or
+// "" (none).
 func ForWithSource(ctx context.Context, userID string) (*Service, string) {
-	if svc := userService(ctx, userID); svc != nil {
+	if owner := appOwnerOf(ctx, userID); owner != "" {
+		// The product configures connectors for its end users; they never
+		// bring their own key. Subjects stay the end user's own.
+		if svc := userService(ctx, owner); svc != nil {
+			return svc, "account"
+		}
+	} else if svc := userService(ctx, userID); svc != nil {
 		return svc, "user"
 	}
 	if svc := Get(); svc != nil {

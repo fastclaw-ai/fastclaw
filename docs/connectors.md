@@ -48,6 +48,10 @@ neither, the page asks for a key and agents get no tool.
   of the project now in use.
 - Rate limits are per project key: one key cooling down after a 429 doesn't
   hold up the others.
+- A product's end users (app_users, `X-Fastclaw-End-User`) use the product
+  account's own key, never one of their own (`connectors.For`, source
+  `account`), else the deployment's. Their accounts still belong to them
+  alone (subject = their app_user id).
 
 ## Ownership
 
