@@ -2554,6 +2554,9 @@ export interface ConnectorInfo {
 
 export interface ConnectorCatalog {
   configured: boolean;
+  /** Which Connany holds the caller's accounts: their own key, the
+   *  deployment's, or none. */
+  source?: "" | "user" | "system";
   categories: { name: string; title: string }[];
   connectors: ConnectorInfo[];
 }
@@ -2672,6 +2675,32 @@ export function saveConnectorsConfig(url: string, apiKey: string) {
 
 export function clearConnectorsConfig() {
   return connectorJSON<ConnectorsConfig>("/api/admin/connectors-config", jsonInit("DELETE"));
+}
+
+/** Console → Tools → Connectors: the caller's own Connany project key,
+ *  used for their accounts before the deployment's. The key never comes
+ *  back — only whether one is set and its last characters. */
+export interface MyConnectorsConfig {
+  source: "" | "user" | "system";
+  systemAvailable: boolean;
+  url: string;
+  apiKeySet: boolean;
+  apiKeyHint: string;
+}
+
+export function getMyConnectorsConfig() {
+  return connectorJSON<MyConnectorsConfig>("/api/connectors-config");
+}
+
+/** Validates against Connany (public https only), saves and uses it at
+ *  once. An empty apiKey keeps the one already set. */
+export function saveMyConnectorsConfig(url: string, apiKey: string) {
+  return connectorJSON<MyConnectorsConfig>("/api/connectors-config", jsonInit("PUT", { url, apiKey }));
+}
+
+/** Back to the deployment's connector service. */
+export function clearMyConnectorsConfig() {
+  return connectorJSON<MyConnectorsConfig>("/api/connectors-config", jsonInit("DELETE"));
 }
 
 // ── Devices: the person's own computers linked through agl ────────────

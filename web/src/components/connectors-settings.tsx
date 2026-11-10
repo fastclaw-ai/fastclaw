@@ -28,6 +28,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useLocale } from "@/components/locale-provider";
+import { OwnConnanyKey } from "@/components/connectors-own-key";
 import {
   checkConnectorAccount,
   ConnectorApiError,
@@ -121,9 +122,7 @@ export function ConnectorsSettingsPage({ embedded = false }: { embedded?: boolea
     return (
       <div className={wrap}>
         <Header />
-        <p className="mt-6 text-sm text-muted-foreground">
-          {tr("Connectors are not available on this server yet.", "当前服务器尚未开放连接器。")}
-        </p>
+        <OwnConnanyKey onChanged={() => void load()} startOpen />
       </div>
     );
   }
@@ -136,6 +135,7 @@ export function ConnectorsSettingsPage({ embedded = false }: { embedded?: boolea
   return (
     <div className={wrap}>
       <Header />
+      <OwnConnanyKey onChanged={() => void load()} />
       {catalog.categories.length > 1 && (
         <div className="mt-5 flex flex-wrap gap-1.5">
           {[{ name: "", title: tr("All", "全部") }, ...catalog.categories].map((c) => (

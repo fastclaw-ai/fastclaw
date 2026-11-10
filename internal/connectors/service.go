@@ -151,19 +151,51 @@ func Configure(ctx context.Context, baseURL, apiKey string, db DB) error {
 		defaultMu.Unlock()
 		return nil
 	}
-	client, err := NewClient(baseURL, apiKey)
-	if err != nil {
-		return err
-	}
-	st, err := newSQLStore(ctx, db)
+	svc, err := newService(ctx, baseURL, apiKey, db, false)
 	if err != nil {
 		return err
 	}
 	defaultMu.Lock()
-	defaultSvc = &Service{client: client, store: st, catalog: map[string]catalogEntry{}, conns: map[string]connsEntry{}}
+	defaultSvc = svc
 	defaultMu.Unlock()
-	slog.Info("connectors enabled", "service", client.base)
+	slog.Info("connectors enabled", "service", svc.client.base)
 	return nil
+}
+
+// newService builds a service on one Connany project. public: the address
+// came from a user (NewPublicClient).
+func newService(ctx context.Context, baseURL, apiKey string, db DB, public bool) (*Service, error) {
+	client, err := newClient(baseURL, apiKey, public)
+	if err != nil {
+		return nil, err
+	}
+	st, err := sharedSQLStore(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	return &Service{client: client, store: st, catalog: map[string]catalogEntry{}, conns: map[string]connsEntry{}}, nil
+}
+
+var (
+	storeMu    sync.Mutex
+	storeOnce  *sqlStore
+	storeForDB DB
+)
+
+// sharedSQLStore: one schema check per database, shared by the
+// deployment's service and every user's own.
+func sharedSQLStore(ctx context.Context, db DB) (*sqlStore, error) {
+	storeMu.Lock()
+	defer storeMu.Unlock()
+	if storeOnce != nil && storeForDB == db {
+		return storeOnce, nil
+	}
+	st, err := newSQLStore(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	storeOnce, storeForDB = st, db
+	return st, nil
 }
 
 // Probe checks a base URL + key against Connany before they're saved.
@@ -172,6 +204,10 @@ func Probe(ctx context.Context, baseURL, apiKey string) error {
 	if err != nil {
 		return newError("invalid_url")
 	}
+	return probe(ctx, client)
+}
+
+func probe(ctx context.Context, client *Client) error {
 	if _, _, err := client.Connectors(ctx, "en"); err != nil {
 		var se *ServiceError
 		if errors.As(err, &se) && se.Status == 401 {

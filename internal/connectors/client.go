@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -109,40 +110,95 @@ type Client struct {
 }
 
 // NewClient validates the base URL: an HTTPS origin, or HTTP on this
-// machine for local development.
+// machine for local development. For the operator's own configuration.
 func NewClient(baseURL, apiKey string) (*Client, error) {
+	return newClient(baseURL, apiKey, false)
+}
+
+// NewPublicClient is NewClient for an address a user typed in (their own
+// Connany key, Console → Tools): HTTPS only, and every address the host
+// resolves to must be public — checked again at dial time — so the
+// setting can't make the server call into its own network.
+func NewPublicClient(baseURL, apiKey string) (*Client, error) {
+	return newClient(baseURL, apiKey, true)
+}
+
+func newClient(baseURL, apiKey string, public bool) (*Client, error) {
 	u, err := url.Parse(baseURL)
-	if err != nil || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+	if err != nil || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") || u.Host == "" {
 		return nil, errors.New("connectors: base URL must be a bare origin")
 	}
-	local := u.Scheme == "http" && (u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1")
+	local := !public && u.Scheme == "http" && (u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1")
 	if u.Scheme != "https" && !local {
 		return nil, errors.New("connectors: base URL must be HTTPS (or HTTP on localhost)")
 	}
-	return &Client{
-		base:   u.Scheme + "://" + u.Host,
-		apiKey: apiKey,
-		http: &http.Client{
-			Timeout: 60 * time.Second,
-			// Never follow a redirect with the project key on it.
-			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		},
-	}, nil
+	hc := &http.Client{
+		Timeout: 60 * time.Second,
+		// Never follow a redirect with the project key on it.
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	if public {
+		tr := http.DefaultTransport.(*http.Transport).Clone()
+		tr.Proxy = nil // a proxy would dial for us, skipping the check
+		tr.DialContext = publicDial
+		hc.Transport = tr
+	}
+	return &Client{base: u.Scheme + "://" + u.Host, apiKey: apiKey, http: hc}, nil
 }
 
-// One cooldown per process: Connany limits the whole project (120
-// requests a minute), so after a 429 every caller waits.
+// publicDial resolves the host, refuses any non-public address and dials
+// the address it checked, so DNS can't swap one in between.
+func publicDial(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("connectors: no addresses for %s", host)
+	}
+	for _, ip := range ips {
+		if blockedAddr(ip.IP) {
+			return nil, fmt.Errorf("connectors: blocked address %s for %s", ip.IP, host)
+		}
+	}
+	d := &net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}
+	return d.DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
+}
+
+// blockedAddr: loopback, private, link-local, multicast, unspecified and
+// CGNAT addresses (same list as web_fetch's guard).
+func blockedAddr(ip net.IP) bool {
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsInterfaceLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() || ip.IsPrivate() {
+		return true
+	}
+	if ip4 := ip.To4(); ip4 != nil {
+		if ip4[0] == 0 || (ip4[0] == 100 && ip4[1]&0xc0 == 0x40) {
+			return true
+		}
+	}
+	return false
+}
+
+// Connany limits each project (120 requests a minute), so after a 429
+// every caller using that project's key waits; other keys don't.
 var (
 	coolMu    sync.Mutex
-	coolUntil time.Time
+	coolUntil = map[string]time.Time{}
 )
 
 // ErrRateLimited is returned while the project is cooling down.
 var ErrRateLimited = errors.New("connectors: rate limited")
 
+func (c *Client) coolKey() string { return c.base + "\x00" + c.apiKey }
+
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
 	coolMu.Lock()
-	cooling := time.Now().Before(coolUntil)
+	cooling := time.Now().Before(coolUntil[c.coolKey()])
 	coolMu.Unlock()
 	if cooling {
 		return ErrRateLimited
@@ -173,7 +229,7 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 			secs = 60
 		}
 		coolMu.Lock()
-		coolUntil = time.Now().Add(time.Duration(secs) * time.Second)
+		coolUntil[c.coolKey()] = time.Now().Add(time.Duration(secs) * time.Second)
 		coolMu.Unlock()
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {

@@ -22,11 +22,31 @@ Alternatively, environment variables (used when nothing is saved in the UI):
 | `FASTCLAW_CONNANY_URL` | Connany's origin. HTTPS, or HTTP on `localhost` for development. |
 | `FASTCLAW_CONNANY_API_KEY` | The project key. Scrubbed from the process environment after boot. |
 
-Neither → connectors are off: the Connectors page shows "not available", agents get no
-tool. For `make dev`, the env vars can go in an untracked `.env.dev`.
+For `make dev`, the env vars can go in an untracked `.env.dev`.
 
-Each person then connects their own accounts in **Console → Connectors**
-(below Skills in the console sidebar).
+Each person then connects their own accounts in **Console → Tools →
+Connectors** (Tools is below Skills in the console sidebar).
+
+### A person's own Connany key
+
+Like models and skills, a person may bring their own: on the same page,
+**Use my own key** takes a Connany address and project key (checked
+against the service before it is saved, `PUT /api/connectors-config`). Their
+accounts then live in their Connany project, and their agents use it;
+without one they use the deployment's service. So connectors work for
+someone who brings a key even when the deployment configured none — with
+neither, the page asks for a key and agents get no tool.
+
+- The address must be a public `https://` origin: every address the host
+  resolves to is checked (again at dial time) against loopback, private,
+  link-local and CGNAT ranges, so the setting can't reach the server's own
+  network.
+- The key is stored per user (a `setting` config row in their scope) and
+  never leaves the server; the form sees its last four characters.
+- Accounts don't move between projects: switching keys shows the accounts
+  of the project now in use.
+- Rate limits are per project key: one key cooling down after a 429 doesn't
+  hold up the others.
 
 ## Ownership
 

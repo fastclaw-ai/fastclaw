@@ -21,11 +21,15 @@ import (
 // agent someone else set up runs on their instructions and could carry
 // what it reads elsewhere (docs/connectors.md).
 func (a *Agent) mountConnectors(ctx context.Context, msg bus.InboundMessage, chatterUID, sessionKey string) string {
-	svc := connectors.Get()
-	if svc == nil || a.registry == nil || msg.Channel != "web" || chatterUID == "" || chatterUID != a.trustOwnerID() {
+	if a.registry == nil || msg.Channel != "web" || chatterUID == "" || chatterUID != a.trustOwnerID() {
 		return ""
 	}
 	if msg.Source != bus.SourceUser && msg.Source != bus.SourceConnector {
+		return ""
+	}
+	// Their own Connany when they saved one, else the deployment's.
+	svc := connectors.For(ctx, chatterUID)
+	if svc == nil {
 		return ""
 	}
 	// Never hold up a turn on the connector service.

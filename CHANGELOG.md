@@ -5,6 +5,14 @@ action on upgrade — read those notes before deploying.
 
 ## [Unreleased]
 
+### Added — bring your own Connany key
+
+Console → Tools → Connectors takes a person's own Connany address and
+project key (public HTTPS only, checked before saving). Their accounts and
+agents use it before the deployment's connector service, so connectors work
+for them even when the deployment configured none. See
+`docs/connectors.md`.
+
 ### Changed — Console → Tools
 
 Console → Connectors moved under a new Console → Tools page (below
