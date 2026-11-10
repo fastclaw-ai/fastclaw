@@ -351,9 +351,16 @@ as the end user (`X-Fastclaw-End-User`); the accounts are theirs alone.
   back to `returnUrl` with `connany_session_id`: post it to
   `POST /api/connector-requests/confirm` `{"providerSessionId":…}`, or poll
   `POST /api/connector-requests/{request.id}/recheck`.
-- In chat, send `"params": {"__fastclawConnectorsURL": "https://your.app/connections"}`
-  on `/v1/chat/completions`: when an account is missing, the agent sends the
-  person that page with `?connector=<name>` instead of a connect button.
+- In chat, send `"params": {"__fastclawConnectorsURL": "https://your.app/connections",
+  "__fastclawConnectorsReturnURL": "https://your.app/connections/done"}` on
+  `/v1/chat/completions`: when an account is missing, the agent sends the
+  person a one-time authorization link (the platform's own page) in the chat
+  instead of a connect button. Afterwards the platform sends them to the
+  return URL (default: the connections page), which should work without
+  signing in, since they open it in their IM's browser; confirm there when
+  they happen to be signed in. The account is usable on their next message
+  either way. If a link can't be minted, the agent sends the connections page
+  with `?connector=<name>`.
 
 ## 6. Usage and quotas
 

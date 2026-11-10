@@ -40,10 +40,10 @@ const ConnectorsToolName = "connectors"
 // docs/connectors.md). The owner is bound here, from the turn — never
 // from the model, which names platforms and account NAMES only.
 //
-// connectURL, when set, is the product's own page where the person
-// connects accounts (their chat can't show a connect card): the request
-// actions then give the model that link to send instead.
-func RegisterConnectors(r *Registry, svc *connectors.Service, userID string, chat connectors.ChatRef, platforms []connectors.Connector, connectURL string) {
+// links, when set, means the person's chat can't show a connect card (an
+// IM relayed by a product): the request actions then give the model a
+// one-time authorization link to send in the chat instead.
+func RegisterConnectors(r *Registry, svc *connectors.Service, userID string, chat connectors.ChatRef, platforms []connectors.Connector, links *ConnectLinks) {
 	titles := map[string]string{}
 	names := make([]string, 0, len(platforms))
 	listed := make([]string, 0, len(platforms))
@@ -56,10 +56,10 @@ func RegisterConnectors(r *Registry, svc *connectors.Service, userID string, cha
 		`"request_connection" connector [+ account] — when the request needs a platform with no connected account, the person asks to connect another account, or an account needs reconnection: shows the person a connect button in this conversation. Call it right away, in the same turn — never ask "shall I connect it?" first: the button is that question, and nothing happens unless they click it. Write one line of why in your message, then make this the only tool call: it shows the button and ENDS your turn; a [connector] message wakes you when they finish. Never ask for passwords, tokens or links yourself.`,
 		`"request_access" connector [+ account] — when an account reports needs_access (e.g. a GitHub account with no repositories shared yet) or the person wants to share more: shows them a button to grant access on the platform. Then the turn ends the same way.`,
 	}
-	if connectURL != "" {
+	if links != nil {
 		requestLines = []string{
-			`"request_connection" connector [+ account] — when the request needs a platform with no connected account, the person asks to connect another account, or an account needs reconnection: returns the link to the page where the person connects it. Call it right away — never ask "shall I connect it?" first — and send them that link exactly as returned, with one line of why. They connect it there and then message you again; never ask for passwords or tokens yourself.`,
-			`"request_access" connector [+ account] — when an account reports needs_access (e.g. a GitHub account with no repositories shared yet) or the person wants to share more: returns the link to the page where they grant it. Send it the same way.`,
+			`"request_connection" connector [+ account] — when the request needs a platform with no connected account, the person asks to connect another account, or an account needs reconnection: returns a one-time link that opens the platform's own authorization page. Call it right away — never ask "shall I connect it?" first — and send them that link exactly as returned, with one line of why. They authorize there and then message you again; never ask for passwords or tokens yourself.`,
+			`"request_access" connector [+ account] — when an account reports needs_access (e.g. a GitHub account with no repositories shared yet) or the person wants to share more: returns the link to the platform page where they grant it. Send it the same way.`,
 		}
 	}
 	desc := strings.Join([]string{
@@ -95,7 +95,7 @@ func RegisterConnectors(r *Registry, svc *connectors.Service, userID string, cha
 		"required": []string{"action"},
 	}
 
-	t := &connectorsTool{svc: svc, userID: userID, chat: chat, titles: titles, names: names, connectURL: connectURL}
+	t := &connectorsTool{svc: svc, userID: userID, chat: chat, titles: titles, names: names, links: links}
 	r.RegisterFrom(ConnectorsToolName, desc, params, t.run, SourceConnector)
 }
 
@@ -105,8 +105,18 @@ type connectorsTool struct {
 	chat   connectors.ChatRef
 	titles map[string]string
 	names  []string
-	// connectURL: the product's connect page (see RegisterConnectors).
-	connectURL string
+	// links: send authorization links in the chat (see RegisterConnectors).
+	links *ConnectLinks
+}
+
+// ConnectLinks is how a chat without connect cards connects accounts.
+type ConnectLinks struct {
+	// ReturnURL is where the platform sends the person after authorizing
+	// (the product's page; it confirms when they are signed in there).
+	ReturnURL string
+	// PageURL is the product's connectors page: the fallback link when a
+	// one-time link can't be minted right now.
+	PageURL string
 }
 
 type connectorsArgs struct {
@@ -267,8 +277,8 @@ func (t *connectorsTool) request(ctx context.Context, action, connector, title, 
 	case len(mine) == 1 && mine[0].Status != "connected":
 		kind, target = "reconnect", mine[0].ID
 	}
-	if t.connectURL != "" {
-		return t.linkFor(connector, title, kind)
+	if t.links != nil {
+		return t.linkFor(ctx, connector, title, kind, target)
 	}
 	req, err := t.svc.CreateRequest(ctx, t.userID, connector, kind, target, t.chat)
 	if err != nil {
@@ -293,17 +303,11 @@ func (t *connectorsTool) request(ctx context.Context, action, connector, title, 
 }
 
 // linkFor is request_connection / request_access where the chat can't
-// show a card: the product's connect page, opened on this platform. The
-// page itself starts the authorization for the signed-in person — the
-// link carries no credential, so it is safe for the model to repeat.
-func (t *connectorsTool) linkFor(connector, title, kind string) string {
-	u, err := url.Parse(t.connectURL)
-	if err != nil {
-		return "Error: the connect page is unavailable right now."
-	}
-	q := u.Query()
-	q.Set("connector", connector)
-	u.RawQuery = q.Encode()
+// show a card: a one-time authorization link the model sends in this 1:1
+// chat. Connections are read from the connector service by subject, so the
+// account works on the person's next message even if they never return to
+// the product's page. Without a ChatRef: an IM turn can't be woken.
+func (t *connectorsTool) linkFor(ctx context.Context, connector, title, kind, target string) string {
 	what := "connect their " + title + " account"
 	switch kind {
 	case "access":
@@ -311,7 +315,41 @@ func (t *connectorsTool) linkFor(connector, title, kind string) string {
 	case "reconnect":
 		what = "reconnect their " + title + " account"
 	}
-	return fmt.Sprintf("Send the person this link to %s (they sign in to %s there; nothing is shared until they approve): %s\nAfter they finish, they message you again and the account is available. Do not poll; never ask for passwords or tokens.", what, title, u.String())
+	link, err := t.mintLink(ctx, connector, kind, target)
+	if err != nil {
+		if page := t.pageLink(connector); page != "" {
+			return fmt.Sprintf("Send the person this link to %s (they sign in to the product and connect it there; nothing is shared until they approve): %s\nAfter they finish, they message you again. Never ask for passwords or tokens.", what, page)
+		}
+		return explain(err, title)
+	}
+	expiry := " It works once and expires in 15 minutes — if it expires, call request_connection again for a new one."
+	if kind == "access" {
+		expiry = ""
+	}
+	return fmt.Sprintf("Send the person this link to %s. It opens %s's own authorization page; nothing is shared until they approve.%s It is for them only: send it in this chat, never elsewhere. If the chat app's built-in browser refuses the sign-in, they can copy it into a regular browser. After they finish, they message you again and the account is available. Never ask for passwords or tokens.\n%s", what, title, expiry, link)
+}
+
+func (t *connectorsTool) mintLink(ctx context.Context, connector, kind, target string) (string, error) {
+	req, err := t.svc.CreateRequest(ctx, t.userID, connector, kind, target, connectors.ChatRef{})
+	if err != nil {
+		return "", err
+	}
+	link, _, err := t.svc.Open(ctx, t.userID, connectors.OpenTarget{RequestID: req.ID}, t.links.ReturnURL)
+	return link, err
+}
+
+func (t *connectorsTool) pageLink(connector string) string {
+	if t.links.PageURL == "" {
+		return ""
+	}
+	u, err := url.Parse(t.links.PageURL)
+	if err != nil {
+		return ""
+	}
+	q := u.Query()
+	q.Set("connector", connector)
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 func explain(err error, title string) string {

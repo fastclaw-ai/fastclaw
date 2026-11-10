@@ -24,6 +24,12 @@ type EndUserConnectorGate func(ctx context.Context, agentID, chatterUID string) 
 // so request_connection hands the model this link instead.
 const ConnectorsURLParam = "__fastclawConnectorsURL"
 
+// ConnectorsReturnURLParam (optional) is where the platform sends the end
+// user after authorizing a link sent in their chat; defaults to
+// ConnectorsURLParam. Use a page that works without signing in: the
+// person opens it in their IM's browser.
+const ConnectorsReturnURLParam = "__fastclawConnectorsReturnURL"
+
 // mountConnectors puts the connectors tool on this turn's registry when
 // the turn may use the chatter's connected accounts, and returns the note
 // on those accounts for the system prompt ("" when nothing applies).
@@ -50,11 +56,11 @@ func (a *Agent) mountConnectors(ctx context.Context, msg bus.InboundMessage, cha
 	if msg.Source != bus.SourceUser && msg.Source != bus.SourceConnector {
 		return ""
 	}
-	connectURL := ""
+	var links *tools.ConnectLinks
 	switch {
 	case msg.Channel == "web" && chatterUID == a.trustOwnerID():
 	case a.endUserTurnMayUseConnectors(ctx, msg, chatterUID):
-		connectURL = connectorsURLParam(msg.Params)
+		links = connectLinks(msg.Params)
 	default:
 		return ""
 	}
@@ -70,7 +76,7 @@ func (a *Agent) mountConnectors(ctx context.Context, msg bus.InboundMessage, cha
 	if err != nil || len(platforms) == 0 {
 		return ""
 	}
-	tools.RegisterConnectors(a.registry, svc, chatterUID, connectors.ChatRef{AgentID: a.name, SessionID: sessionKey}, platforms, connectURL)
+	tools.RegisterConnectors(a.registry, svc, chatterUID, connectors.ChatRef{AgentID: a.name, SessionID: sessionKey}, platforms, links)
 	return connectorAccountsNote(cctx, svc, chatterUID, platforms)
 }
 
@@ -91,10 +97,23 @@ func (a *Agent) endUserTurnMayUseConnectors(ctx context.Context, msg bus.Inbound
 	return a.endUserConnectors(ctx, id, chatterUID)
 }
 
-// connectorsURLParam is the product's connect page from the turn params,
-// when it is an http(s) URL.
-func connectorsURLParam(params map[string]any) string {
-	raw, _ := params[ConnectorsURLParam].(string)
+// connectLinks: the product's pages from the turn params. Nil (cards, as
+// on the web) when the product named no connect page.
+func connectLinks(params map[string]any) *tools.ConnectLinks {
+	page := urlParam(params, ConnectorsURLParam)
+	if page == "" {
+		return nil
+	}
+	ret := urlParam(params, ConnectorsReturnURLParam)
+	if ret == "" {
+		ret = page
+	}
+	return &tools.ConnectLinks{PageURL: page, ReturnURL: ret}
+}
+
+// urlParam is a turn param when it is an http(s) URL.
+func urlParam(params map[string]any, key string) string {
+	raw, _ := params[key].(string)
 	raw = strings.TrimSpace(raw)
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil {

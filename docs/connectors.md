@@ -71,9 +71,13 @@ The `connectors` tool is mounted (`Agent.mountConnectors`) only on:
   `gateway.endUserConnectorGate`). Their subject is their own app_user id,
   so accounts are theirs alone, usable across all of their agents — but not
   on the app's public agents, whose instructions are someone else's. The app
-  passes its own connect page as the turn param `__fastclawConnectorsURL` (hidden from the model's client-parameters note); the tool's
-  request actions then return that link (`?connector=<name>`) instead of a
-  card, and authorization returns to the app's page (`returnUrl` on
+  passes its own connect page as the turn param `__fastclawConnectorsURL`
+  (hidden from the model's client-parameters note), and optionally
+  `__fastclawConnectorsReturnURL`. The tool's request actions then mint a
+  one-time authorization link (no ChatRef: an IM turn can't be woken) for
+  the model to send in the 1:1 chat, returning to that URL; if minting
+  fails, they return the connect page with `?connector=<name>`. On the
+  app's own page, authorization returns there (`returnUrl` on
   `POST /api/connector-authorizations`, end-user callers only).
 
 Not in IM channels, groups, cron, or on someone else's agent — there the
