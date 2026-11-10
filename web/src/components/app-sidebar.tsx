@@ -33,7 +33,6 @@ import {
   LaptopIcon,
   MessagesSquareIcon,
   SparklesIcon,
-  CableIcon,
   UsersIcon,
   WrenchIcon,
 } from "lucide-react";
@@ -88,7 +87,7 @@ const consoleNav = (pathname: string): NavItem[] => [
   { title: "Agents", url: "/console/agents/", icon: BotIcon },
   { title: "Models", url: "/console/models/", icon: BrainIcon },
   { title: "Skills", url: "/console/skills/", icon: SparklesIcon },
-  { title: "Connectors", url: "/console/connectors/", icon: CableIcon },
+  { title: "Tools", url: "/console/tools/", icon: WrenchIcon },
   { title: "Devices", url: "/console/devices/", icon: LaptopIcon },
   { title: "API Keys", url: "/console/apikeys/", icon: KeyRoundIcon },
   { title: "Integration", url: "/console/integration/", icon: BookOpenIcon },

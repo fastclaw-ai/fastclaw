@@ -5,6 +5,13 @@ action on upgrade — read those notes before deploying.
 
 ## [Unreleased]
 
+### Changed — Console → Tools
+
+Console → Connectors moved under a new Console → Tools page (below
+Skills), laid out like Admin → Tools. What a user sets there is used first
+and the deployment's tools are the fallback; connectors are its first
+entry. `/console/connectors/` redirects to it.
+
 ### Added — one-click agl updates
 
 Console → Devices marks a computer whose agl is behind the newest release

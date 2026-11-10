@@ -44,8 +44,11 @@ import { connectorErrorText, openConnectorAuthorization } from "@/lib/connectors
 
 const CHANGED_KEY = "fastclaw:connectors-changed";
 
-export function ConnectorsSettingsPage() {
+// embedded: shown inside another page's layout (Console → Tools), which
+// already gives it padding and width.
+export function ConnectorsSettingsPage({ embedded = false }: { embedded?: boolean } = {}) {
   const { tr, locale } = useLocale();
+  const wrap = embedded ? "" : "mx-auto max-w-5xl p-6";
   const [catalog, setCatalog] = React.useState<ConnectorCatalog | null>(null);
   const [accounts, setAccounts] = React.useState<ConnectorAccount[]>([]);
   const [error, setError] = React.useState("");
@@ -104,7 +107,7 @@ export function ConnectorsSettingsPage() {
 
   if (!catalog) {
     return (
-      <div className="mx-auto flex max-w-5xl items-center gap-2 p-6 text-sm text-muted-foreground">
+      <div className={`${wrap} flex items-center gap-2 text-sm text-muted-foreground`}>
         {error || (
           <>
             <Loader2 className="size-4 animate-spin" />
@@ -116,7 +119,7 @@ export function ConnectorsSettingsPage() {
   }
   if (!catalog.configured) {
     return (
-      <div className="mx-auto max-w-5xl p-6">
+      <div className={wrap}>
         <Header />
         <p className="mt-6 text-sm text-muted-foreground">
           {tr("Connectors are not available on this server yet.", "当前服务器尚未开放连接器。")}
@@ -131,7 +134,7 @@ export function ConnectorsSettingsPage() {
   const ordered = [...shown].sort((a, b) => Number(byConnector(b.name).length > 0) - Number(byConnector(a.name).length > 0));
 
   return (
-    <div className="mx-auto max-w-5xl p-6">
+    <div className={wrap}>
       <Header />
       {catalog.categories.length > 1 && (
         <div className="mt-5 flex flex-wrap gap-1.5">
