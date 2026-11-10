@@ -1,13 +1,8 @@
 "use client";
 
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { ConnectorsSettingsPage } from "@/components/connectors-settings";
 
-// Console → Connectors moved under Console → Tools; keep old links working.
+// Console → Connectors: the caller's own third-party accounts.
 export default function ConsoleConnectorsPage() {
-  const router = useRouter();
-  useEffect(() => {
-    router.replace("/console/tools/");
-  }, [router]);
-  return null;
+  return <ConnectorsSettingsPage />;
 }

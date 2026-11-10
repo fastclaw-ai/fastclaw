@@ -28,7 +28,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useLocale } from "@/components/locale-provider";
-import { OwnConnanyKey } from "@/components/connectors-own-key";
+import Link from "next/link";
 import {
   checkConnectorAccount,
   ConnectorApiError,
@@ -45,11 +45,12 @@ import { connectorErrorText, openConnectorAuthorization } from "@/lib/connectors
 
 const CHANGED_KEY = "fastclaw:connectors-changed";
 
-// embedded: shown inside another page's layout (Console → Tools), which
-// already gives it padding and width.
-export function ConnectorsSettingsPage({ embedded = false }: { embedded?: boolean } = {}) {
+// Console → Connectors: the platforms and the person's accounts. Which
+// Connany holds them (their own key or this site's) is set in
+// Console → Tools → Connectors.
+export function ConnectorsSettingsPage() {
   const { tr, locale } = useLocale();
-  const wrap = embedded ? "" : "mx-auto max-w-5xl p-6";
+  const wrap = "mx-auto max-w-5xl p-6";
   const [catalog, setCatalog] = React.useState<ConnectorCatalog | null>(null);
   const [accounts, setAccounts] = React.useState<ConnectorAccount[]>([]);
   const [error, setError] = React.useState("");
@@ -122,7 +123,13 @@ export function ConnectorsSettingsPage({ embedded = false }: { embedded?: boolea
     return (
       <div className={wrap}>
         <Header />
-        <OwnConnanyKey onChanged={() => void load()} startOpen />
+        <p className="mt-6 text-sm text-muted-foreground">
+          {tr("No connector service is set up yet. ", "目前还没有可用的连接服务。")}
+          <Link href="/console/tools/" className="text-foreground underline underline-offset-4">
+            {tr("Add your own Connany key in Tools → Connectors", "去「工具 → 连接器」填写你自己的 Connany Key")}
+          </Link>
+          {tr(".", "。")}
+        </p>
       </div>
     );
   }
@@ -135,7 +142,6 @@ export function ConnectorsSettingsPage({ embedded = false }: { embedded?: boolea
   return (
     <div className={wrap}>
       <Header />
-      <OwnConnanyKey onChanged={() => void load()} />
       {catalog.categories.length > 1 && (
         <div className="mt-5 flex flex-wrap gap-1.5">
           {[{ name: "", title: tr("All", "全部") }, ...catalog.categories].map((c) => (

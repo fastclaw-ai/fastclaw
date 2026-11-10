@@ -13,12 +13,12 @@ agents use it before the deployment's connector service, so connectors work
 for them even when the deployment configured none. See
 `docs/connectors.md`.
 
-### Changed — Console → Tools
+### Added — Console → Tools
 
-Console → Connectors moved under a new Console → Tools page (below
-Skills), laid out like Admin → Tools. What a user sets there is used first
-and the deployment's tools are the fallback; connectors are its first
-entry. `/console/connectors/` redirects to it.
+A new Console → Tools page (below Connectors), laid out like Admin → Tools,
+holds a person's own tool settings: used first, with the deployment's tools
+as the fallback. Its first entry is which Connany holds their connector
+accounts; the accounts themselves stay in Console → Connectors.
 
 ### Added — one-click agl updates
 

@@ -91,8 +91,8 @@ export function ConnectorsAdminPanel() {
         <h2 className="text-lg font-semibold tracking-tight">{tr("Connectors", "连接器")}</h2>
         <p className="mt-1 text-sm text-muted-foreground">
           {tr(
-            "Let people connect their own accounts (Notion, GitHub, Linear, …) so their agents can read them in web chats. Accounts are connected through the Connany connector service; each person connects theirs in Console → Tools → Connectors (or brings their own Connany key there).",
-            "让用户连接自己的账号（Notion、GitHub、Linear 等），他们的 Agent 在网页对话中就能读取。账号通过 Connany 连接服务接入，每个用户在「控制台 → 工具 → 连接器」里连接自己的账号（也可以在那里填自己的 Connany Key）。",
+            "Let people connect their own accounts (Notion, GitHub, Linear, …) so their agents can read them in web chats. Accounts are connected through the Connany connector service; each person connects theirs in Console → Connectors (and may bring their own Connany key in Console → Tools).",
+            "让用户连接自己的账号（Notion、GitHub、Linear 等），他们的 Agent 在网页对话中就能读取。账号通过 Connany 连接服务接入，每个用户在「控制台 → 连接器」里连接自己的账号（也可以在「控制台 → 工具」里填自己的 Connany Key）。",
           )}
         </p>
       </div>

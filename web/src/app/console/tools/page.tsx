@@ -1,14 +1,16 @@
 "use client";
 
 import { useState } from "react";
-import { ConnectorsSettingsPage } from "@/components/connectors-settings";
+import Link from "next/link";
+import { OwnConnanyKey } from "@/components/connectors-own-key";
 import { useLocale } from "@/components/locale-provider";
 
 // Console → Tools: the caller's own tool settings. Like models and skills,
 // what a user sets here is used first and the deployment's tools
-// (Admin → Tools) are the fallback. For now the only entry is the user's
-// own connector accounts; per-user tool providers (search, image, …) can
-// join the rail later.
+// (Admin → Tools) are the fallback. Settings only: for now which Connany
+// holds the person's accounts (their own key or this site's); the accounts
+// themselves are in Console → Connectors. Per-user tool providers
+// (search, image, …) can join the rail later.
 type Section = "connectors";
 
 export default function ConsoleToolsPage() {
@@ -38,7 +40,27 @@ export default function ConsoleToolsPage() {
           ))}
         </nav>
       </aside>
-      <div className="flex-1 min-w-0">{active === "connectors" && <ConnectorsSettingsPage embedded />}</div>
+      <div className="flex-1 min-w-0">{active === "connectors" && <ConnectorsConfig />}</div>
+    </div>
+  );
+}
+
+function ConnectorsConfig() {
+  const { tr } = useLocale();
+  return (
+    <div className="max-w-3xl">
+      <h2 className="text-2xl font-semibold tracking-tight">{tr("Connectors", "连接器")}</h2>
+      <p className="mt-1 text-sm text-muted-foreground">
+        {tr(
+          "Which Connany connector service holds your accounts: your own project key, or the one this site provides. Connect and manage the accounts in ",
+          "你的账号接在哪个 Connany 连接服务上：你自己的项目 Key，或本站提供的服务。连接和管理账号请到",
+        )}
+        <Link href="/console/connectors/" className="text-foreground underline underline-offset-4">
+          {tr("Connectors", "「连接器」")}
+        </Link>
+        {tr(".", "。")}
+      </p>
+      <OwnConnanyKey />
     </div>
   );
 }

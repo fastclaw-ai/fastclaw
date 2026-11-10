@@ -24,12 +24,13 @@ Alternatively, environment variables (used when nothing is saved in the UI):
 
 For `make dev`, the env vars can go in an untracked `.env.dev`.
 
-Each person then connects their own accounts in **Console → Tools →
-Connectors** (Tools is below Skills in the console sidebar).
+Each person then connects their own accounts in **Console → Connectors**
+(below Skills in the console sidebar).
 
 ### A person's own Connany key
 
-Like models and skills, a person may bring their own: on the same page,
+Like models and skills, a person may bring their own: in **Console → Tools
+→ Connectors** (settings only; the accounts stay in Console → Connectors),
 **Use my own key** takes a Connany address and project key (checked
 against the service before it is saved, `PUT /api/connectors-config`). Their
 accounts then live in their Connany project, and their agents use it;

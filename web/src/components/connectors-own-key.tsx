@@ -18,10 +18,10 @@ import {
   type MyConnectorsConfig,
 } from "@/lib/api";
 
-export function OwnConnanyKey({ onChanged, startOpen = false }: { onChanged: () => void; startOpen?: boolean }) {
+export function OwnConnanyKey({ onChanged }: { onChanged?: () => void }) {
   const { tr } = useLocale();
   const [config, setConfig] = React.useState<MyConnectorsConfig | null>(null);
-  const [open, setOpen] = React.useState(startOpen);
+  const [open, setOpen] = React.useState(false);
   const [url, setUrl] = React.useState("");
   const [apiKey, setApiKey] = React.useState("");
   const [busy, setBusy] = React.useState(false);
@@ -46,7 +46,11 @@ export function OwnConnanyKey({ onChanged, startOpen = false }: { onChanged: () 
 
   React.useEffect(() => {
     getMyConnectorsConfig()
-      .then(show)
+      .then((c) => {
+        show(c);
+        // No service at all: the form is the only thing to do here.
+        if (!c.source) setOpen(true);
+      })
       .catch((e) => setError(errorText(e instanceof ConnectorApiError ? e.code : "")));
   }, [show, errorText]);
 
@@ -56,7 +60,7 @@ export function OwnConnanyKey({ onChanged, startOpen = false }: { onChanged: () 
     try {
       show(await call());
       setOpen(false);
-      onChanged();
+      onChanged?.();
     } catch (e) {
       setError(errorText(e instanceof ConnectorApiError ? e.code : ""));
     } finally {
