@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -11,20 +12,50 @@ import (
 	"github.com/fastclaw-ai/fastclaw/internal/connectors"
 )
 
+// EndUserConnectorGate reports whether chatterUID — an end user of the
+// account that owns agentID (X-Fastclaw-End-User) — may use their own
+// connected accounts on that agent: it is one of THEIR agents, so its
+// instructions are theirs. The gateway decides from the agent record.
+type EndUserConnectorGate func(ctx context.Context, agentID, chatterUID string) bool
+
+// ConnectorsURLParam is the turn param (set by the calling product's
+// backend, never the model) naming the product's own page where an end
+// user connects accounts. Their chat (an IM) can't show a connect card,
+// so request_connection hands the model this link instead.
+const ConnectorsURLParam = "__fastclawConnectorsURL"
+
 // mountConnectors puts the connectors tool on this turn's registry when
 // the turn may use the chatter's connected accounts, and returns the note
 // on those accounts for the system prompt ("" when nothing applies).
 //
-// Only a web turn whose chatter owns this agent: the accounts are THEIRS,
-// and that conversation is the only reader of the reply. IM channels,
-// groups, cron, the API and other people's agents never get them — an
+// Two cases, both a 1:1 conversation whose only reader is the accounts'
+// owner, on an agent whose instructions are theirs:
+//   - a web turn whose chatter owns this agent;
+//   - an end user's own turn (web or API) on an agent the account marked
+//     as theirs (EndUserConnectorGate), e.g. WeClaw's "my agents".
+//
+// IM channels, groups, cron and other people's agents never get them — an
 // agent someone else set up runs on their instructions and could carry
 // what it reads elsewhere (docs/connectors.md).
 func (a *Agent) mountConnectors(ctx context.Context, msg bus.InboundMessage, chatterUID, sessionKey string) string {
-	if a.registry == nil || msg.Channel != "web" || chatterUID == "" || chatterUID != a.trustOwnerID() {
+	if a.registry == nil {
+		return ""
+	}
+	// A previous turn's mount (bound to that turn's chatter) never
+	// carries over: each turn decides afresh below.
+	a.registry.Unregister(tools.ConnectorsToolName)
+	if chatterUID == "" {
 		return ""
 	}
 	if msg.Source != bus.SourceUser && msg.Source != bus.SourceConnector {
+		return ""
+	}
+	connectURL := ""
+	switch {
+	case msg.Channel == "web" && chatterUID == a.trustOwnerID():
+	case a.endUserTurnMayUseConnectors(ctx, msg, chatterUID):
+		connectURL = connectorsURLParam(msg.Params)
+	default:
 		return ""
 	}
 	// Their own Connany when they saved one, else the deployment's.
@@ -39,8 +70,37 @@ func (a *Agent) mountConnectors(ctx context.Context, msg bus.InboundMessage, cha
 	if err != nil || len(platforms) == 0 {
 		return ""
 	}
-	tools.RegisterConnectors(a.registry, svc, chatterUID, connectors.ChatRef{AgentID: a.name, SessionID: sessionKey}, platforms)
+	tools.RegisterConnectors(a.registry, svc, chatterUID, connectors.ChatRef{AgentID: a.name, SessionID: sessionKey}, platforms, connectURL)
 	return connectorAccountsNote(cctx, svc, chatterUID, platforms)
+}
+
+// endUserTurnMayUseConnectors: an end user's own direct turn on one of
+// their agents. The channel is the product's (web, or its backend over the
+// API relaying the person's IM chat); never a group.
+func (a *Agent) endUserTurnMayUseConnectors(ctx context.Context, msg bus.InboundMessage, chatterUID string) bool {
+	if a.endUserConnectors == nil || msg.PeerKind != "dm" || chatterUID == a.trustOwnerID() {
+		return false
+	}
+	if msg.Channel != "web" && msg.Channel != "api" {
+		return false
+	}
+	id := a.agentID
+	if id == "" {
+		id = a.name
+	}
+	return a.endUserConnectors(ctx, id, chatterUID)
+}
+
+// connectorsURLParam is the product's connect page from the turn params,
+// when it is an http(s) URL.
+func connectorsURLParam(params map[string]any) string {
+	raw, _ := params[ConnectorsURLParam].(string)
+	raw = strings.TrimSpace(raw)
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil {
+		return ""
+	}
+	return u.String()
 }
 
 // connectorAccountsNote states the person's platforms at the start of a

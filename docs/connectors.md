@@ -63,10 +63,23 @@ neither, the page asks for a key and agents get no tool.
 
 ## Where accounts are usable
 
-The `connectors` tool is mounted only on a **web** turn whose **chatter owns
-the agent** (`Agent.mountConnectors`). Not in IM channels, groups, cron, the
-`/v1` API, or on someone else's agent — there the reader of the reply, or the
-author of the agent's instructions, isn't the account's owner.
+The `connectors` tool is mounted (`Agent.mountConnectors`) only on:
+
+- a **web** turn whose **chatter owns the agent**; or
+- an app **end user's** own 1:1 turn (web or `/v1` API, `X-Fastclaw-End-User`)
+  on an agent of the app's account marked as theirs (`endUserOwner`, see
+  `gateway.endUserConnectorGate`). Their subject is their own app_user id,
+  so accounts are theirs alone, usable across all of their agents — but not
+  on the app's public agents, whose instructions are someone else's. The app
+  passes its own connect page as the turn param `__fastclawConnectorsURL` (hidden from the model's client-parameters note); the tool's
+  request actions then return that link (`?connector=<name>`) instead of a
+  card, and authorization returns to the app's page (`returnUrl` on
+  `POST /api/connector-authorizations`, end-user callers only).
+
+Not in IM channels, groups, cron, or on someone else's agent — there the
+reader of the reply, or the author of the agent's instructions, isn't the
+account's owner. The tool is unregistered at the start of every turn, so a
+mount never carries over to the next turn.
 
 ## The tool
 

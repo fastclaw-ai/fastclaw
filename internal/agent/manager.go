@@ -70,6 +70,10 @@ type managerOpts struct {
 	// agentLister lists the agents message_agent may reach, for the
 	// per-turn roster. Nil: no roster.
 	agentLister AgentLister
+	// endUserConnectors says whether an end user's turn on an agent may
+	// use that end user's connected accounts (see EndUserConnectorGate).
+	// Nil: only the agent's own owner's web turns get them.
+	endUserConnectors EndUserConnectorGate
 	// onAgentChanged is invoked after in-chat provisioning mutates an
 	// agent, so a running gateway can reload rather than require a
 	// restart.
@@ -86,6 +90,12 @@ func WithAgentResolver(fn AgentResolver) ManagerOption {
 // caller may reach (see AgentLister).
 func WithAgentLister(fn AgentLister) ManagerOption {
 	return func(o *managerOpts) { o.agentLister = fn }
+}
+
+// WithEndUserConnectors supplies the gate that lets an account's end
+// users use their own connected accounts on the agents that are theirs.
+func WithEndUserConnectors(fn EndUserConnectorGate) ManagerOption {
+	return func(o *managerOpts) { o.endUserConnectors = fn }
 }
 
 // WithToolAvailability supplies the capability probe behind check_agent.
@@ -304,6 +314,7 @@ func (m *Manager) buildAgentWithSkillsCfg(rc config.ResolvedAgent, prov provider
 		// lives only in OSS.
 		ag.ReloadWorkspaceFiles()
 	}
+	ag.endUserConnectors = m.opts.endUserConnectors
 	if m.opts.dataStore != nil {
 		// Cron tools need the relational store to persist scheduled
 		// jobs; the closure also reads channel/chatID off the registry

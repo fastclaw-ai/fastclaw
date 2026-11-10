@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/fastclaw-ai/fastclaw/internal/agent"
+	"github.com/fastclaw-ai/fastclaw/internal/auth"
 	"github.com/fastclaw-ai/fastclaw/internal/connectors"
 )
 
@@ -454,10 +456,24 @@ func (s *Server) handleConnectorAuthorize(w http.ResponseWriter, r *http.Request
 		Connector   string `json:"connector"`
 		ReconnectID string `json:"reconnectId"`
 		AccessID    string `json:"accessId"`
+		// ReturnURL: where the person lands after authorizing. Only an
+		// app's backend acting for its end user (api key +
+		// X-Fastclaw-End-User) may set it — the page is the app's own,
+		// which then confirms through this API. Default: our done page.
+		ReturnURL string `json:"returnUrl"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		connectorError(w, &connectors.Error{Code: "invalid_request"})
 		return
+	}
+	returnURL := requestBaseURL(r) + "/connectors/done/"
+	if req.ReturnURL != "" {
+		ident, _ := auth.FromContext(r.Context())
+		if ident.EndUser == "" || !validReturnURL(req.ReturnURL) {
+			connectorError(w, &connectors.Error{Code: "invalid_request"})
+			return
+		}
+		returnURL = req.ReturnURL
 	}
 	set := 0
 	for _, v := range []string{req.RequestID, req.Connector, req.ReconnectID, req.AccessID} {
@@ -471,12 +487,32 @@ func (s *Server) handleConnectorAuthorize(w http.ResponseWriter, r *http.Request
 	}
 	link, view, err := svc.Open(r.Context(), uid, connectors.OpenTarget{
 		RequestID: req.RequestID, Connector: req.Connector, ReconnectID: req.ReconnectID, AccessID: req.AccessID,
-	}, requestBaseURL(r)+"/connectors/done/")
+	}, returnURL)
 	if err != nil {
 		connectorError(w, err)
 		return
 	}
 	jsonResponse(w, http.StatusOK, map[string]any{"url": link, "request": view})
+}
+
+// validReturnURL: https (or http on localhost), no credentials or
+// fragment — what the connector service accepts as a return page.
+func validReturnURL(raw string) bool {
+	if len(raw) > 2048 {
+		return false
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || u.User != nil || u.Fragment != "" {
+		return false
+	}
+	switch u.Scheme {
+	case "https":
+		return true
+	case "http":
+		h := u.Hostname()
+		return h == "localhost" || h == "127.0.0.1" || h == "::1"
+	}
+	return false
 }
 
 func (s *Server) handleConnectorRequestStatus(w http.ResponseWriter, r *http.Request) {

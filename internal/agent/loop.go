@@ -67,10 +67,12 @@ type Agent struct {
 	// listReachableAgents: the message_agent roster (nil = none). Set by
 	// registerMessageAgent.
 	listReachableAgents func(ctx context.Context) ([]AgentBrief, error)
-	homePath            string // agent's home: SOUL.md, sessions, memory, skills
-	workspacePath       string // working dir where agent creates user files
-	homeDir             string // FastClaw root, ~/.fastclaw
-	ownerUserID         string // the UserSpace user the agent runs for (hook / data namespacing)
+	// endUserConnectors: see EndUserConnectorGate (nil = none).
+	endUserConnectors EndUserConnectorGate
+	homePath          string // agent's home: SOUL.md, sessions, memory, skills
+	workspacePath     string // working dir where agent creates user files
+	homeDir           string // FastClaw root, ~/.fastclaw
+	ownerUserID       string // the UserSpace user the agent runs for (hook / data namespacing)
 	// agentOwnerID is agents.user_id — the account that actually owns the
 	// agent. It differs from ownerUserID whenever the agent runs in another
 	// user's space (an app's end-user, a public-link visitor, an admin

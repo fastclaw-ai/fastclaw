@@ -335,6 +335,26 @@ Updates arrive as chunks with an empty delta and a top-level
 
 The turn's stream stays open while it waits for the decision.
 
+### Connectors (the end user's own third-party accounts)
+
+When the server has connectors configured (Notion, GitHub, …), your end
+user can connect their own accounts and use them **on the agents marked
+as theirs** (`endUserOwner`), never on your public agents. Every call is
+as the end user (`X-Fastclaw-End-User`); the accounts are theirs alone.
+
+- `GET /api/connectors?lang=zh-CN` — platforms; `GET /api/connector-accounts`
+  — their accounts; `DELETE /api/connector-accounts/{id}` — disconnect.
+- Connect: `POST /api/connector-authorizations`
+  `{"connector":"notion","returnUrl":"https://your.app/connections"}` (or
+  `{"reconnectId":…}` / `{"accessId":…}`) → `{url, request}`. Open `url` in
+  the browser at once (one use, 15 minutes; never log it). The person comes
+  back to `returnUrl` with `connany_session_id`: post it to
+  `POST /api/connector-requests/confirm` `{"providerSessionId":…}`, or poll
+  `POST /api/connector-requests/{request.id}/recheck`.
+- In chat, send `"params": {"__fastclawConnectorsURL": "https://your.app/connections"}`
+  on `/v1/chat/completions`: when an account is missing, the agent sends the
+  person that page with `?connector=<name>` instead of a connect button.
+
 ## 6. Usage and quotas
 
 - `GET /v1/usage` — per-day token usage. Query: `days` (1–90, default 30),

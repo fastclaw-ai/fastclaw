@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/fastclaw-ai/fastclaw/internal/connectors"
@@ -38,7 +39,11 @@ const ConnectorsToolName = "connectors"
 // accounts, and that conversation is the only reader of the reply (see
 // docs/connectors.md). The owner is bound here, from the turn — never
 // from the model, which names platforms and account NAMES only.
-func RegisterConnectors(r *Registry, svc *connectors.Service, userID string, chat connectors.ChatRef, platforms []connectors.Connector) {
+//
+// connectURL, when set, is the product's own page where the person
+// connects accounts (their chat can't show a connect card): the request
+// actions then give the model that link to send instead.
+func RegisterConnectors(r *Registry, svc *connectors.Service, userID string, chat connectors.ChatRef, platforms []connectors.Connector, connectURL string) {
 	titles := map[string]string{}
 	names := make([]string, 0, len(platforms))
 	listed := make([]string, 0, len(platforms))
@@ -46,6 +51,16 @@ func RegisterConnectors(r *Registry, svc *connectors.Service, userID string, cha
 		titles[p.Name] = p.Title
 		names = append(names, p.Name)
 		listed = append(listed, fmt.Sprintf("%s (%s)", p.Name, p.Title))
+	}
+	requestLines := []string{
+		`"request_connection" connector [+ account] — when the request needs a platform with no connected account, the person asks to connect another account, or an account needs reconnection: shows the person a connect button in this conversation. Call it right away, in the same turn — never ask "shall I connect it?" first: the button is that question, and nothing happens unless they click it. Write one line of why in your message, then make this the only tool call: it shows the button and ENDS your turn; a [connector] message wakes you when they finish. Never ask for passwords, tokens or links yourself.`,
+		`"request_access" connector [+ account] — when an account reports needs_access (e.g. a GitHub account with no repositories shared yet) or the person wants to share more: shows them a button to grant access on the platform. Then the turn ends the same way.`,
+	}
+	if connectURL != "" {
+		requestLines = []string{
+			`"request_connection" connector [+ account] — when the request needs a platform with no connected account, the person asks to connect another account, or an account needs reconnection: returns the link to the page where the person connects it. Call it right away — never ask "shall I connect it?" first — and send them that link exactly as returned, with one line of why. They connect it there and then message you again; never ask for passwords or tokens yourself.`,
+			`"request_access" connector [+ account] — when an account reports needs_access (e.g. a GitHub account with no repositories shared yet) or the person wants to share more: returns the link to the page where they grant it. Send it the same way.`,
+		}
 	}
 	desc := strings.Join([]string{
 		"Read the person's own third-party accounts — the ones they connected themselves — such as their pages, issues or repositories.",
@@ -55,8 +70,7 @@ func RegisterConnectors(r *Registry, svc *connectors.Service, userID string, cha
 		`"accounts" — the person's connected accounts: platform, name, status, needs_access, default. Use it when the person names an account, or before you assume one is missing.`,
 		`"list_tools" connector [+ query, offset, account] — search the platform's tools for that account, with each tool's exact input_schema. Always search before calling; paginate with next_offset.`,
 		`"call_tool" connector + tool + input [+ account] — call a tool found with list_tools, with arguments matching its input_schema. Only read-only tools are enabled; changing data on a platform is not possible here — say so if asked.`,
-		`"request_connection" connector [+ account] — when the request needs a platform with no connected account, the person asks to connect another account, or an account needs reconnection: shows the person a connect button in this conversation. Call it right away, in the same turn — never ask "shall I connect it?" first: the button is that question, and nothing happens unless they click it. Write one line of why in your message, then make this the only tool call: it shows the button and ENDS your turn; a [connector] message wakes you when they finish. Never ask for passwords, tokens or links yourself.`,
-		`"request_access" connector [+ account] — when an account reports needs_access (e.g. a GitHub account with no repositories shared yet) or the person wants to share more: shows them a button to grant access on the platform. Then the turn ends the same way.`,
+	}, "\n") + "\n" + strings.Join(requestLines, "\n") + "\n" + strings.Join([]string{
 		"",
 		`"account" is the exact name from "accounts"; omit it to use the default. If the person names an account, pass it on every call, pagination included. It is fastclaw's name for the connection — never put it into a tool's input: ids a platform wants come from that platform's own tools.`,
 		fmt.Sprintf("Keep results small: ask only for what the request needs (search or filter parameters, a small page size) — a result over %d characters is cut off.", connectors.MaxResultChars),
@@ -81,7 +95,7 @@ func RegisterConnectors(r *Registry, svc *connectors.Service, userID string, cha
 		"required": []string{"action"},
 	}
 
-	t := &connectorsTool{svc: svc, userID: userID, chat: chat, titles: titles, names: names}
+	t := &connectorsTool{svc: svc, userID: userID, chat: chat, titles: titles, names: names, connectURL: connectURL}
 	r.RegisterFrom(ConnectorsToolName, desc, params, t.run, SourceConnector)
 }
 
@@ -91,6 +105,8 @@ type connectorsTool struct {
 	chat   connectors.ChatRef
 	titles map[string]string
 	names  []string
+	// connectURL: the product's connect page (see RegisterConnectors).
+	connectURL string
 }
 
 type connectorsArgs struct {
@@ -251,6 +267,9 @@ func (t *connectorsTool) request(ctx context.Context, action, connector, title, 
 	case len(mine) == 1 && mine[0].Status != "connected":
 		kind, target = "reconnect", mine[0].ID
 	}
+	if t.connectURL != "" {
+		return t.linkFor(connector, title, kind)
+	}
 	req, err := t.svc.CreateRequest(ctx, t.userID, connector, kind, target, t.chat)
 	if err != nil {
 		return explain(err, title)
@@ -271,6 +290,28 @@ func (t *connectorsTool) request(ctx context.Context, action, connector, title, 
 				"id": req.ID, "connector": connector, "title": title, "kind": kind,
 			},
 		})
+}
+
+// linkFor is request_connection / request_access where the chat can't
+// show a card: the product's connect page, opened on this platform. The
+// page itself starts the authorization for the signed-in person — the
+// link carries no credential, so it is safe for the model to repeat.
+func (t *connectorsTool) linkFor(connector, title, kind string) string {
+	u, err := url.Parse(t.connectURL)
+	if err != nil {
+		return "Error: the connect page is unavailable right now."
+	}
+	q := u.Query()
+	q.Set("connector", connector)
+	u.RawQuery = q.Encode()
+	what := "connect their " + title + " account"
+	switch kind {
+	case "access":
+		what = "grant access on " + title
+	case "reconnect":
+		what = "reconnect their " + title + " account"
+	}
+	return fmt.Sprintf("Send the person this link to %s (they sign in to %s there; nothing is shared until they approve): %s\nAfter they finish, they message you again and the account is available. Do not poll; never ask for passwords or tokens.", what, title, u.String())
 }
 
 func explain(err error, title string) string {

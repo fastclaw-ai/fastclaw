@@ -914,6 +914,7 @@ func loadUserSpace(ctx context.Context, userID string, mb *bus.MessageBus, st st
 		// message_agent's lookup, scoped to this space's owner.
 		agent.WithAgentResolver(messageAgentResolver(func() *UserSpace { return space }, st, mb, ws, userID, appOwner, appExternalID)),
 		agent.WithAgentLister(messageAgentLister(st, userID, appOwner, appExternalID)),
+		agent.WithEndUserConnectors(endUserConnectorGate(st, userID, appOwner, appExternalID)),
 	}
 	if ws != nil {
 		managerOpts = append(managerOpts, agent.WithWorkspaceStore(ws))
@@ -1572,4 +1573,27 @@ func resolveReachableAgentRef(ctx context.Context, st store.Store, userID, appOw
 		return "", fmt.Errorf("no agent named %q exists. Agents you can message: %s", ref, strings.Join(names, ", "))
 	}
 	return match, nil
+}
+
+// endUserConnectorGate lets an app's end user (this space: userID, known
+// to the app as externalID) use their own connected accounts on the
+// agents the app marked as theirs (endUserOwner == externalID) — e.g.
+// WeClaw's agents a user created. Not on the app's public agents: their
+// instructions are someone else's, and could carry what they read
+// elsewhere. Nil outside an end user's space.
+func endUserConnectorGate(st store.Store, userID, appOwner, externalID string) agent.EndUserConnectorGate {
+	if st == nil || appOwner == "" || strings.TrimSpace(externalID) == "" {
+		return nil
+	}
+	return func(ctx context.Context, agentID, chatterUID string) bool {
+		if chatterUID != userID || agentID == "" {
+			return false
+		}
+		rec, err := st.GetAgent(ctx, agentID)
+		if err != nil || rec == nil || rec.UserID != appOwner {
+			return false
+		}
+		owner := strings.TrimSpace(store.AgentEndUserOwner(rec))
+		return owner != "" && owner == strings.TrimSpace(externalID)
+	}
 }

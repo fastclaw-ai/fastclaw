@@ -753,6 +753,12 @@ func (r *Registry) RegisterFrom(name, description string, parameters interface{}
 	}
 }
 
+// Unregister removes a tool (no-op when absent). For per-turn tools that
+// a later turn of the same agent may not be allowed to see.
+func (r *Registry) Unregister(name string) {
+	delete(r.tools, name)
+}
+
 // RegisterSerial registers a tool that must never have two invocations
 // running concurrently even when the model emits N calls in one round.
 // Concurrent callers serialize on a per-tool mutex baked into the fn
