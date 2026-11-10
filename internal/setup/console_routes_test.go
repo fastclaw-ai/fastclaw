@@ -23,7 +23,6 @@ func TestLegacyConsoleRedirects(t *testing.T) {
 		{"/apikeys", "/console/apikeys/"},
 		{"/channels-config/", "/console/channels-config/"},
 		{"/tools/", "/admin/tools/"},
-		{"/console/tools/", "/admin/tools/"},
 		{"/agents/?manage=1", "/console/agents/"},
 		{"/agents/?manage=1&x=1", "/console/agents/?x=1"},
 		{"/agents/agt_1/skills/", "/console/agents/agt_1/skills/"},
@@ -36,8 +35,8 @@ func TestLegacyConsoleRedirects(t *testing.T) {
 			t.Errorf("%s → %d %q, want redirect to %q", c.path, rec.Code, rec.Header().Get("Location"), c.want)
 		}
 	}
-	// Chat routes and static assets are not redirected.
-	for _, path := range []string{"/agents/agt_1/chat/", "/channels/telegram.svg", "/agents/"} {
+	// Chat routes, static assets and the user Tools page are not redirected.
+	for _, path := range []string{"/agents/agt_1/chat/", "/channels/telegram.svg", "/agents/", "/console/tools/"} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
 		if rec.Code == http.StatusFound {

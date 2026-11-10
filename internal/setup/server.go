@@ -648,8 +648,9 @@ func legacyConsoleRedirect(path string, query url.Values) (string, bool) {
 	switch {
 	case trimmed == "overview":
 		target = "/console/"
-	case trimmed == "tools" || trimmed == "console/tools":
+	case trimmed == "tools":
 		// Deployment-wide tool config lives in the super_admin's /admin.
+		// (/console/tools is the user's own Tools page now.)
 		target = "/admin/tools/"
 	case len(parts) == 1 && consoleTopLevel[trimmed]:
 		target = "/console/" + trimmed + "/"
