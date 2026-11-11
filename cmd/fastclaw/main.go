@@ -273,6 +273,8 @@ func runGateway(port int) error {
 	// and install commands use (falls back to the request's origin).
 	if ms, ok := gw.Store().(store.MachineStore); ok {
 		aglHub := agl.NewHub(ms, os.Getenv("FASTCLAW_PUBLIC_URL"))
+		// Optional mirror for agl binaries (default: GitHub releases).
+		aglHub.SetReleaseURL(os.Getenv("FASTCLAW_AGL_RELEASE_URL"))
 		apiSrv.SetAglHub(aglHub)
 		gw.EnableAgl(aglHub)
 	}

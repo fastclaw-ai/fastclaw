@@ -304,6 +304,24 @@ func TestDownloadRedirect(t *testing.T) {
 	}
 }
 
+func TestDownloadRedirectMirror(t *testing.T) {
+	th := newTestHub(t)
+	th.hub.SetReleaseURL(" https://mirror.example.cn/agl/ ")
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := client.Get(th.srv.URL + "/agl/download/darwin-arm64.sha256")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if got, want := resp.Header.Get("Location"), "https://mirror.example.cn/agl/agl-darwin-arm64.sha256"; got != want {
+		t.Fatalf("Location = %q, want %q", got, want)
+	}
+	th.hub.SetReleaseURL("") // empty keeps the current URL
+	if th.hub.releaseURL != "https://mirror.example.cn/agl" {
+		t.Fatalf("empty override changed releaseURL: %q", th.hub.releaseURL)
+	}
+}
+
 // The name follows the hostname until the user renames the machine; a
 // rename survives later hellos.
 func TestHelloKeepsUserChosenName(t *testing.T) {

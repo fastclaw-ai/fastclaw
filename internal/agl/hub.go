@@ -276,6 +276,16 @@ func NewHub(st store.MachineStore, publicURL string) *Hub {
 	}
 }
 
+// SetReleaseURL points /agl/download at a mirror of agl's release assets
+// (FASTCLAW_AGL_RELEASE_URL), e.g. a COS/OSS bucket for machines that can't
+// reach GitHub. The mirror must serve agl-<target> and agl-<target>.sha256.
+// Empty keeps DefaultReleaseURL.
+func (h *Hub) SetReleaseURL(u string) {
+	if u = strings.TrimRight(strings.TrimSpace(u), "/"); u != "" {
+		h.releaseURL = u
+	}
+}
+
 // RegisterRoutes mounts the hub's endpoints under /agl and under each
 // product's /agl/p/{scope}.
 func (h *Hub) RegisterRoutes(mux *http.ServeMux) {

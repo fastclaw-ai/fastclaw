@@ -44,6 +44,8 @@ services:
       # them, which is an internal address when a product's backend calls
       # FastClaw.
       FASTCLAW_PUBLIC_URL: "${FASTCLAW_PUBLIC_URL:-}"
+      # Optional mirror for agl binaries (default: GitHub releases).
+      FASTCLAW_AGL_RELEASE_URL: "${FASTCLAW_AGL_RELEASE_URL:-}"
       # Postgres backend (sqlite would also work; use it by clearing
       # these two and removing the postgres service below)
       FASTCLAW_STORAGE_TYPE: postgres

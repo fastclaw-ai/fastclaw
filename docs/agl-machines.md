@@ -133,7 +133,7 @@ POST /v1/agents   (X-Fastclaw-End-User: user:42)
 | Endpoint | |
 | --- | --- |
 | `GET /agl/install.sh?code=` | agl's `assets/install.sh` with `__HUB_URL__` = the code's hub address, `__CONNECT_ARGS__` = `--code <code> --private`; a code made for another address → invalid/used/expired code → 401 + a script that prints an error and exits 1 |
-| `GET /agl/download/<target>[.sha256]` | 302 to `https://github.com/thinkany-ai/agl/releases/latest/download/agl-<target>[.sha256]` |
+| `GET /agl/download/<target>[.sha256]` | 302 to `https://github.com/thinkany-ai/agl/releases/latest/download/agl-<target>[.sha256]`, or to `$FASTCLAW_AGL_RELEASE_URL/agl-<target>[.sha256]` when set (a mirror for machines that can't reach GitHub) |
 | `WS /agl/ws/machine?code=…&machine_id=…` | consumes the code (401 if unusable, before upgrading), sends `{"type":"paired","token"}`, stores `sha256(token)` |
 | `WS /agl/ws/machine?token=…&machine_id=…` | 401 for unknown/revoked tokens; expects `hello` within 10 s, then online |
 | `GET /agl/` | static "computer linked" page (nothing opens it automatically; the app shows the link via pairing status) |
