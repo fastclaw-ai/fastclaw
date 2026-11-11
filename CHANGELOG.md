@@ -5,6 +5,30 @@ action on upgrade — read those notes before deploying.
 
 ## [Unreleased]
 
+### Added — connectors for a product's end users
+
+A product calling FastClaw for its end users (`X-Fastclaw-End-User`) can
+let each of them connect their own Notion, GitHub, … accounts. The accounts
+are theirs alone and usable on the agents marked as theirs
+(`endUserOwner`), never on the product's public agents. End users run on
+the product account's own Connany key, else the deployment's. In an IM
+chat (`__fastclawConnectorsURL` turn param), the agent sends a one-time
+authorization link instead of a connect card; the platform returns the
+person to `__fastclawConnectorsReturnURL`. `POST
+/api/connector-authorizations` takes `returnUrl` for end users. See
+`docs/connectors.md` and the agent-integration skill.
+
+### Added — agl download mirror
+
+`FASTCLAW_AGL_RELEASE_URL` points `/agl/download` at a mirror of agl's
+release assets, for computers that can't reach GitHub.
+
+### Fixed — tool-call markup in streamed replies
+
+A model that writes its tool calls as text (DeepSeek-style `<｜DSML｜ …>`)
+no longer streams that markup: API callers relaying the stream (e.g. into
+WeChat) showed it as a message, and the web chat until the round ended.
+
 ### Added — bring your own Connany key
 
 Console → Tools → Connectors takes a person's own Connany address and
