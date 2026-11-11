@@ -816,6 +816,7 @@ func (a *Agent) streamChatToResponseWithOptions(ctx context.Context, messages []
 		thinkingSig    string
 		rawAssistant   json.RawMessage
 		streamUsage    provider.Usage
+		gate           deltaGate // tool-call markup never streams
 	)
 	for {
 		chunk, ok := sr.Next()
@@ -830,10 +831,12 @@ func (a *Agent) streamChatToResponseWithOptions(ctx context.Context, messages []
 				// that only know about the legacy `content` event
 				// ignore unknown types and rely on the final
 				// emit (caller's responsibility) instead.
-				emitEvent(ctx, ChatEvent{
-					Type: "content_delta",
-					Data: map[string]any{"delta": chunk.Content},
-				})
+				if d := gate.Push(chunk.Content); d != "" {
+					emitEvent(ctx, ChatEvent{
+						Type: "content_delta",
+						Data: map[string]any{"delta": d},
+					})
+				}
 			}
 		}
 		if chunk.Done {
@@ -856,6 +859,11 @@ func (a *Agent) streamChatToResponseWithOptions(ctx context.Context, messages []
 	}
 	if err := sr.Err(); err != nil {
 		return nil, err
+	}
+	if emitDeltas {
+		if d := gate.Flush(); d != "" {
+			emitEvent(ctx, ChatEvent{Type: "content_delta", Data: map[string]any{"delta": d}})
+		}
 	}
 	// Mirror what AnthropicProvider.parseSSE does when no
 	// RawAssistant was emitted but we still captured thinking text:

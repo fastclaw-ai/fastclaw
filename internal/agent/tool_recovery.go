@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/fastclaw-ai/fastclaw/internal/provider"
 )
@@ -248,4 +249,72 @@ func parseInvokeParameters(body string) map[string]any {
 		out[name] = raw
 	}
 	return out
+}
+
+// markupStartRE finds where tool-call markup begins in streamed text:
+// leaked special tokens (`<｜`, `< |`) or a bare XML call wrapper.
+var markupStartRE = regexp.MustCompile(`<\s*(?:[|｜]|DSML|invoke\s+name=|function_calls|tool_calls)`)
+
+// markupWords are what a held-back `<…` tail may still turn into.
+var markupWords = []string{"DSML", "invoke name=", "function_calls", "tool_calls"}
+
+// deltaGate keeps tool-call markup out of the live text stream. Some
+// models (DeepSeek-style) write their calls as text; maybeRecoverToolCalls
+// turns them back into calls, but only once the response is complete, and
+// streamed deltas can't be taken back: a product relaying them into a chat
+// would show the markup. From the first sign of markup on, the rest of the
+// round is withheld; the cleaned text, if any, arrives in the round's
+// final content.
+type deltaGate struct {
+	pending string
+	blocked bool
+}
+
+// Push takes a delta and returns the text safe to send now.
+func (g *deltaGate) Push(s string) string {
+	if g.blocked {
+		return ""
+	}
+	buf := g.pending + s
+	g.pending = ""
+	if loc := markupStartRE.FindStringIndex(buf); loc != nil {
+		g.blocked = true
+		return buf[:loc[0]]
+	}
+	if i := strings.LastIndex(buf, "<"); i >= 0 && mayBecomeMarkup(buf[i:]) {
+		g.pending = buf[i:]
+		return buf[:i]
+	}
+	return buf
+}
+
+// Flush returns what is still held when the stream ends cleanly.
+func (g *deltaGate) Flush() string {
+	if g.blocked {
+		return ""
+	}
+	out := g.pending
+	g.pending = ""
+	return out
+}
+
+// Blocked reports whether markup was seen (and the rest withheld).
+func (g *deltaGate) Blocked() bool { return g.blocked }
+
+// mayBecomeMarkup: tail starts with "<" and later deltas could still
+// complete it into markup.
+func mayBecomeMarkup(tail string) bool {
+	if len(tail) > 32 || strings.ContainsAny(tail[1:], "<>") {
+		return false
+	}
+	rest := strings.TrimLeft(tail[1:], " \t\r\n")
+	if rest == "" || !utf8.ValidString(rest) {
+		return true // a split multi-byte rune (｜) may be on its way
+	}
+	for _, w := range markupWords {
+		if strings.HasPrefix(w, rest) {
+			return true
+		}
+	}
+	return false
 }
