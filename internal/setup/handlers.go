@@ -56,7 +56,11 @@ func (s *Server) loadConfigForUserID(r *http.Request, uid string) (*config.Confi
 		Channels:  map[string]config.ChannelConfig{},
 	}
 	for _, ns := range settingNamespaces {
-		if err := scope.SettingInto(r.Context(), s.dataStore, ns.namespace, uid, "", ns.dst(cfg)); err != nil {
+		nsUID := uid
+		if ns.systemOnly {
+			nsUID = ""
+		}
+		if err := scope.SettingInto(r.Context(), s.dataStore, ns.namespace, nsUID, "", ns.dst(cfg)); err != nil {
 			return nil, err
 		}
 	}
@@ -162,6 +166,9 @@ func (s *Server) saveConfigForUserID(r *http.Request, cfg *config.Config, uid st
 		return errors.New("store not configured")
 	}
 	for _, ns := range settingNamespaces {
+		if ns.systemOnly && uid != "" {
+			continue
+		}
 		data := ns.collect(cfg)
 		if err := scope.SaveSetting(r.Context(), s.dataStore, uid, "", ns.namespace, data); err != nil {
 			return err
@@ -178,8 +185,9 @@ var settingNamespaces = []settingNamespace{
 		dst:     func(c *config.Config) interface{} { return &c.Agents.Defaults },
 		collect: func(c *config.Config) map[string]interface{} { return toMap(c.Agents.Defaults) }},
 	{namespace: "sandbox",
-		dst:     func(c *config.Config) interface{} { return &c.Sandbox },
-		collect: func(c *config.Config) map[string]interface{} { return toMap(c.Sandbox) }},
+		dst:        func(c *config.Config) interface{} { return &c.Sandbox },
+		collect:    func(c *config.Config) map[string]interface{} { return toMap(c.Sandbox) },
+		systemOnly: true},
 	{namespace: "objectstore",
 		dst:     func(c *config.Config) interface{} { return &c.ObjectStore },
 		collect: func(c *config.Config) map[string]interface{} { return toMap(c.ObjectStore) }},
@@ -239,6 +247,12 @@ type settingNamespace struct {
 	namespace string
 	dst       func(*config.Config) interface{}
 	collect   func(*config.Config) map[string]interface{}
+	// systemOnly namespaces are deployment-wide (the runtime reads only
+	// the system row). They are never written at, nor read from, a user
+	// scope: saving any user setting used to snapshot the system sandbox
+	// into that user's row, which then shadowed later admin changes in
+	// the settings UI (backend switched to boxlite, page still said e2b).
+	systemOnly bool
 }
 
 func toMap(v interface{}) map[string]interface{} {

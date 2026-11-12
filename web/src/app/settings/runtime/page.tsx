@@ -48,7 +48,9 @@ export default function RuntimeSettingsPage() {
         return;
       }
       setLoading(true);
-      getConfig()
+      // Explicit system scope: this page edits deployment-wide settings,
+      // and the default (merged) view lets a user-level row shadow them.
+      getConfig("system")
         .then((cfg) => {
           setConfig(cfg);
           setSandboxEnabled(cfg.sandbox?.enabled || false);
@@ -102,7 +104,10 @@ export default function RuntimeSettingsPage() {
           enabled: sandboxEnabled,
           enforce: sandboxEnabled && sandboxEnforce,
           backend: sandboxBackend,
-          image: activeImage || undefined,
+          // "" (not undefined) so switching backends clears the previous
+          // backend's value from the legacy slot instead of leaving, say,
+          // an E2B template id as the BoxLite image.
+          image: activeImage,
           dockerImage: sandboxDockerImage || undefined,
           e2bTemplate: sandboxE2BTemplate || undefined,
           boxliteSnapshot: sandboxBoxliteImage || undefined,
@@ -110,7 +115,7 @@ export default function RuntimeSettingsPage() {
           boxliteKey: sandboxBoxliteKey || undefined,
           boxliteUrl: sandboxBoxliteURL || undefined,
         },
-      });
+      }, "system");
       if (result?.ok === false) {
         setSaveError(result.error || tr("Save failed", "保存失败"));
         return;
