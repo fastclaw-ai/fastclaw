@@ -157,6 +157,42 @@ func TestUpdateConfigMaskedAgentSkillEntryKeepsStoredSecret(t *testing.T) {
 	}
 }
 
+// The configure dialog posts one skill at a time; saving the second
+// skill must not drop the first skill's env from the agent's row.
+func TestUpdateConfigAgentSkillEntryPatchKeepsOtherSkills(t *testing.T) {
+	ctx := context.Background()
+	s, resolver, adminUser, _ := newAuthTestServer(t, ctx)
+
+	if err := s.dataStore.SaveAgent(ctx, &store.AgentRecord{ID: "agent-1", UserID: adminUser.ID, Name: "Test Agent"}); err != nil {
+		t.Fatalf("SaveAgent: %v", err)
+	}
+	post := func(skill, key, value string) {
+		t.Helper()
+		body := map[string]any{"skills": map[string]any{"agentEntries": map[string]any{
+			"agent-1": map[string]any{skill: map[string]any{"enabled": true, "env": map[string]any{key: value}}},
+		}}}
+		rr := httptest.NewRecorder()
+		s.authMiddleware(s.handleUpdateConfig)(rr, configTestRequest(t, ctx, resolver, http.MethodPost, "/api/config", adminUser.ID, body))
+		if rr.Code != http.StatusOK {
+			t.Fatalf("POST /api/config status = %d, body = %s", rr.Code, rr.Body.String())
+		}
+	}
+
+	post("skill-a", "A_TOKEN", "token-a-123456")
+	post("skill-b", "B_KEY", "key-b-123456")
+
+	entries, err := loadAgentSkillEntries(ctx, s.dataStore, "agent-1")
+	if err != nil {
+		t.Fatalf("loadAgentSkillEntries: %v", err)
+	}
+	if got := entries["skill-a"].Env["A_TOKEN"]; got != "token-a-123456" {
+		t.Fatalf("saving skill-b dropped skill-a env: got %q (entries=%+v)", got, entries)
+	}
+	if got := entries["skill-b"].Env["B_KEY"]; got != "key-b-123456" {
+		t.Fatalf("skill-b env not saved: got %q", got)
+	}
+}
+
 func TestMergeSkillEntry(t *testing.T) {
 	existing := config.SkillEntryCfg{
 		Enabled: true,

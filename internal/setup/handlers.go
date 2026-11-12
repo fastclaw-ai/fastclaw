@@ -727,14 +727,24 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 			if !s.authorizeScope(w, r, scope.Agent, agentID, scopeWrite) {
 				return
 			}
-			// Resolve masked secrets back to the stored originals before
-			// persisting — same protection as the global entries path.
-			if existing, err := loadAgentSkillEntries(r.Context(), s.dataStore, agentID); err == nil {
-				for name, in := range entries {
-					entries[name] = mergeSkillEntry(existing[name], in)
-				}
+			// The body is a patch: the dashboard's configure dialog sends
+			// only the skill being edited. Start from the stored row so
+			// saving one skill doesn't wipe the agent's other skills'
+			// env, and resolve masked secrets back to the stored
+			// originals — same protection as the global entries path.
+			existing, err := loadAgentSkillEntries(r.Context(), s.dataStore, agentID)
+			if err != nil && !errors.Is(err, store.ErrNotFound) {
+				jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+				return
 			}
-			if err := saveAgentSkillEntries(r.Context(), s.dataStore, agentID, entries); err != nil {
+			patched := make(map[string]config.SkillEntryCfg, len(existing)+len(entries))
+			for name, entry := range existing {
+				patched[name] = entry
+			}
+			for name, in := range entries {
+				patched[name] = mergeSkillEntry(existing[name], in)
+			}
+			if err := saveAgentSkillEntries(r.Context(), s.dataStore, agentID, patched); err != nil {
 				jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
 				return
 			}
