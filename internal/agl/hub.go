@@ -361,7 +361,30 @@ func (h *Hub) InstallCommand(r *http.Request, code string) string {
 
 // ScopedInstallCommand is InstallCommand for a code made with scope.
 func (h *Hub) ScopedInstallCommand(r *http.Request, code, scope string) string {
-	return fmt.Sprintf(`curl -fsSL "%s/install.sh?code=%s" | sh`, h.ScopedHubURL(r, scope), code)
+	return h.InstallCommandWithAccess(r, code, scope, "")
+}
+
+// InstallCommandWithAccess is ScopedInstallCommand linking with access
+// (LinkAccess; "" or ask = agl's default). The person sees it in the
+// command they run: the hub can't raise a link's access afterwards.
+func (h *Hub) InstallCommandWithAccess(r *http.Request, code, scope, access string) string {
+	q := "code=" + code
+	if a, ok := LinkAccess(access); ok && a != AccessAsk {
+		q += "&access=" + a
+	}
+	return fmt.Sprintf(`curl -fsSL "%s/install.sh?%s" | sh`, h.ScopedHubURL(r, scope), q)
+}
+
+// LinkAccess normalizes an access level for `agl connect --access`; ""
+// means agl's default (ask). ok is false for anything else.
+func LinkAccess(a string) (string, bool) {
+	switch a = strings.TrimSpace(a); a {
+	case "":
+		return AccessAsk, true
+	case AccessAsk, AccessEdit, AccessFull, AccessReadOnly:
+		return a, true
+	}
+	return "", false
 }
 
 // --- pairing ---
@@ -478,7 +501,13 @@ func (h *Hub) handleInstallScript(w http.ResponseWriter, r *http.Request) {
 	// the ones the person runs locally (agl run, desktop apps) — those
 	// are none of a web app's business, and with several apps linked to
 	// one computer each would otherwise see them all.
-	script = strings.ReplaceAll(script, "__CONNECT_ARGS__", "--code "+code+" --private")
+	args := "--code " + code + " --private"
+	// access: what the person chose on the web page; it decides which of
+	// agl's built-in tools (read/write/edit/exec) this hub may call.
+	if a, ok := LinkAccess(r.URL.Query().Get("access")); ok && a != AccessAsk {
+		args += " --access " + a
+	}
+	script = strings.ReplaceAll(script, "__CONNECT_ARGS__", args)
 	fmt.Fprint(w, script)
 }
 

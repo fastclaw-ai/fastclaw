@@ -157,6 +157,21 @@ func TestPairingCodeSingleUse(t *testing.T) {
 	if resp.StatusCode != 200 || !strings.Contains(string(body), th.srv.URL+"/agl") || !strings.Contains(string(body), "--code "+code) {
 		t.Fatalf("install.sh: %d\n%.300s", resp.StatusCode, body)
 	}
+	if strings.Contains(string(body), "--access") {
+		t.Fatal("install.sh without access must keep agl's default")
+	}
+	// The access the person chose is passed to agl connect; junk is ignored.
+	for q, want := range map[string]string{"&access=full": "--private --access full", "&access=edit": "--private --access edit", "&access=root": "--private}", "&access=ask": "--private}"} {
+		resp, err := http.Get(th.srv.URL + "/agl/install.sh?code=" + code + q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if !strings.Contains(string(b), want) {
+			t.Fatalf("install.sh%s: want %q in CONNECT_ARGS", q, want)
+		}
+	}
 
 	token := th.pair(code, "agl-1")
 	// Second use of the same code: refused before the upgrade (401).

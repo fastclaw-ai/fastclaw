@@ -73,7 +73,7 @@ super_admin browses as someone else). Errors are `{"error": "<message>"}`.
 
 | Call | Response |
 | --- | --- |
-| `POST /v1/machines/pairing` `{}` | `{code, installCommand, expiresAt}` — one use, 10 min, stored as sha256 |
+| `POST /v1/machines/pairing` `{access?}` | `{code, access, installCommand, expiresAt}` — one use, 10 min, stored as sha256. `access` (`ask` default, `read_only`, `edit`, `full`) goes into the install command (`install.sh?…&access=full` → `agl connect --access full`) and decides which built-in tools agents get on a computer without a coding agent (`computer_*`). The person sees it in the command they run; the hub can't raise it later. |
 | `POST /v1/machines/pairing/status` `{code}` | `{status: pending\|connected\|expired, machineId?}`; `connected` once the paired machine said `hello`; 404 for codes this end user didn't create |
 | `GET /v1/machines` | `{machines: [Machine]}`, newest first, revoked excluded |
 | `PATCH /v1/machines/{id}` | body any of `{name, allowAgents, defaultAccess, defaultCwd}` → the updated Machine; 404 unless it is this end user's active machine; 400 on invalid values |
@@ -275,6 +275,28 @@ where a free-form brief to `run_local_agent` drifted (models told Codex to
   `image_gen` fails. Without either tool the agent says it can't draw:
   no computer linked, Codex missing, or image generation off (the hint
   says "image generation is turned off on this computer").
+
+### Computers without a coding agent (`computer_*`)
+
+agl 0.3.14 ships four built-in tools that need no coding agent on the
+computer: `read`, `write`, `edit`, `exec` (`tools.list` / `tools.call`; agl
+never calls a model for them). For each of the chatter's online computers
+with agl ≥ 0.3.14 and no available coding agent, the turn mounts
+`computer_read`, `computer_write`, `computer_edit`, `computer_exec` — only
+those the computer's `tools.list` returns, which agl filters by the hub
+link's access (`ask`/`read_only` → read; `edit` → read, write, edit; `full`
+→ all four). The cloud can't raise it: the person re-links the computer
+with more access. Nobody is asked before a call, so:
+
+- read/write/edit refuse hidden files and folders (`~/.ssh`, `.git`,
+  `.env`, …); relative paths resolve against the machine's default folder.
+- exec defaults `cwd` to that folder and `wait_ms` to 15s; a running
+  command is continued with `action: "read"` and the returned cursors.
+- Results are capped at 32 KiB. Each call is metered as `local_agent`,
+  model `builtin:<name>`.
+
+Code: `internal/agl/builtin.go` (listing, cache, call),
+`internal/agent/tools/local_agents.go` (`RegisterComputerTools`).
 
 ## IM turn semantics (passthrough agents)
 

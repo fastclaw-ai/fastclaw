@@ -171,6 +171,7 @@ type Tools struct {
 	mu      sync.Mutex
 	pending map[string]*toolApproval // ToolChat.key() → open permission request
 	grants  *sessionGrants
+	builtin builtinCache // machine → its built-in tools (builtin.go)
 }
 
 // NewTools returns the tool-mode runner over link.

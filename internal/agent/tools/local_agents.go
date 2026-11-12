@@ -227,3 +227,97 @@ func strengthsNote(strengths []string) string {
 	}
 	return " Local agents' strengths — " + strings.Join(strengths, " | ")
 }
+
+// ComputerToolPrefix names the model tools over agl's built-in tools:
+// computer_read, computer_write, computer_edit, computer_exec.
+const ComputerToolPrefix = "computer_"
+
+// LocalBuiltinRunner is what the computer_* tools need (*agl.Tools).
+type LocalBuiltinRunner interface {
+	BuiltinTools(ctx context.Context, m agl.LocalMachine) []agl.BuiltinTool
+	CallBuiltin(ctx context.Context, c agl.BuiltinCall) (string, error)
+}
+
+var computerToolHints = map[string]string{
+	"read":  "Read a text file on the PERSON'S OWN computer.",
+	"write": "Create or overwrite a text file on the PERSON'S OWN computer. Only when the person asked for that change.",
+	"edit":  "Change a text file on the PERSON'S OWN computer by exact replacement. Only when the person asked for that change; read it first.",
+	"exec": "Run a shell command on the PERSON'S OWN computer (list, search, move, archive, git, open apps, run scripts …). " +
+		"Only what the person asked for; never delete or overwrite things they didn't ask about. " +
+		"A start waits up to 15s; if status is still running, call again with action \"read\", the execution_id and the returned stdout_offset/stderr_offset until status is completed and has_more is false. " +
+		"Use action \"cancel\" to stop it.",
+}
+
+// RegisterComputerTools mounts computer_<name> for each built-in tool the
+// person's agent-less computers offer (tools: name → agl's definition).
+// machine names the computer when there is more than one.
+func RegisterComputerTools(r *Registry, svc LocalBuiltinRunner, userID string, tools map[string]agl.BuiltinTool, machines []string) {
+	for _, name := range []string{"read", "write", "edit", "exec"} {
+		bt, ok := tools[name]
+		if !ok {
+			continue
+		}
+		schema := cloneSchema(bt.InputSchema)
+		props, _ := schema["properties"].(map[string]any)
+		if props == nil {
+			props = map[string]any{}
+			schema["properties"] = props
+		}
+		if len(machines) > 1 {
+			props["machine"] = map[string]any{"type": "string", "description": "Computer name or id: one of " + strings.Join(machines, ", ") + "."}
+		}
+		desc := computerToolHints[name] + "\n" + bt.Description +
+			"\nNo coding agent is installed there, so you do the work step by step with the computer_* tools. Hidden files and folders (names starting with \".\") are off limits."
+		name := name
+		fn := func(ctx context.Context, raw json.RawMessage) (string, error) {
+			var a struct {
+				Machine string `json:"machine"`
+			}
+			_ = json.Unmarshal(raw, &a)
+			out, err := svc.CallBuiltin(ctx, agl.BuiltinCall{UserID: userID, Machine: a.Machine, Name: name, Args: raw})
+			if err != nil {
+				var te *agl.ToolError
+				if errors.As(err, &te) {
+					return "", te
+				}
+				return "", fmt.Errorf("%s%s: %w", ComputerToolPrefix, name, err)
+			}
+			return out, nil
+		}
+		if name == "read" {
+			r.RegisterFrom(ComputerToolPrefix+name, desc, schema, fn, SourceLocalAgent)
+		} else {
+			r.RegisterSerialFrom(ComputerToolPrefix+name, desc, schema, fn, SourceLocalAgent)
+		}
+	}
+}
+
+// cloneSchema deep-copies a JSON schema so per-turn edits don't touch the
+// cached definition.
+func cloneSchema(s map[string]any) map[string]any {
+	out := map[string]any{"type": "object"}
+	if s == nil {
+		return out
+	}
+	blob, err := json.Marshal(s)
+	if err != nil || json.Unmarshal(blob, &out) != nil {
+		return map[string]any{"type": "object"}
+	}
+	return out
+}
+
+// ComputerToolsNote is the system hint for a turn with computer_* tools:
+// which computers have no coding agent and what the tools may do there.
+func ComputerToolsNote(machines []string, tools map[string]agl.BuiltinTool) string {
+	var names []string
+	for _, n := range []string{"read", "write", "edit", "exec"} {
+		if _, ok := tools[n]; ok {
+			names = append(names, ComputerToolPrefix+n)
+		}
+	}
+	note := " " + strings.Join(machines, ", ") + " has no coding agent installed, so run_local_agent won't work there: work on it yourself with " + strings.Join(names, ", ") + "."
+	if _, ok := tools["exec"]; !ok {
+		note += " Running commands there isn't allowed from this chat; if the person needs it, tell them that computer is linked with read-only access and needs to be re-linked with full access (or have Claude Code / Codex installed)."
+	}
+	return note
+}
