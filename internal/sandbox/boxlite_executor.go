@@ -150,12 +150,12 @@ func (e *BoxliteExecutor) prefixPath(suffix string) string {
 }
 
 func (e *BoxliteExecutor) createBox(ctx context.Context) error {
+	// Only "image": BoxLite Cloud validates the body strictly and rejects
+	// unknown properties ("property auto_remove should not exist" took
+	// every sandbox down). Lifecycle is explicit DELETE in Close(), plus
+	// the server's own auto_stop for boxes we lose track of.
 	body, _ := json.Marshal(map[string]interface{}{
 		"image": e.image,
-		// auto_remove keeps the server from accumulating stopped
-		// boxes when our Close() racing the network drops the
-		// explicit DELETE — they self-collect when stopped.
-		"auto_remove": true,
 	})
 	createCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
@@ -175,14 +175,25 @@ func (e *BoxliteExecutor) createBox(ctx context.Context) error {
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
-	}
 	var box struct {
 		BoxID string `json:"box_id"`
+		// 408 body: create now waits for the box to start, and a cold
+		// image pull outlasts that wait. The box exists and keeps
+		// starting; the response just stops waiting for it.
+		PendingID string `json:"boxId"`
 	}
-	if err := json.Unmarshal(respBody, &box); err != nil {
-		return fmt.Errorf("decode box: %w", err)
+	_ = json.Unmarshal(respBody, &box)
+	switch {
+	case resp.StatusCode == http.StatusCreated || resp.StatusCode == http.StatusOK:
+	case resp.StatusCode == http.StatusRequestTimeout && box.PendingID != "":
+		box.BoxID = box.PendingID
+		slog.Info("boxlite box still preparing; waiting for it to run", "boxID", box.BoxID, "image", e.image)
+		if err := e.waitRunning(ctx, box.BoxID, 5*time.Minute); err != nil {
+			e.deleteBox(box.BoxID)
+			return err
+		}
+	default:
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
 	}
 	if box.BoxID == "" {
 		return fmt.Errorf("empty box_id in response: %s", string(respBody))
@@ -192,6 +203,58 @@ func (e *BoxliteExecutor) createBox(ctx context.Context) error {
 	e.mu.Unlock()
 	slog.Info("boxlite box created", "boxID", box.BoxID, "image", e.image)
 	return nil
+}
+
+// boxlitePollInterval is how often waitRunning re-reads box status.
+var boxlitePollInterval = 3 * time.Second
+
+// waitRunning polls GET /boxes/{id} until the box reports "running".
+func (e *BoxliteExecutor) waitRunning(ctx context.Context, boxID string, limit time.Duration) error {
+	waitCtx, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+	auth, _ := e.authHeader(ctx)
+	last := ""
+	for {
+		req, err := http.NewRequestWithContext(waitCtx, "GET", e.prefixPath("/boxes/"+boxID), nil)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Authorization", auth)
+		if resp, err := e.client.Do(req); err == nil {
+			var st struct {
+				Status string `json:"status"`
+			}
+			_ = json.NewDecoder(resp.Body).Decode(&st)
+			resp.Body.Close()
+			last = st.Status
+			switch st.Status {
+			case "running":
+				return nil
+			case "stopped", "failed", "error":
+				return fmt.Errorf("boxlite box %s ended up %q while starting", boxID, st.Status)
+			}
+		}
+		select {
+		case <-waitCtx.Done():
+			return fmt.Errorf("boxlite box %s not running after %s (last status %q)", boxID, limit, last)
+		case <-time.After(boxlitePollInterval):
+		}
+	}
+}
+
+// deleteBox is a best-effort cleanup for a box we're abandoning.
+func (e *BoxliteExecutor) deleteBox(boxID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "DELETE", e.prefixPath("/boxes/"+boxID+"?force=true"), nil)
+	if err != nil {
+		return
+	}
+	auth, _ := e.authHeader(ctx)
+	req.Header.Set("Authorization", auth)
+	if resp, err := e.client.Do(req); err == nil {
+		resp.Body.Close()
+	}
 }
 
 func (e *BoxliteExecutor) startBox(ctx context.Context) error {
