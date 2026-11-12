@@ -5,6 +5,27 @@ action on upgrade — read those notes before deploying.
 
 ## [Unreleased]
 
+### Added — force the sandbox from the admin UI
+
+Admin → Tools → Runtime → Sandbox has a "强制在沙盒执行" toggle
+(`sandbox.enforce`): every exec runs in the sandbox, never on the host.
+It takes effect on save, no restart. Same effect as
+`FASTCLAW_SANDBOX_ENFORCE=1`, which (like hosted deploys) still enforces
+regardless of the toggle.
+
+### Fixed — BoxLite sandboxes failed to start
+
+BoxLite Cloud started rejecting the `auto_remove` create field, so every
+box failed with `property auto_remove should not exist`. A cold image
+pull that outlasts BoxLite's start wait (HTTP 408) is now waited out
+instead of failing.
+
+### Fixed — cropped browser screenshots in the sandbox image
+
+`camoufox-cli screenshot` captured only the top-left 1280×720 of pages
+laid out at the fingerprinted window width. Fixed in
+`thinkany/fastclaw-sandbox` (rebuild/pull the image to pick it up).
+
 ### Added — connectors for a product's end users
 
 A product calling FastClaw for its end users (`X-Fastclaw-End-User`) can
