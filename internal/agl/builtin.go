@@ -166,6 +166,12 @@ func (t *Tools) CallBuiltin(ctx context.Context, c BuiltinCall) (string, error) 
 		if _, ok := args["cwd"]; !ok && action != "read" && action != "cancel" && m.DefaultCwd != "" {
 			args["cwd"] = m.DefaultCwd
 		}
+		// Commands run as the product (macOS privacy prompts name it);
+		// the model doesn't choose this.
+		delete(args, "app_name")
+		if m.AppName != "" && action != "read" && action != "cancel" {
+			args["app_name"] = m.AppName
+		}
 	}
 	params := map[string]any{"name": c.Name, "arguments": args, "approvals": true}
 	if s := builtinSession(c.Chat); s != "" {

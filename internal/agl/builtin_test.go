@@ -17,8 +17,11 @@ import (
 func builtinFixture(t *testing.T) *toolsFixture {
 	f := newToolsFixture(t)
 	mini := store.MachineRecord{ID: "mch_mini", UserID: "u_alice", Name: "Mini", AglMachineID: "mini", TokenHash: "hm",
-		AllowAgents: true, DefaultCwd: "~/work", Version: "0.3.14"}
+		AllowAgents: true, DefaultCwd: "~/work", Version: "0.3.14", HubScope: ProductScope("acct_weclaw")}
 	if err := f.st.CreateMachine(context.Background(), &mini); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.SetHubAppName(context.Background(), ProductScope("acct_weclaw"), "WeClaw"); err != nil {
 		t.Fatal(err)
 	}
 	return f
@@ -101,12 +104,13 @@ func TestCallBuiltinReadsWithinLinkAccess(t *testing.T) {
 func TestCallBuiltinExecDefaults(t *testing.T) {
 	f := builtinFixture(t)
 	f.link.toolsList = `[{"name":"exec","description":"Run.","input_schema":{"type":"object","properties":{}}}]`
-	_, err := f.tools.CallBuiltin(context.Background(), BuiltinCall{UserID: "u_alice", Name: "exec", Args: json.RawMessage(`{"command":"ls"}`)})
+	// The model can't pick the product name commands run under.
+	_, err := f.tools.CallBuiltin(context.Background(), BuiltinCall{UserID: "u_alice", Name: "exec", Args: json.RawMessage(`{"command":"ls","app_name":"Finder"}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	calls := f.link.calls("tools.call")
-	if len(calls) != 1 || calls[0] != `{"approvals":true,"arguments":{"command":"ls","cwd":"~/work","wait_ms":15000},"name":"exec"}` {
+	if len(calls) != 1 || calls[0] != `{"approvals":true,"arguments":{"app_name":"WeClaw","command":"ls","cwd":"~/work","wait_ms":15000},"name":"exec"}` {
 		t.Fatalf("tools.call = %v", calls)
 	}
 }
@@ -265,5 +269,19 @@ func TestCapBuiltin(t *testing.T) {
 	got := capBuiltin(long)
 	if len(got) > MaxBuiltinResultBytes+64 || !strings.HasSuffix(got, "read a smaller range]") {
 		t.Fatalf("capped len %d", len(got))
+	}
+}
+
+func TestOpenSessionPassesAppName(t *testing.T) {
+	link := newFakeLink()
+	if _, _, err := openSession(context.Background(), link, "m1", "claude", "", AccessAsk, "fc:tool:x", "WeClaw", store.MachineAgentSetting{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := openSession(context.Background(), link, "m1", "claude", "", AccessAsk, "fc:tool:y", "", store.MachineAgentSetting{}); err != nil {
+		t.Fatal(err)
+	}
+	calls := link.calls("session.create")
+	if len(calls) != 2 || !strings.Contains(calls[0], `"app_name":"WeClaw"`) || strings.Contains(calls[1], "app_name") {
+		t.Fatalf("session.create = %v", calls)
 	}
 }

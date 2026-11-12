@@ -5,6 +5,16 @@ action on upgrade — read those notes before deploying.
 
 ## [Unreleased]
 
+### Added — macOS privacy prompts name the product, not agl
+
+`POST /v1/machines/pairing` takes an optional `appName` (the product's
+display name), stored per product hub scope. Commands from `computer_exec`
+and local agent sessions on those computers pass it to agl as `app_name`,
+so macOS asks "WeClaw wants to access Downloads" instead of "agl …",
+also on computers linked earlier. New install commands carry
+`--app-name` when the name is one word. File reads through agl's daemon
+(`computer_read`, `send_local_file`) are still attributed to agl.
+
 ### Changed — agents pick direct computer tools or the local coding agent
 
 `computer_read/write/edit/exec` (agl's built-in tools) are now mounted on

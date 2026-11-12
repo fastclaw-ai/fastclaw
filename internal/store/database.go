@@ -2306,6 +2306,14 @@ func (d *DBStore) migrationSQL() []string {
 			scope TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_machine_pairings_user ON machine_pairings (user_id)`,
+		// agl_hub_apps: the display name of each product hub scope
+		// (agl.ProductScope), passed to agl as app_name so macOS privacy
+		// prompts on the person's computer name the product, not agl.
+		`CREATE TABLE IF NOT EXISTS agl_hub_apps (
+			scope TEXT PRIMARY KEY,
+			app_name TEXT NOT NULL,
+			updated_at BIGINT NOT NULL DEFAULT 0
+		)`,
 	}
 }
 

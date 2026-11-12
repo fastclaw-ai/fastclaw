@@ -482,15 +482,20 @@ type sessionMeta struct {
 // openSession creates or resumes the chat's named session and brings its
 // access level in line with the agent's config.
 func (b *Bridge) openSession(ctx context.Context, machineID string, rc RuntimeConfig, name string) (string, bool, error) {
-	return openSession(ctx, b.link, machineID, rc.AglAgent, rc.Cwd, rc.Access, name, store.MachineAgentSetting{})
+	return openSession(ctx, b.link, machineID, rc.AglAgent, rc.Cwd, rc.Access, name, "", store.MachineAgentSetting{})
 }
 
 // openSession creates or resumes the named session on machineID with
 // agent/cwd/access, re-applying access with session.configure when the
 // existing session runs at another level. It returns the session id and
 // whether the agent can steer a running turn.
-func openSession(ctx context.Context, link Link, machineID, agent, cwd, access, name string, set store.MachineAgentSetting) (string, bool, error) {
+func openSession(ctx context.Context, link Link, machineID, agent, cwd, access, name, appName string, set store.MachineAgentSetting) (string, bool, error) {
 	params := map[string]any{"agent": agent, "name": name, "access": access}
+	// The product the agent works for, so macOS privacy prompts name it
+	// (agl >= 0.3.13; a reused session keeps the one it started with).
+	if appName != "" {
+		params["app_name"] = appName
+	}
 	if cwd != "" {
 		params["cwd"] = cwd
 	}

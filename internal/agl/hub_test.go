@@ -450,6 +450,31 @@ func TestInstallScriptUsesCodeAddressAndPrivate(t *testing.T) {
 	if status != http.StatusOK || !strings.Contains(body, th.srv.URL+"/agl/p/"+a) || !strings.Contains(body, "--code "+code+" --private") {
 		t.Fatalf("install.sh: %d\n%s", status, body)
 	}
+	if strings.Contains(body, "--app-name") {
+		t.Fatal("no app name known yet")
+	}
+	// The product's name goes into agl connect when it is one safe word.
+	_ = th.st.SetHubAppName(context.Background(), a, "WeClaw")
+	if _, body = get("/agl/p/" + a + "/install.sh?code=" + code); !strings.Contains(body, "--private --app-name WeClaw") {
+		t.Fatalf("install.sh lacks the app name:\n%s", body)
+	}
+	_ = th.st.SetHubAppName(context.Background(), a, "We Claw")
+	if _, body = get("/agl/p/" + a + "/install.sh?code=" + code); strings.Contains(body, "--app-name") {
+		t.Fatal("a name with spaces would be split by the script")
+	}
+}
+
+func TestValidAppName(t *testing.T) {
+	for in, want := range map[string]string{" WeClaw ": "WeClaw", "微爪 Claw": "微爪 Claw"} {
+		if got, ok := ValidAppName(in); !ok || got != want {
+			t.Errorf("ValidAppName(%q) = %q, %v", in, got, ok)
+		}
+	}
+	for _, bad := range []string{"", "agl", ".hidden", "a/b", "a:b", "it's", `a"b`, "a$b", "a`b", `a\b`, "a\nb", strings.Repeat("x", 49)} {
+		if _, ok := ValidAppName(bad); ok {
+			t.Errorf("ValidAppName(%q) accepted", bad)
+		}
+	}
 }
 
 func TestPairingForAnotherAccountRevokesTheReplacedRecord(t *testing.T) {

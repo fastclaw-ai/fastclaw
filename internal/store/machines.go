@@ -107,6 +107,14 @@ type MachinePairingRecord struct {
 	Scope     string // hub scope the machine pairs into (MachineRecord.HubScope)
 }
 
+// HubAppStore remembers the display name of each product hub scope
+// (MachineRecord.HubScope). Optional: *DBStore implements it, fakes may not.
+type HubAppStore interface {
+	SetHubAppName(ctx context.Context, scope, name string) error
+	// HubAppName is "" when the scope has none.
+	HubAppName(ctx context.Context, scope string) (string, error)
+}
+
 // MachineStore persists linked machines and their pairing codes. It is
 // separate from Store so the many Store fakes don't have to grow;
 // *DBStore implements both.
@@ -404,4 +412,23 @@ func (d *DBStore) UpdateMachineSettings(ctx context.Context, id string, s Machin
 		return ErrNotFound
 	}
 	return nil
+}
+
+// SetHubAppName records scope's display name.
+func (d *DBStore) SetHubAppName(ctx context.Context, scope, name string) error {
+	_, err := d.db.ExecContext(ctx,
+		fmt.Sprintf(`INSERT INTO agl_hub_apps (scope, app_name, updated_at) VALUES (%s, %s, %s)
+			ON CONFLICT (scope) DO UPDATE SET app_name = excluded.app_name, updated_at = excluded.updated_at`, d.ph(1), d.ph(2), d.ph(3)),
+		scope, name, toMillis(time.Now()))
+	return err
+}
+
+// HubAppName returns scope's display name ("" when none).
+func (d *DBStore) HubAppName(ctx context.Context, scope string) (string, error) {
+	var name string
+	err := d.db.QueryRowContext(ctx, fmt.Sprintf(`SELECT app_name FROM agl_hub_apps WHERE scope = %s`, d.ph(1)), scope).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return name, err
 }

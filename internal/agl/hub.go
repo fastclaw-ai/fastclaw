@@ -47,6 +47,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/gorilla/websocket"
@@ -507,6 +508,15 @@ func (h *Hub) handleInstallScript(w http.ResponseWriter, r *http.Request) {
 	if a, ok := LinkAccess(r.URL.Query().Get("access")); ok && a != AccessAsk {
 		args += " --access " + a
 	}
+	// app name: the product's, so macOS privacy prompts for the link's
+	// commands and agents name it, not agl. Only a single shell-safe word
+	// goes into the script ($CONNECT_ARGS is split on spaces); others are
+	// still passed per call.
+	if as, ok := h.store.(store.HubAppStore); ok && scope != "" {
+		if name, err := as.HubAppName(r.Context(), scope); err == nil && installSafeAppName(name) {
+			args += " --app-name " + name
+		}
+	}
 	script = strings.ReplaceAll(script, "__CONNECT_ARGS__", args)
 	fmt.Fprint(w, script)
 }
@@ -930,4 +940,30 @@ func (h *Hub) fanout(machineID string, ev Event) {
 			slog.Warn("agl: subscriber lagging, event dropped", "machine", machineID, "kind", ev.Event.Kind)
 		}
 	}
+}
+
+// MaxAppNameChars is agl's limit for app_name.
+const MaxAppNameChars = 48
+
+// ValidAppName normalizes a product's display name for agl's app_name:
+// trimmed, 1–48 characters, no control characters, quotes, `/`, `:`, `\`,
+// `$` or backticks, not starting with "." and not "agl". ok is false
+// otherwise.
+func ValidAppName(name string) (string, bool) {
+	name = strings.TrimSpace(name)
+	if name == "" || utf8.RuneCountInString(name) > MaxAppNameChars || strings.HasPrefix(name, ".") || strings.EqualFold(name, "agl") {
+		return "", false
+	}
+	for _, r := range name {
+		if unicode.IsControl(r) || strings.ContainsRune("/:\\'\"`$", r) {
+			return "", false
+		}
+	}
+	return name, true
+}
+
+var installSafeAppNameRE = regexp.MustCompile(`^[A-Za-z0-9._-]{1,48}$`)
+
+func installSafeAppName(name string) bool {
+	return installSafeAppNameRE.MatchString(name) && !strings.HasPrefix(name, ".") && !strings.EqualFold(name, "agl")
 }
