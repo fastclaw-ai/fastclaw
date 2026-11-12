@@ -8,7 +8,7 @@ import (
 )
 
 // An end user's connected accounts reach only the account's agents marked
-// as theirs: not public agents (someone else's instructions), not another
+// as theirs or as the account's official ones (endUserConnectors): not other public agents (someone else's instructions), not another
 // end user's, not from another chatter or outside an end user's space.
 func TestEndUserConnectorGate(t *testing.T) {
 	st := privateAgentFixture(t)
@@ -18,6 +18,10 @@ func TestEndUserConnectorGate(t *testing.T) {
 		{ID: "agt_mine", UserID: "app", Name: "Mine", Config: map[string]any{store.AgentCfgEndUserVisibility: store.EndUserVisibilityPublic, store.AgentCfgEndUserOwner: "user:alice"}},
 		{ID: "agt_draft", UserID: "app", Name: "Draft", Config: map[string]any{store.AgentCfgEndUserVisibility: store.EndUserVisibilityPrivate, store.AgentCfgEndUserOwner: "user:alice"}},
 		{ID: "agt_bob", UserID: "app", Name: "Bob's", Config: map[string]any{store.AgentCfgEndUserOwner: "user:bob"}},
+		// The app's official agent: every end user's accounts.
+		{ID: "agt_official", UserID: "app", Name: "拽姐", Config: map[string]any{store.AgentCfgEndUserVisibility: store.EndUserVisibilityPublic, store.AgentCfgEndUserOwner: "user:staff", store.AgentCfgEndUserConnectors: true}},
+		// The flag only counts on the app's own agents.
+		{ID: "agt_other_official", UserID: "u_bob", Name: "Other", Config: map[string]any{store.AgentCfgEndUserConnectors: true}},
 	} {
 		a := a
 		if err := st.SaveAgent(ctx, &a); err != nil {
@@ -38,6 +42,9 @@ func TestEndUserConnectorGate(t *testing.T) {
 		{"agt_bob", "u_alice", false},
 		{"agt_plat", "u_alice", false},
 		{"agt_mine", "u_bob", false},
+		{"agt_official", "u_alice", true},
+		{"agt_official", "u_bob", false},
+		{"agt_other_official", "u_alice", false},
 		{"agt_missing", "u_alice", false},
 	} {
 		if got := gate(ctx, c.agent, c.chatter); got != c.want {

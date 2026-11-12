@@ -74,7 +74,11 @@ The `connectors` tool is mounted (`Agent.mountConnectors`) only on:
   on an agent of the app's account marked as theirs (`endUserOwner`, see
   `gateway.endUserConnectorGate`). Their subject is their own app_user id,
   so accounts are theirs alone, usable across all of their agents — but not
-  on the app's public agents, whose instructions are someone else's. The app
+  on the app's other public agents, whose instructions are someone else's.
+  Exception: agents the app marks `endUserConnectors: true`
+  (`PUT /api/agents/{id}` or `/v1`, account callers only) — its own official
+  agents, whose instructions it vouches for — take every end user's
+  accounts. WeClaw marks the agents its staff created. The app
   passes its own connect page as the turn param `__fastclawConnectorsURL`
   (hidden from the model's client-parameters note), and optionally
   `__fastclawConnectorsReturnURL`. The tool's request actions then mint a

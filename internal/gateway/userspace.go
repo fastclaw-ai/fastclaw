@@ -1579,8 +1579,9 @@ func resolveReachableAgentRef(ctx context.Context, st store.Store, userID, appOw
 // endUserConnectorGate lets an app's end user (this space: userID, known
 // to the app as externalID) use their own connected accounts on the
 // agents the app marked as theirs (endUserOwner == externalID) — e.g.
-// WeClaw's agents a user created. Not on the app's public agents: their
-// instructions are someone else's, and could carry what they read
+// WeClaw's agents a user created — and on the agents the app marked
+// endUserConnectors (its own official ones). Not on other public agents:
+// their instructions are someone else's, and could carry what they read
 // elsewhere. Nil outside an end user's space.
 func endUserConnectorGate(st store.Store, userID, appOwner, externalID string) agent.EndUserConnectorGate {
 	if st == nil || appOwner == "" || strings.TrimSpace(externalID) == "" {
@@ -1593,6 +1594,11 @@ func endUserConnectorGate(st store.Store, userID, appOwner, externalID string) a
 		rec, err := st.GetAgent(ctx, agentID)
 		if err != nil || rec == nil || rec.UserID != appOwner {
 			return false
+		}
+		// The app's own official agents: it vouches for their
+		// instructions, so every end user may use theirs there.
+		if store.AgentEndUserConnectors(rec) {
+			return true
 		}
 		owner := strings.TrimSpace(store.AgentEndUserOwner(rec))
 		return owner != "" && owner == strings.TrimSpace(externalID)

@@ -18,6 +18,11 @@ import "strings"
 const (
 	AgentCfgEndUserVisibility = "endUserVisibility"
 	AgentCfgEndUserOwner      = "endUserOwner"
+	// AgentCfgEndUserConnectors (bool): the account vouches for this
+	// agent's instructions (its own official agent), so any end user may
+	// use their own connected accounts on it in their 1:1 chat. Unset:
+	// only the end user it belongs to (endUserOwner).
+	AgentCfgEndUserConnectors = "endUserConnectors"
 
 	EndUserVisibilityPublic  = "public"
 	EndUserVisibilityPrivate = "private"
@@ -53,4 +58,14 @@ func AgentReachableByEndUser(rec *AgentRecord, externalID string) bool {
 	}
 	owner := strings.TrimSpace(AgentEndUserOwner(rec))
 	return owner != "" && owner == strings.TrimSpace(externalID)
+}
+
+// AgentEndUserConnectors reports whether rec is marked for every end
+// user's connected accounts (AgentCfgEndUserConnectors).
+func AgentEndUserConnectors(rec *AgentRecord) bool {
+	if rec == nil {
+		return false
+	}
+	v, _ := rec.Config[AgentCfgEndUserConnectors].(bool)
+	return v
 }

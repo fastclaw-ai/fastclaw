@@ -268,6 +268,9 @@ type updateAgentRequest struct {
 	// store.AgentReachableByEndUser. "" clears. Account callers only.
 	EndUserVisibility *string `json:"endUserVisibility,omitempty"`
 	EndUserOwner      *string `json:"endUserOwner,omitempty"`
+	// EndUserConnectors: every end user may use their own connected
+	// accounts on this agent (store.AgentCfgEndUserConnectors).
+	EndUserConnectors *bool `json:"endUserConnectors,omitempty"`
 }
 
 // mergeRuntimeConfig applies patch onto base. Every value must be a
@@ -677,11 +680,18 @@ func (s *Server) HandleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 		}
 		rec.Config["runtimeConfig"] = rc.Map()
 	}
-	if req.EndUserVisibility != nil || req.EndUserOwner != nil {
+	if req.EndUserVisibility != nil || req.EndUserOwner != nil || req.EndUserConnectors != nil {
 		// Set by the account for its own agents, never by an end user.
 		if ident.Role == users.RoleAppUser || rec.UserID != ident.UserID {
-			writeBadRequest(w, "endUserVisibility / endUserOwner are set by the account on its own agents, without an end user")
+			writeBadRequest(w, "endUserVisibility / endUserOwner / endUserConnectors are set by the account on its own agents, without an end user")
 			return
+		}
+		if req.EndUserConnectors != nil {
+			if *req.EndUserConnectors {
+				rec.Config[store.AgentCfgEndUserConnectors] = true
+			} else {
+				delete(rec.Config, store.AgentCfgEndUserConnectors)
+			}
 		}
 		if req.EndUserVisibility != nil {
 			v := strings.TrimSpace(*req.EndUserVisibility)

@@ -558,6 +558,9 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 		// Owner: the end user's X-Fastclaw-End-User value.
 		EndUserVisibility *string `json:"endUserVisibility,omitempty"`
 		EndUserOwner      *string `json:"endUserOwner,omitempty"`
+		// EndUserConnectors: every end user may use their own connected
+		// accounts on this agent (store.AgentCfgEndUserConnectors).
+		EndUserConnectors *bool `json:"endUserConnectors,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
@@ -629,6 +632,16 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		setAgentConfigString(rec, store.AgentCfgEndUserOwner, v)
+	}
+	if req.EndUserConnectors != nil {
+		if rec.Config == nil {
+			rec.Config = map[string]interface{}{}
+		}
+		if *req.EndUserConnectors {
+			rec.Config[store.AgentCfgEndUserConnectors] = true
+		} else {
+			delete(rec.Config, store.AgentCfgEndUserConnectors)
+		}
 	}
 	if err := s.dataStore.SaveAgent(r.Context(), rec); err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
