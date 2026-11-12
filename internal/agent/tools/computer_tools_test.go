@@ -24,7 +24,8 @@ func TestRegisterComputerToolsMountsOffered(t *testing.T) {
 	offered := map[string]agl.BuiltinTool{
 		"read": {Name: "read", Description: "Read.", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}}}},
 	}
-	RegisterComputerTools(r, svc, "u_alice", offered, []string{"Mini", "Studio"})
+	chat := agl.ToolChat{Channel: "wechat", AccountID: "bot", ChatID: "wx_alice"}
+	RegisterComputerTools(r, svc, "u_alice", chat, nil, offered, []string{"Mini", "Studio"})
 	if !r.HasTool("computer_read") || r.HasTool("computer_exec") || r.HasTool("computer_write") {
 		t.Fatal("wrong tools mounted")
 	}
@@ -36,7 +37,7 @@ func TestRegisterComputerToolsMountsOffered(t *testing.T) {
 	if err != nil || out != `{"ok":true}` {
 		t.Fatalf("execute = %q, %v", out, err)
 	}
-	if len(svc.calls) != 1 || svc.calls[0].UserID != "u_alice" || svc.calls[0].Machine != "Studio" || svc.calls[0].Name != "read" {
+	if len(svc.calls) != 1 || svc.calls[0].UserID != "u_alice" || svc.calls[0].Machine != "Studio" || svc.calls[0].Name != "read" || svc.calls[0].Chat != chat {
 		t.Fatalf("calls = %+v", svc.calls)
 	}
 	var args map[string]any
@@ -47,12 +48,19 @@ func TestRegisterComputerToolsMountsOffered(t *testing.T) {
 }
 
 func TestComputerToolsNote(t *testing.T) {
-	readOnly := ComputerToolsNote([]string{"Mini"}, map[string]agl.BuiltinTool{"read": {}})
-	if !strings.Contains(readOnly, "computer_read") || !strings.Contains(readOnly, "re-linked with full access") {
-		t.Fatalf("note = %q", readOnly)
+	readOnly := ComputerToolsNote([]string{"Mini"}, []string{"Mini"}, map[string]agl.BuiltinTool{"read": {}})
+	for _, want := range []string{"computer_read", "re-linked with more access", "no coding agent"} {
+		if !strings.Contains(readOnly, want) {
+			t.Errorf("read-only note lacks %q: %s", want, readOnly)
+		}
 	}
-	full := ComputerToolsNote([]string{"Mini"}, map[string]agl.BuiltinTool{"read": {}, "write": {}, "edit": {}, "exec": {}})
-	if !strings.Contains(full, "computer_exec") || strings.Contains(full, "re-linked") {
+	full := ComputerToolsNote([]string{"MacBook"}, nil, map[string]agl.BuiltinTool{"read": {}, "write": {}, "edit": {}, "exec": {}})
+	for _, want := range []string{"computer_exec", "run_local_agent", "quick look-ups", "hand the whole task to run_local_agent"} {
+		if !strings.Contains(full, want) {
+			t.Errorf("note lacks %q: %s", want, full)
+		}
+	}
+	if strings.Contains(full, "re-linked") || strings.Contains(full, "no coding agent") {
 		t.Fatalf("note = %q", full)
 	}
 }

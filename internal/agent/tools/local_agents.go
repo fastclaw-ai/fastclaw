@@ -55,6 +55,7 @@ func RegisterLocalAgents(r *Registry, svc LocalAgentRunner, userID string, chat 
 	r.RegisterSerialFrom(RunLocalAgentToolName, strings.Join([]string{
 		"Run a task with a local agent (Claude Code, Codex, …) on the PERSON'S OWN computer, linked to this chat, and get its final answer back.",
 		"Use it when the request needs their computer (code, files or repositories there, commands, builds, tests) OR a capability you lack but one of their local agents has. Before saying you can't do something, check the agents' strengths (local_agents) and dispatch to one that can.",
+		"When computer_* tools are also offered, use those for quick look-ups and a command or two (list or search a folder, read a file, check a value), and this tool for substantial work: writing or fixing code, changes across a project, builds and tests, anything that needs planning, many steps or minutes. Also use it when a computer_* call isn't allowed there or the job turns out bigger than a few steps.",
 		"For pictures (draw, paint, generate an image) use generate_image, not this tool.",
 		"Pick the agent by its strengths, not just the first one: code/files/analysis → any (claude is a good default).",
 		"Do NOT use it for chit-chat, general knowledge or plain text you can write yourself.",
@@ -215,7 +216,7 @@ func LocalAgentsNote(machines []agl.LocalMachine) string {
 		parts = append(parts, fmt.Sprintf("%s (%s: %s)", m.Name, state, agents))
 	}
 	return "The person has linked their own computer(s): " + strings.Join(parts, "; ") +
-		". When a request needs their computer (code, files, repos, running commands) or something you can't do yourself but a local agent can, use run_local_agent with the agent best suited; for any picture (draw, paint, generate an image) use an image tool (image_gen, or generate_image for Codex on their computer — see their descriptions), never run_local_agent. Answer everything else yourself. Never tell the person you can't do something a local agent here can do." +
+		". When a request needs substantial work on their computer (code, projects, repos, builds, multi-step jobs) or something you can't do yourself but a local agent can, use run_local_agent with the agent best suited; for any picture (draw, paint, generate an image) use an image tool (image_gen, or generate_image for Codex on their computer — see their descriptions), never run_local_agent. Answer everything else yourself. Never tell the person you can't do something a local agent here can do." +
 		" When the person asks for Codex, Claude Code or another coding agent by name, that means run_local_agent on their computer (generate_image for a picture) — never run those CLIs with exec." +
 		" When the result is an image or file the person should see, fetch it with send_local_file and put it in your reply (ask for PNG instead of SVG)." +
 		strengthsNote(strengths)
@@ -242,16 +243,21 @@ var computerToolHints = map[string]string{
 	"read":  "Read a text file on the PERSON'S OWN computer.",
 	"write": "Create or overwrite a text file on the PERSON'S OWN computer. Only when the person asked for that change.",
 	"edit":  "Change a text file on the PERSON'S OWN computer by exact replacement. Only when the person asked for that change; read it first.",
-	"exec": "Run a shell command on the PERSON'S OWN computer (list, search, move, archive, git, open apps, run scripts …). " +
+	"exec": "Run a shell command on the PERSON'S OWN computer (list, search, disk usage, move, archive, git, open apps, run scripts …). " +
 		"Only what the person asked for; never delete or overwrite things they didn't ask about. " +
 		"A start waits up to 15s; if status is still running, call again with action \"read\", the execution_id and the returned stdout_offset/stderr_offset until status is completed and has_more is false. " +
-		"Use action \"cancel\" to stop it.",
+		"Use action \"cancel\" to stop it. Something that will clearly run for minutes or needs many steps belongs to run_local_agent when the computer has a coding agent.",
 }
+
+// computerToolsCommon is appended to every computer_* description.
+const computerToolsCommon = "\nDirect and fast: for quick look-ups and small, well-defined steps. " +
+	"Reading, and commands that only read (ls, find, du, grep, git status …), run at once; writing files or other commands may first ask the person to approve in this chat, and the call waits for their answer. " +
+	"If they deny it, don't try another way to do the same thing. Hidden files and folders (names starting with \".\") are off limits for read/write/edit."
 
 // RegisterComputerTools mounts computer_<name> for each built-in tool the
 // person's agent-less computers offer (tools: name → agl's definition).
 // machine names the computer when there is more than one.
-func RegisterComputerTools(r *Registry, svc LocalBuiltinRunner, userID string, tools map[string]agl.BuiltinTool, machines []string) {
+func RegisterComputerTools(r *Registry, svc LocalBuiltinRunner, userID string, chat agl.ToolChat, notify func(agl.ToolNotice), tools map[string]agl.BuiltinTool, machines []string) {
 	for _, name := range []string{"read", "write", "edit", "exec"} {
 		bt, ok := tools[name]
 		if !ok {
@@ -266,15 +272,14 @@ func RegisterComputerTools(r *Registry, svc LocalBuiltinRunner, userID string, t
 		if len(machines) > 1 {
 			props["machine"] = map[string]any{"type": "string", "description": "Computer name or id: one of " + strings.Join(machines, ", ") + "."}
 		}
-		desc := computerToolHints[name] + "\n" + bt.Description +
-			"\nNo coding agent is installed there, so you do the work step by step with the computer_* tools. Hidden files and folders (names starting with \".\") are off limits."
+		desc := computerToolHints[name] + "\n" + bt.Description + computerToolsCommon
 		name := name
 		fn := func(ctx context.Context, raw json.RawMessage) (string, error) {
 			var a struct {
 				Machine string `json:"machine"`
 			}
 			_ = json.Unmarshal(raw, &a)
-			out, err := svc.CallBuiltin(ctx, agl.BuiltinCall{UserID: userID, Machine: a.Machine, Name: name, Args: raw})
+			out, err := svc.CallBuiltin(ctx, agl.BuiltinCall{UserID: userID, Machine: a.Machine, Name: name, Args: raw, Chat: chat, Notify: notify})
 			if err != nil {
 				var te *agl.ToolError
 				if errors.As(err, &te) {
@@ -307,17 +312,25 @@ func cloneSchema(s map[string]any) map[string]any {
 }
 
 // ComputerToolsNote is the system hint for a turn with computer_* tools:
-// which computers have no coding agent and what the tools may do there.
-func ComputerToolsNote(machines []string, tools map[string]agl.BuiltinTool) string {
+// on which computers they work, and how to choose between them and
+// run_local_agent. agentless names the computers among them with no
+// coding agent.
+func ComputerToolsNote(machines, agentless []string, tools map[string]agl.BuiltinTool) string {
 	var names []string
 	for _, n := range []string{"read", "write", "edit", "exec"} {
 		if _, ok := tools[n]; ok {
 			names = append(names, ComputerToolPrefix+n)
 		}
 	}
-	note := " " + strings.Join(machines, ", ") + " has no coding agent installed, so run_local_agent won't work there: work on it yourself with " + strings.Join(names, ", ") + "."
+	note := " On " + strings.Join(machines, ", ") + " you can also work directly with " + strings.Join(names, ", ") + "." +
+		" Choose per request, by how big the job is: quick look-ups and a step or two (list or search a folder, read a file, check disk space, one or two commands, a small edit the person asked for) → computer_*, which is faster;" +
+		" substantial work (writing or fixing code, changes across a project, builds and tests, anything that needs planning, many steps or minutes) → run_local_agent." +
+		" If a computer_* call isn't allowed there, or the job turns out bigger than a few steps, hand the whole task to run_local_agent instead of giving up."
+	if len(agentless) > 0 {
+		note += " " + strings.Join(agentless, ", ") + " has no coding agent installed, so run_local_agent won't work there: do the work yourself with computer_*, step by step."
+	}
 	if _, ok := tools["exec"]; !ok {
-		note += " Running commands there isn't allowed from this chat; if the person needs it, tell them that computer is linked with read-only access and needs to be re-linked with full access (or have Claude Code / Codex installed)."
+		note += " Running commands with computer_exec isn't allowed from this chat (the link is read-only); use run_local_agent where there is a coding agent, otherwise tell the person that computer needs to be re-linked with more access."
 	}
 	return note
 }

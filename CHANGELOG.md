@@ -5,6 +5,17 @@ action on upgrade — read those notes before deploying.
 
 ## [Unreleased]
 
+### Changed — agents pick direct computer tools or the local coding agent
+
+`computer_read/write/edit/exec` (agl's built-in tools) are now mounted on
+every linked computer with agl ≥ 0.3.14, not only those without a coding
+agent. The model chooses per request: quick look-ups and a command or two
+run directly, substantial or multi-step work goes to `run_local_agent`,
+and a call the link doesn't allow is handed to the coding agent. With agl
+≥ 0.3.15, writes and commands that aren't read-only are approved by the
+person in the chat (1/2/3 or the web card) instead of being refused, so
+the default `ask` link can do more than read. See `docs/agl-machines.md`.
+
 ### Added — force the sandbox from the admin UI
 
 Admin → Tools → Runtime → Sandbox has a "强制在沙盒执行" toggle

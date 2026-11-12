@@ -73,7 +73,7 @@ super_admin browses as someone else). Errors are `{"error": "<message>"}`.
 
 | Call | Response |
 | --- | --- |
-| `POST /v1/machines/pairing` `{access?}` | `{code, access, installCommand, expiresAt}` — one use, 10 min, stored as sha256. `access` (`ask` default, `read_only`, `edit`, `full`) goes into the install command (`install.sh?…&access=full` → `agl connect --access full`) and decides which built-in tools agents get on a computer without a coding agent (`computer_*`). The person sees it in the command they run; the hub can't raise it later. |
+| `POST /v1/machines/pairing` `{access?}` | `{code, access, installCommand, expiresAt}` — one use, 10 min, stored as sha256. `access` (`ask` default, `read_only`, `edit`, `full`) goes into the install command (`install.sh?…&access=full` → `agl connect --access full`) and decides which built-in tools agents get on the computer (`computer_*`) and which of them ask the person first. The person sees it in the command they run; the hub can't raise it later. |
 | `POST /v1/machines/pairing/status` `{code}` | `{status: pending\|connected\|expired, machineId?}`; `connected` once the paired machine said `hello`; 404 for codes this end user didn't create |
 | `GET /v1/machines` | `{machines: [Machine]}`, newest first, revoked excluded |
 | `PATCH /v1/machines/{id}` | body any of `{name, allowAgents, defaultAccess, defaultCwd}` → the updated Machine; 404 unless it is this end user's active machine; 400 on invalid values |
@@ -276,17 +276,47 @@ where a free-form brief to `run_local_agent` drifted (models told Codex to
   no computer linked, Codex missing, or image generation off (the hint
   says "image generation is turned off on this computer").
 
-### Computers without a coding agent (`computer_*`)
+### Direct tools on the computer (`computer_*`)
 
 agl 0.3.14 ships four built-in tools that need no coding agent on the
 computer: `read`, `write`, `edit`, `exec` (`tools.list` / `tools.call`; agl
 never calls a model for them). For each of the chatter's online computers
-with agl ≥ 0.3.14 and no available coding agent, the turn mounts
-`computer_read`, `computer_write`, `computer_edit`, `computer_exec` — only
-those the computer's `tools.list` returns, which agl filters by the hub
-link's access (`ask`/`read_only` → read; `edit` → read, write, edit; `full`
-→ all four). The cloud can't raise it: the person re-links the computer
-with more access. Nobody is asked before a call, so:
+with agl ≥ 0.3.14, coding agent or not, the turn mounts `computer_read`,
+`computer_write`, `computer_edit`, `computer_exec`, only those the
+computer's `tools.list` returns.
+
+The model chooses who does the work, per request (tool descriptions and
+the turn's hint): quick look-ups and a step or two (list a folder, read a
+file, disk usage, one or two commands) → `computer_*`, which is faster and
+starts no agent; substantial work (code, project-wide changes, builds,
+tests, planning, minutes of work) → `run_local_agent`. When a `computer_*`
+call isn't allowed or the job grows, the error and hint tell it to hand
+the whole task to `run_local_agent`. On a computer with no coding agent,
+`computer_*` is all there is.
+
+Permissions. The hub link's access is the ceiling; the cloud can't raise
+it (the person re-links the computer). We opt in to agl's approvals
+(`approvals: true`, agl ≥ 0.3.15):
+
+| Access | Runs at once | The person approves first |
+| --- | --- | --- |
+| `read_only` | read | – (nothing else is offered) |
+| `ask` (default) | read, read-only commands | write, edit, other commands |
+| `edit` | read, write, edit, read-only commands | other commands |
+| `full` | everything | – |
+
+agl decides which commands are read-only (a short list: `ls`, `find`,
+`du`, `grep`, `git status/log/diff`, … in a plain pipeline, no `;`, `&&`,
+`$`, redirection or `env`). A held call comes back as
+`{status: "approval_required", approval_id, title}`; we ask in the chat
+exactly like a coding agent's permission request ("需要确认：Mini · Run: …
+回复 1 / 2 / 3", or the web card with `agent: "agl"`), wait up to 10 min,
+and answer with `tools.approve`, which runs the call and returns its
+result. `2` (allow_session) lets agl run later calls of the same tool in
+the same chat without asking, for an hour. Deny, timeout or a cancelled
+turn send `deny`, and the model is told nothing was done. agl < 0.3.15
+ignores the opt-in: `ask`/`read_only` → read; `edit` → read, write, edit;
+`full` → all four.
 
 - read/write/edit refuse hidden files and folders (`~/.ssh`, `.git`,
   `.env`, …); relative paths resolve against the machine's default folder.
@@ -295,8 +325,9 @@ with more access. Nobody is asked before a call, so:
 - Results are capped at 32 KiB. Each call is metered as `local_agent`,
   model `builtin:<name>`.
 
-Code: `internal/agl/builtin.go` (listing, cache, call),
-`internal/agent/tools/local_agents.go` (`RegisterComputerTools`).
+Code: `internal/agl/builtin.go` (listing, cache, call, approvals),
+`internal/agent/tools/local_agents.go` (`RegisterComputerTools`,
+`ComputerToolsNote`).
 
 ## IM turn semantics (passthrough agents)
 

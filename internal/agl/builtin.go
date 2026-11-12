@@ -2,8 +2,11 @@ package agl
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path"
 	"strings"
 	"sync"
@@ -13,16 +16,26 @@ import (
 	"github.com/fastclaw-ai/fastclaw/internal/billing"
 )
 
-// Tool mode, built-in tools: on a computer with no coding agent, the LLM
-// agent works on it directly with agl's own read / write / edit / exec
-// (agl ≥ 0.3.14, `tools.list` / `tools.call`). agl never calls a model on
-// this path and asks nobody: the hub link's access decides which tools
-// exist (ask/read_only → read; edit → read, write, edit; full → all four),
-// and only the person can raise it, on their computer
-// (`agl connect … --access full`).
+// Tool mode, built-in tools: the LLM agent works on the person's computer
+// directly with agl's own read / write / edit / exec (agl ≥ 0.3.14,
+// `tools.list` / `tools.call`), next to run_local_agent when the computer
+// also has a coding agent. The model picks per request: quick look-ups and
+// a command or two here, long or multi-step work with the coding agent.
+// agl never calls a model on this path.
+//
+// The hub link's access is the ceiling, and only the person can raise it,
+// on their computer (`agl connect … --access`). From agl 0.3.15 we opt in
+// to approvals: below `full`, a write or a command agl doesn't consider
+// read-only is held (status approval_required) and the person answers it
+// in the chat (1/2/3 or the web card), like a coding agent's permission
+// request; we then call tools.approve. Older agl: ask/read_only → read;
+// edit → read, write, edit; full → all four.
 
 // MinBuiltinVersion is the first agl with built-in tools.
 const MinBuiltinVersion = "0.3.14"
+
+// BuiltinAgentName is how approvals and notices name the built-in tools.
+const BuiltinAgentName = "agl"
 
 const (
 	builtinListTimeout = 3 * time.Second
@@ -48,6 +61,10 @@ type BuiltinCall struct {
 	Machine string // id or name; "" = the first computer offering Name
 	Name    string // read | write | edit | exec
 	Args    json.RawMessage
+	// Chat is where the person approves a held call (set by the turn);
+	// Notify replaces IM messages for a web chat, as in ToolRun.
+	Chat   ToolChat
+	Notify func(ToolNotice)
 }
 
 type builtinEntry struct {
@@ -60,10 +77,10 @@ type builtinCache struct {
 	m  map[string]builtinEntry
 }
 
-// UsesBuiltinTools reports whether m is worked on with built-in tools:
-// online, agl new enough, and no coding agent available on it.
+// UsesBuiltinTools reports whether m offers built-in tools: online and
+// agl new enough. Coding agents on it don't matter; the model chooses.
 func UsesBuiltinTools(m LocalMachine) bool {
-	return m.Online && len(m.Agents) == 0 && CompareVersions(m.AglVersion, MinBuiltinVersion) >= 0
+	return m.Online && CompareVersions(m.AglVersion, MinBuiltinVersion) >= 0
 }
 
 // BuiltinTools lists the built-in tools m offers this hub (filtered by the
@@ -81,7 +98,7 @@ func (t *Tools) BuiltinTools(ctx context.Context, m LocalMachine) []BuiltinTool 
 	}
 	ctx, cancel := context.WithTimeout(ctx, builtinListTimeout)
 	defer cancel()
-	raw, err := t.link.Request(ctx, m.ID, "tools.list", map[string]any{})
+	raw, err := t.link.Request(ctx, m.ID, "tools.list", map[string]any{"approvals": true})
 	if err != nil {
 		return nil
 	}
@@ -150,14 +167,18 @@ func (t *Tools) CallBuiltin(ctx context.Context, c BuiltinCall) (string, error) 
 			args["cwd"] = m.DefaultCwd
 		}
 	}
-	ctx, cancel := context.WithTimeout(ctx, builtinCallTimeout)
-	defer cancel()
-	raw, err := t.link.Request(ctx, m.ID, "tools.call", map[string]any{"name": c.Name, "arguments": args})
+	params := map[string]any{"name": c.Name, "arguments": args, "approvals": true}
+	if s := builtinSession(c.Chat); s != "" {
+		params["session"] = s
+	}
+	raw, err := t.builtinRequest(ctx, m, c.Name, "tools.call", params)
 	if err != nil {
-		if errors.Is(err, ErrOffline) {
-			return "", toolErr("The computer %s went offline. Tell the person to check it and try again.", m.Name)
+		return "", err
+	}
+	if held, ok := approvalRequired(raw); ok {
+		if raw, err = t.awaitBuiltinApproval(ctx, c, m, held); err != nil {
+			return "", err
 		}
-		return "", toolErr("%s on %s failed: %s", c.Name, m.Name, clipText(err.Error(), 500))
 	}
 	billing.Record(ctx, billing.Event{
 		Kind: billing.KindLocalAgent, Provider: "agl", Model: "builtin:" + c.Name,
@@ -167,8 +188,128 @@ func (t *Tools) CallBuiltin(ctx context.Context, c BuiltinCall) (string, error) 
 	return capBuiltin(string(raw)), nil
 }
 
+func (t *Tools) builtinRequest(ctx context.Context, m LocalMachine, name, method string, params map[string]any) (json.RawMessage, error) {
+	ctx, cancel := context.WithTimeout(ctx, builtinCallTimeout)
+	defer cancel()
+	raw, err := t.link.Request(ctx, m.ID, method, params)
+	if err != nil {
+		if errors.Is(err, ErrOffline) {
+			return nil, toolErr("The computer %s went offline. Tell the person to check it and try again.", m.Name)
+		}
+		return nil, toolErr("%s on %s failed: %s", name, m.Name, clipText(err.Error(), 500))
+	}
+	return raw, nil
+}
+
+// builtinSession scopes agl's allow_session grants to one chat ("" = none).
+func builtinSession(c ToolChat) string {
+	if c == (ToolChat{}) {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(c.AgentID + "\x00" + c.key()))
+	return "chat:" + hex.EncodeToString(sum[:12])
+}
+
+// heldCall is agl's answer for a call waiting for the person (0.3.15).
+type heldCall struct {
+	Status     string   `json:"status"`
+	ApprovalID string   `json:"approval_id"`
+	Title      string   `json:"title"`
+	Options    []string `json:"options"`
+	ExpiresAt  int64    `json:"expires_at"`
+}
+
+func approvalRequired(raw json.RawMessage) (heldCall, bool) {
+	var h heldCall
+	if json.Unmarshal(raw, &h) != nil || h.Status != "approval_required" || h.ApprovalID == "" {
+		return heldCall{}, false
+	}
+	return h, true
+}
+
+// builtinApprovalWait caps how long a held call waits for the person
+// (agl expires it after 10 minutes).
+var builtinApprovalWait = 10 * time.Minute
+
+// awaitBuiltinApproval asks the person in the chat to approve a held
+// call, waits for the answer and passes it to agl, which runs the call on
+// allow and returns its result.
+func (t *Tools) awaitBuiltinApproval(ctx context.Context, c BuiltinCall, m LocalMachine, held heldCall) (json.RawMessage, error) {
+	what := strings.TrimSpace(held.Title)
+	if what == "" {
+		what = c.Name
+	}
+	if c.Chat == (ToolChat{}) {
+		t.answerHeld(m, held.ApprovalID, "deny")
+		return nil, toolErr("%s on %s needs the person's approval, and there is no chat to ask in. Nothing was done.", c.Name, m.Name)
+	}
+	title := clipText(m.Name+" · "+what, 300)
+	answer := make(chan string, 1)
+	a := &toolApproval{machineID: m.ID, userID: c.UserID, chat: c.Chat, title: title, agent: BuiltinAgentName, machine: m.Name, notify: c.Notify, answer: answer}
+	key := c.Chat.key()
+	t.mu.Lock()
+	if t.pending[key] != nil {
+		t.mu.Unlock()
+		t.answerHeld(m, held.ApprovalID, "deny")
+		return nil, toolErr("Another approval is still waiting for the person's answer in this chat. Wait for it, then try again.")
+	}
+	t.pending[key] = a
+	t.mu.Unlock()
+	drop := func() {
+		t.mu.Lock()
+		if t.pending[key] == a {
+			delete(t.pending, key)
+		}
+		t.mu.Unlock()
+	}
+	if c.Notify != nil {
+		c.Notify(ToolNotice{Kind: NoticeApproval, Agent: BuiltinAgentName, Machine: m.Name, Text: title})
+	} else {
+		t.send(c.Chat, fmt.Sprintf(MsgApproval, title))
+	}
+	wait := builtinApprovalWait
+	if held.ExpiresAt > 0 {
+		if left := time.Until(time.UnixMilli(held.ExpiresAt)) - 5*time.Second; left < wait {
+			wait = left
+		}
+	}
+	timer := time.NewTimer(max(wait, time.Second))
+	defer timer.Stop()
+	var decision string
+	select {
+	case decision = <-answer:
+	case <-timer.C:
+		drop()
+		t.answerHeld(m, held.ApprovalID, "deny")
+		if c.Notify != nil {
+			c.Notify(ToolNotice{Kind: NoticeApprovalResolved, Agent: BuiltinAgentName, Machine: m.Name, Decision: "timeout"})
+		} else {
+			t.send(c.Chat, MsgApprovalTimeout)
+		}
+		return nil, toolErr("The person didn't answer the approval request for %q in time, so nothing was done.", what)
+	case <-ctx.Done():
+		drop()
+		t.answerHeld(m, held.ApprovalID, "deny")
+		return nil, ctx.Err()
+	}
+	if decision == "deny" {
+		t.answerHeld(m, held.ApprovalID, "deny")
+		return nil, toolErr("The person denied %q on %s. Nothing was done; don't try it another way unless they ask.", what, m.Name)
+	}
+	return t.builtinRequest(ctx, m, c.Name, "tools.approve", map[string]any{"approval_id": held.ApprovalID, "decision": decision})
+}
+
+// answerHeld tells agl a held call won't run, so it isn't left waiting.
+func (t *Tools) answerHeld(m LocalMachine, id, decision string) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_, _ = t.link.Request(ctx, m.ID, "tools.approve", map[string]any{"approval_id": id, "decision": decision})
+	}()
+}
+
 // pickBuiltin chooses the computer for c: the named one, else the first
-// online one without a coding agent that offers c.Name.
+// online one that offers c.Name.
 func (t *Tools) pickBuiltin(ctx context.Context, c BuiltinCall) (LocalMachine, error) {
 	machines, err := t.Machines(ctx, c.UserID)
 	if err != nil {
@@ -182,9 +323,6 @@ func (t *Tools) pickBuiltin(ctx context.Context, c BuiltinCall) (LocalMachine, e
 		if want != "" && !m.Online {
 			return LocalMachine{}, toolErr("The computer %s is offline. Tell the person to make sure it is on, connected, and agl is running (agl status), then try again.", m.Name)
 		}
-		if want != "" && len(m.Agents) > 0 {
-			return LocalMachine{}, toolErr("%s has coding agents (%s); use run_local_agent there instead.", m.Name, agentList(m))
-		}
 		offered := t.BuiltinTools(ctx, m)
 		if offers(offered, c.Name) {
 			return m, nil
@@ -197,6 +335,9 @@ func (t *Tools) pickBuiltin(ctx context.Context, c BuiltinCall) (LocalMachine, e
 			allowed := strings.Join(names, ", ")
 			if allowed == "" {
 				allowed = "nothing"
+			}
+			if len(m.Agents) > 0 {
+				return LocalMachine{}, toolErr("%s doesn't allow %q from here; its link allows: %s. Hand the whole task to run_local_agent on %s instead (%s); the person approves its actions there.", m.Name, c.Name, allowed, m.Name, agentList(m))
 			}
 			return LocalMachine{}, toolErr("%s doesn't allow %q from here; its link allows: %s. To allow more, the person re-links that computer with more access (full for commands, edit for file changes).", m.Name, c.Name, allowed)
 		}

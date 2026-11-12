@@ -155,6 +155,9 @@ type toolApproval struct {
 	agent     string // display names, for PendingApproval
 	machine   string
 	notify    func(ToolNotice) // nil: IM chat
+	// answer, when set, receives the decision instead of session.approve:
+	// a built-in tool call waiting in CallBuiltin (builtin.go).
+	answer chan<- string
 }
 
 // Tools runs tool-mode turns on users' machines.
@@ -605,6 +608,15 @@ func (t *Tools) Decide(ctx context.Context, chat ToolChat, userID, decision stri
 	}
 	delete(t.pending, chat.key())
 	t.mu.Unlock()
+	if a.answer != nil {
+		a.answer <- decision // buffered; the waiter runs the call
+		if a.notify != nil {
+			a.notify(ToolNotice{Kind: NoticeApprovalResolved, Agent: a.agent, Machine: a.machine, Decision: decision})
+		} else {
+			t.send(a.chat, approvalAck[decision])
+		}
+		return true, nil
+	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	if err := approve(ctx, t.link, a.machineID, &a.p, decision); err != nil {
