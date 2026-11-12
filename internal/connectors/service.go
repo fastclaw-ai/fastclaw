@@ -979,14 +979,18 @@ type ToolInfo struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
 	InputSchema map[string]any `json:"input_schema"`
+	// ReadOnly: Connany's word that the tool only reads. A tool that
+	// changes data runs only after the person approves the call.
+	ReadOnly bool `json:"read_only"`
 }
 
-// ListTools searches an account's read-only tools.
-func (s *Service) ListTools(ctx context.Context, userID string, a *Account, query string, offset int) ([]ToolInfo, *int, error) {
+// ListTools searches an account's tools: only the read-only ones unless
+// writes is set (the turn can ask the person to approve a change).
+func (s *Service) ListTools(ctx context.Context, userID string, a *Account, query string, offset int, writes bool) ([]ToolInfo, *int, error) {
 	if a.Status != "connected" {
 		return nil, nil, newError("reauth_required")
 	}
-	defs, next, err := s.client.ListTools(ctx, a.ID, Subject(userID), query, offset, 20, true)
+	defs, next, err := s.client.ListTools(ctx, a.ID, Subject(userID), query, offset, 20, !writes)
 	if err != nil {
 		err = wrap(err)
 		if c := Code(err); c == "reauth_required" || c == "connection_revoked" {
@@ -996,16 +1000,21 @@ func (s *Service) ListTools(ctx context.Context, userID string, a *Account, quer
 	}
 	out := make([]ToolInfo, 0, len(defs))
 	for _, d := range defs {
-		if d.Connector == a.Connector && d.ReadOnly {
-			out = append(out, ToolInfo{Name: d.Name, Description: d.Description, InputSchema: d.InputSchema})
+		if d.Connector == a.Connector && (writes || d.ReadOnly) {
+			out = append(out, ToolInfo{Name: d.Name, Description: d.Description, InputSchema: d.InputSchema, ReadOnly: d.ReadOnly})
 		}
 	}
 	return out, next, nil
 }
 
-// CallTool runs a read-only tool. Whether it only reads is Connany's
-// word from the tool's current definition, never the model's.
-func (s *Service) CallTool(ctx context.Context, userID string, a *Account, tool string, input map[string]any) (json.RawMessage, error) {
+// Approve decides whether a call that changes data may run: it asks the
+// person and returns nil to go ahead, or an error that stops the call.
+type Approve func(ctx context.Context, def ToolDefinition) error
+
+// CallTool runs a tool. Whether it only reads is Connany's word from the
+// tool's current definition, never the model's: a tool that changes data
+// runs only when approve lets it (nil approve: write_not_allowed).
+func (s *Service) CallTool(ctx context.Context, userID string, a *Account, tool string, input map[string]any, approve Approve) (json.RawMessage, error) {
 	if a.Status != "connected" {
 		return nil, newError("reauth_required")
 	}
@@ -1027,7 +1036,12 @@ func (s *Service) CallTool(ctx context.Context, userID string, a *Account, tool 
 		return nil, newError("tool_not_found")
 	}
 	if !def.ReadOnly {
-		return nil, newError("write_not_allowed")
+		if approve == nil {
+			return nil, newError("write_not_allowed")
+		}
+		if err := approve(ctx, *def); err != nil {
+			return nil, err
+		}
 	}
 	data, err := s.client.CallTool(ctx, a.ID, subject, tool, input)
 	if err != nil {

@@ -361,6 +361,14 @@ as the end user (`X-Fastclaw-End-User`); the accounts are theirs alone.
   they happen to be signed in. The account is usable on their next message
   either way. If a link can't be minted, the agent sends the connections page
   with `?connector=<name>`.
+- Changes (create, edit, clear, delete on the platform) are offered only in
+  a turn that can ask your user: `"local_agents": true` with `"stream": true`
+  and an explicit `x-fastclaw-session-key`, as above. Each write arrives as a
+  `local_agent` chunk `{"kind":"approval","agent":"Notion","text":"<platform,
+  account, tool and input>"}` and is answered exactly like a local agent's
+  (`POST /v1/local-agents/approval`); it runs only on `allow` /
+  `allow_session` (the latter: that tool on that account, for the rest of the
+  session). Without such a turn the agent gets read-only tools.
 
 ## 6. Usage and quotas
 

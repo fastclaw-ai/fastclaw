@@ -6,7 +6,7 @@ with them on the web. Built on the Connany
 connector service, adapted from fleet's connectors
 (`apps/web/docs/connectors-spec.md`).
 
-Status: first version — **read-only**, **web 1:1 chats with your own agents**.
+Status: reads, and **writes the person approves call by call**; **1:1 chats with your own agents** (web, and a product's end users over `/v1`).
 
 ## Configuration
 
@@ -101,8 +101,8 @@ never ids:
 | action | |
 | --- | --- |
 | `accounts` | the person's accounts (name, status, needs_access, default), plus platforms connected before but disconnected now |
-| `list_tools` | search an account's read-only tools with their input_schema |
-| `call_tool` | run a read-only tool — whether a tool only reads is Connany's current definition, not the model's word |
+| `list_tools` | search an account's tools with their input_schema and `read_only` (only the read-only ones when the turn can't ask for approval) |
+| `call_tool` | run a tool: a read-only one at once, one that changes data only after the person approves it (see Writes) — whether a tool only reads is Connany's current definition, not the model's word |
 | `request_connection` | put a connect / reconnect card in the conversation |
 | `request_access` | put a "grant access" card (platforms with a separate resource step, e.g. GitHub) |
 
@@ -112,6 +112,27 @@ account; several and none chosen → no default (the model must ask).
 Each turn of someone who has connected anything also gets a system note
 listing their accounts — without it, an agent took "my todo list" to mean its
 own notes rather than the person's Todoist.
+
+## Writes
+
+A tool that changes data (Connany's `read_only: false`) never runs on the
+model's call alone: the person approves each call in the chat, while the
+turn waits.
+
+- Offered only when the turn can ask: it streams to the person who owns the
+  accounts — the dashboard chat, or a `/v1` stream with `local_agents` and
+  an explicit session key (e.g. WeClaw relaying WeChat). Elsewhere the tool
+  lists read-only tools only, as before.
+- The request uses run_local_agent's channel (`agl.Tools.Ask`): one open
+  request per chat; the web chat shows buttons, a `/v1` caller gets a
+  `local_agent` chunk `{"kind":"approval"}` and answers with
+  `POST /v1/local-agents/approval` (WeClaw: the person replies 1/2/3).
+- The request names the platform, the account, the tool and the exact input
+  (clipped to 300 characters). The tool definition is read from Connany when
+  the call is made, so the model can't call a write a read.
+- `allow` runs it once; `allow_session` also lets that tool on that account
+  run without asking in this chat for 12 hours (in memory, per process);
+  `deny`, or no answer in 10 minutes, runs nothing and tells the model so.
 
 ## Cards and waking
 
@@ -131,7 +152,7 @@ own notes rather than the person's Todoist.
 
 ## Not yet
 
-- Writes (approval cards, as in fleet §6), custom MCP servers.
+- Writes where the turn can't ask (IM channels, cron), custom MCP servers.
 - IM channels, groups, API end users.
 - Polling Connany's event stream: a revocation on the platform is noticed on
   the next call.
