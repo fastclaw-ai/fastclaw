@@ -39,7 +39,7 @@ RUN apt-get update \
 # `--break-system-packages` is the documented escape hatch and safe
 # inside a container.
 RUN pip install --break-system-packages --no-cache-dir \
-        camoufox-cli \
+        camoufox-cli==0.8.0 \
         uv \
         requests \
         pillow \
@@ -59,18 +59,19 @@ RUN rm -rf /var/lib/apt/lists/*
 
 # Screenshots came out cropped: Camoufox's fingerprint sizes the window
 # (e.g. 1728 or 1920 wide) and the page lays out at that width, but
-# camoufox-cli opens the page with Playwright's default 1280x720 viewport,
+# camoufox-cli opens its context with Playwright's default 1280x720 viewport,
 # so `screenshot` captured only the top-left part of the layout. With
 # no_viewport the viewport follows the fingerprinted window and the
-# screenshot matches what the page rendered. The assert fails the build
-# if an upgrade changes that line, rather than silently shipping crops.
+# screenshot matches what the page rendered. camoufox-cli is pinned (the
+# patch targets 0.8.0) and the assert fails the build if the line moves,
+# rather than silently shipping crops.
 RUN python3 - <<'EOF'
 import camoufox_cli, os
 p = os.path.join(os.path.dirname(camoufox_cli.__file__), "browser.py")
 s = open(p).read()
-old = "self._page = result.new_page()"
+old = "self._context = result.new_context()"
 assert s.count(old) == 1, "camoufox-cli browser.py changed; revisit the no_viewport patch"
-open(p, "w").write(s.replace(old, "self._page = result.new_page(no_viewport=True)"))
+open(p, "w").write(s.replace(old, "self._context = result.new_context(no_viewport=True)"))
 EOF
 
 # Auto-inject --proxy from $HTTPS_PROXY (or its lowercase variants) into
