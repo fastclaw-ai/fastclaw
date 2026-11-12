@@ -176,15 +176,21 @@ func makeExecToolFull(r *Registry, sbCfg *SandboxConfig, envProvider SkillEnvPro
 			// Always pass an explicit (scrubbed) env so the child
 			// never inherits raw os.Environ() — that's the leak path
 			// that put OSS AccessKey + DB DSN in chat replies.
+			skill := resolveSkill(args.Command, envProvider, skillDirs)
+			if err := skill.authorize(ctx); err != nil {
+				return "", err
+			}
 			var skillEnv map[string]string
-			if envProvider != nil && skillDirs != nil {
-				skillEnv = resolveSkillEnv(args.Command, envProvider, skillDirs)
+			if skill != nil {
+				skillEnv = skill.env
 			}
 			sessEnv := buildSubprocessEnv(skillEnv)
 			s, err := r.shellMgr.Start(command, sessEnv)
 			if err != nil {
 				return "", err
 			}
+			// Its outcome is never known here: a started run counts.
+			skill.record(ctx)
 			return fmt.Sprintf("Started background shell %s for command: %s\nUse bash_output(bash_id=%q) to read output, kill_shell(bash_id=%q) to terminate.", s.id, args.Command, s.id, s.id), nil
 		}
 
@@ -222,13 +228,28 @@ func makeExecToolFull(r *Registry, sbCfg *SandboxConfig, envProvider SkillEnvPro
 		// inherit the parent's full env, which leaks daemon secrets
 		// (FASTCLAW_STORAGE_DSN, FASTCLAW_OBJECT_STORE_*, ...) into
 		// every shell the model can run.
-		var skillEnv map[string]string
-		if envProvider != nil && skillDirs != nil {
-			skillEnv = resolveSkillEnv(args.Command, envProvider, skillDirs)
-		}
-
-		return runHostCommand(execCtx, command, r.HostWorkDir(), buildSubprocessEnv(skillEnv), time.Duration(timeout)*time.Second)
+		return runHostSkillAware(ctx, execCtx, command, args.Command, r.HostWorkDir(), envProvider, skillDirs, timeout)
 	}
+}
+
+// runHostSkillAware runs command on the host shell with the env of the
+// skill rawCommand references injected, asking the billing hook first and
+// metering the run when that skill is keyed (skill_metering.go).
+func runHostSkillAware(ctx, execCtx context.Context, command, rawCommand, dir string, envProvider SkillEnvProvider, skillDirs []string, timeout int) (string, error) {
+	var skill *skillRun
+	if skillDirs != nil {
+		skill = resolveSkill(rawCommand, envProvider, skillDirs)
+	}
+	if err := skill.authorize(ctx); err != nil {
+		return "", err
+	}
+	var skillEnv map[string]string
+	if skill != nil {
+		skillEnv = skill.env
+	}
+	out, err := runHostCommand(execCtx, command, dir, buildSubprocessEnv(skillEnv), time.Duration(timeout)*time.Second)
+	skill.record(ctx)
+	return out, err
 }
 
 // sbCfgImage returns the sandbox image name for diagnostic error messages.
@@ -239,47 +260,6 @@ func sbCfgImage(sbCfg *SandboxConfig) string {
 		return "<unset>"
 	}
 	return sbCfg.Image
-}
-
-// resolveSkillEnv checks if the command path references a skill directory
-// and returns the skill's configured env vars.
-//
-// Two matching paths:
-//  1. host paths from skillDirs (e.g. "/Users/.../agents/<id>/skills") —
-//     used when exec runs on the host shell.
-//  2. sandbox-internal "/skills/<name>" prefix — every skill is mounted
-//     into the docker container at that location regardless of where it
-//     lives on the host, so commands the model writes inside the
-//     sandbox use this form. Without this branch, env injection
-//     silently broke for ALL sandbox calls (the host paths in
-//     skillDirs never appear in /workspace-cd'd commands).
-func resolveSkillEnv(command string, envProvider SkillEnvProvider, skillDirs []string) map[string]string {
-	// 1. host paths
-	for _, dir := range skillDirs {
-		if strings.Contains(command, dir) {
-			rest := command[strings.Index(command, dir)+len(dir):]
-			if len(rest) > 0 && rest[0] == '/' {
-				rest = rest[1:]
-			}
-			parts := strings.SplitN(rest, "/", 2)
-			if len(parts) > 0 && parts[0] != "" {
-				if env := envProvider(parts[0]); env != nil {
-					return env
-				}
-			}
-		}
-	}
-	// 2. sandbox /skills/<name>/... — fixed mount layout
-	if idx := strings.Index(command, "/skills/"); idx >= 0 {
-		rest := command[idx+len("/skills/"):]
-		parts := strings.SplitN(rest, "/", 2)
-		if len(parts) > 0 && parts[0] != "" {
-			if env := envProvider(parts[0]); env != nil {
-				return env
-			}
-		}
-	}
-	return nil
 }
 
 // mergeEnv merges base env with additional vars. Additional vars override base.
@@ -393,11 +373,7 @@ func registerHostExec(r *Registry, envProvider SkillEnvProvider, skillDirs []str
 			// daemon secrets from the inherited env. The operator
 			// rarely needs FASTCLAW_STORAGE_DSN reachable from a host
 			// shell, and never needs the model to be able to read it.
-			var skillEnv map[string]string
-			if envProvider != nil && skillDirs != nil {
-				skillEnv = resolveSkillEnv(args.Command, envProvider, skillDirs)
-			}
-			return runHostCommand(execCtx, command, r.HostWorkDir(), buildSubprocessEnv(skillEnv), time.Duration(timeout)*time.Second)
+			return runHostSkillAware(ctx, execCtx, command, args.Command, r.HostWorkDir(), envProvider, skillDirs, timeout)
 		})
 }
 
@@ -469,9 +445,12 @@ func runSandboxedCommand(ctx context.Context, ex sandbox.Executor, args execArgs
 	// container-internal /skills/<name> mount — resolveSkillEnv
 	// matches both).
 	injected := []string{}
-	if envProvider != nil {
-		skillEnv := resolveSkillEnv(args.Command, envProvider, skillDirs)
-		if len(skillEnv) > 0 {
+	skill := resolveSkill(args.Command, envProvider, skillDirs)
+	if err := skill.authorize(ctx); err != nil {
+		return "", err
+	}
+	if skill != nil {
+		if skillEnv := skill.env; len(skillEnv) > 0 {
 			var sb strings.Builder
 			for k, v := range skillEnv {
 				sb.WriteString("export ")
@@ -496,6 +475,7 @@ func runSandboxedCommand(ctx context.Context, ex sandbox.Executor, args execArgs
 		"injected", injected,
 		"cmdHead", firstN(args.Command, 80))
 	out, err := ex.Exec(ctx, command, time.Duration(timeout)*time.Second)
+	skill.record(ctx)
 	// Hint, don't auto-fall-back: an auto-retry to host shell would
 	// silently breach the sandbox boundary on any prompt-injected
 	// "make it fail in sandbox" trick AND would re-run a possibly

@@ -34,6 +34,9 @@ const (
 	KindFetch      = "fetch"
 	KindSandbox    = "sandbox"
 	KindLocalAgent = "local_agent"
+	// KindSkill: one run of a skill whose configured secrets (API keys)
+	// were injected; provider = the skill's name.
+	KindSkill = "skill"
 )
 
 // Authorization stages and the "turn" kind.

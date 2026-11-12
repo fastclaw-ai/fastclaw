@@ -7,7 +7,7 @@ when the account registers a billing hook — asks that hook before work that
 costs real money starts.
 
 ```
-agent turn ──▶ usage events (llm, image, tts, search, fetch, sandbox, local_agent)
+agent turn ──▶ usage events (llm, image, tts, search, fetch, sandbox, local_agent, skill)
                  │                                     ▲
                  ▼                                     │ allow / deny
      GET /v1/usage/events (pull, cursor)     POST <hook url> (authorize)
@@ -28,6 +28,15 @@ One row per billable thing, in table `usage_events` (both dialects).
 | `fetch`       | `web_fetch` tool                      | `units` = 1, `unit` = `call`               | fetch provider (`jina`, `firecrawl`, `direct`) |
 | `sandbox`     | one sandbox command (`exec` and file ops in a sandbox) | `units` = wall seconds (3 decimals), `unit` = `second` | backend (`e2b`, `docker`, `boxlite`) / `""` |
 | `local_agent` | one `run_local_agent` / `generate_image` run on the end user's own computer (agl) | `units` = 1, `unit` = `run`; `detail.duration_ms`, `detail.machine` | `agl` / the local agent (`codex`, `claude`, …) |
+| `skill`       | one command that ran a script of a skill with configured secrets (API keys) — the skill spends the operator's money at a third-party API FastClaw can't see | `units` = 1, `unit` = `run`; `detail.script` (path under the skill's dir, for reports) | the skill's name / `""` |
+
+FastClaw doesn't know what a skill's API charges, and doesn't try: every
+skill depends on different APIs priced differently. It counts runs, and the
+app prices a run per skill (a flat average is fine). Skills without
+configured secrets aren't metered. A run is one command that ran the
+skill's script, whatever its exit status (the command is the model's, so a
+failing tail can't make it free); one command calling the skill several
+times (two scripts, a loop) is still one run.
 
 Only successful work is recorded (a failed provider call records nothing;
 a failed model call that still reported usage records it). `cost_usd` is
@@ -108,7 +117,7 @@ X-Fastclaw-Signature: t=<unix seconds>,v1=<hex hmac-sha256(secret, t + "." + bod
 {
   "id": "authz_…",
   "stage": "turn",            // "turn": before an agent turn; "tool": before a costly tool call
-  "kind": "turn",             // "turn" | "image" | "tts" | "sandbox"
+  "kind": "turn",             // "turn" | "image" | "tts" | "sandbox" | "skill"
   "provider": "fal", "model": "flux-pro",
   "estimate": { "units": 2, "unit": "image" },   // tools only
   "end_user": "user:42", "agent_id": "agt_…", "session_key": "…",
@@ -124,8 +133,9 @@ When it's asked, for accounts with a hook:
 - **Before every agent turn** on every channel (web, IM, cron, tasks, /v1,
   …). Denied: the turn doesn't run; the user sees `message` (`/v1` returns
   `402 payment_required` with it).
-- **Before costly tool calls**: `image_gen`, `tts`, and starting a sandbox
-  command. Denied: the tool returns `message` to the model as its error, so
+- **Before costly tool calls**: `image_gen`, `tts`, starting a sandbox
+  command, and running a keyed skill's script (`estimate` 1 run, `provider`
+  the skill's name). Denied: the tool returns `message` to the model as its error, so
   the agent can tell the user. Cheap calls (model calls, search, fetch) are
   not asked about individually.
 
