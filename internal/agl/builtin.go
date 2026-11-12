@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"path"
 	"strings"
 	"sync"
@@ -249,54 +248,21 @@ func (t *Tools) awaitBuiltinApproval(ctx context.Context, c BuiltinCall, m Local
 		t.answerHeld(m, held.ApprovalID, "deny")
 		return nil, toolErr("%s on %s needs the person's approval, and there is no chat to ask in. Nothing was done.", c.Name, m.Name)
 	}
-	title := clipText(m.Name+" · "+what, 300)
-	answer := make(chan string, 1)
-	a := &toolApproval{machineID: m.ID, userID: c.UserID, chat: c.Chat, title: title, agent: BuiltinAgentName, machine: m.Name, notify: c.Notify, answer: answer}
-	key := c.Chat.key()
-	t.mu.Lock()
-	if t.pending[key] != nil {
-		t.mu.Unlock()
-		t.answerHeld(m, held.ApprovalID, "deny")
-		return nil, toolErr("Another approval is still waiting for the person's answer in this chat. Wait for it, then try again.")
-	}
-	t.pending[key] = a
-	t.mu.Unlock()
-	drop := func() {
-		t.mu.Lock()
-		if t.pending[key] == a {
-			delete(t.pending, key)
-		}
-		t.mu.Unlock()
-	}
-	if c.Notify != nil {
-		c.Notify(ToolNotice{Kind: NoticeApproval, Agent: BuiltinAgentName, Machine: m.Name, Text: title})
-	} else {
-		t.send(c.Chat, fmt.Sprintf(MsgApproval, title))
-	}
 	wait := builtinApprovalWait
 	if held.ExpiresAt > 0 {
 		if left := time.Until(time.UnixMilli(held.ExpiresAt)) - 5*time.Second; left < wait {
 			wait = left
 		}
 	}
-	timer := time.NewTimer(max(wait, time.Second))
-	defer timer.Stop()
-	var decision string
-	select {
-	case decision = <-answer:
-	case <-timer.C:
-		drop()
+	decision, err := t.Ask(ctx, ApprovalAsk{Chat: c.Chat, UserID: c.UserID, Agent: BuiltinAgentName, Machine: m.Name,
+		Title: m.Name + " · " + what, Notify: c.Notify, Wait: max(wait, time.Second)})
+	if err != nil {
 		t.answerHeld(m, held.ApprovalID, "deny")
-		if c.Notify != nil {
-			c.Notify(ToolNotice{Kind: NoticeApprovalResolved, Agent: BuiltinAgentName, Machine: m.Name, Decision: "timeout"})
-		} else {
-			t.send(c.Chat, MsgApprovalTimeout)
-		}
+		return nil, err
+	}
+	if decision == DecisionTimeout {
+		t.answerHeld(m, held.ApprovalID, "deny")
 		return nil, toolErr("The person didn't answer the approval request for %q in time, so nothing was done.", what)
-	case <-ctx.Done():
-		drop()
-		t.answerHeld(m, held.ApprovalID, "deny")
-		return nil, ctx.Err()
 	}
 	if decision == "deny" {
 		t.answerHeld(m, held.ApprovalID, "deny")

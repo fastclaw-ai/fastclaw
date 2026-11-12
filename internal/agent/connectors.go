@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/fastclaw-ai/fastclaw/internal/agent/tools"
+	"github.com/fastclaw-ai/fastclaw/internal/agl"
 	"github.com/fastclaw-ai/fastclaw/internal/bus"
 	"github.com/fastclaw-ai/fastclaw/internal/connectors"
 )
@@ -76,8 +77,28 @@ func (a *Agent) mountConnectors(ctx context.Context, msg bus.InboundMessage, cha
 	if err != nil || len(platforms) == 0 {
 		return ""
 	}
-	tools.RegisterConnectors(a.registry, svc, chatterUID, connectors.ChatRef{AgentID: a.name, SessionID: sessionKey}, platforms, links)
+	tools.RegisterConnectors(a.registry, svc, chatterUID, connectors.ChatRef{AgentID: a.name, SessionID: sessionKey}, platforms, links, a.connectorApprovals(ctx, chatterUID))
 	return connectorAccountsNote(cctx, svc, chatterUID, platforms)
+}
+
+// connectorApprovals is how the person approves a change to one of their
+// accounts in this turn, or nil (read-only tools only). Same channel as
+// run_local_agent's approvals: a turn streaming to the person — the
+// dashboard chat, or a /v1 stream with local_agents and a session key
+// (e.g. WeClaw relaying WeChat, where they reply 1/2/3) — and only for
+// the person chatting, who owns the accounts.
+func (a *Agent) connectorApprovals(ctx context.Context, chatterUID string) *tools.ConnectorApprovals {
+	asker, ok := localAgents().(tools.Approver)
+	if !ok || asker == nil || localAgentsWebUser(ctx) != chatterUID {
+		return nil
+	}
+	stream := streamFromContext(ctx)
+	if stream == nil || stream.sessionKey == "" {
+		return nil
+	}
+	chat := agl.WebToolChat(chatterUID, stream.agentID, stream.sessionKey)
+	chat.AgentID = a.name
+	return &tools.ConnectorApprovals{Asker: asker, Chat: chat, Notify: func(n agl.ToolNotice) { emitEvent(ctx, localAgentEvent(n)) }}
 }
 
 // endUserTurnMayUseConnectors: an end user's own direct turn on one of

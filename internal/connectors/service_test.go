@@ -3,6 +3,7 @@ package connectors
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -263,7 +264,7 @@ func TestCancelNotifiesAndSettingsRequestsDoNot(t *testing.T) {
 	}
 }
 
-func TestToolsAreReadOnly(t *testing.T) {
+func TestWritesRunOnlyWhenApproved(t *testing.T) {
 	svc, f := newTestService(t)
 	ctx := context.Background()
 	f.connect(Subject("u1"), conn("c1", "notion", "connected", "Work"))
@@ -271,18 +272,41 @@ func TestToolsAreReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	list, _, err := svc.ListTools(ctx, "u1", acct, "", 0)
-	if err != nil || len(list) != 1 || list[0].Name != "notion.search" {
-		t.Fatalf("list: %+v %v", list, err)
+	list, _, err := svc.ListTools(ctx, "u1", acct, "", 0, false)
+	if err != nil || len(list) != 1 || list[0].Name != "notion.search" || !list[0].ReadOnly {
+		t.Fatalf("read-only list: %+v %v", list, err)
 	}
-	// The service's definition decides, whatever the model claims.
-	if _, err := svc.CallTool(ctx, "u1", acct, "notion.create_page", nil); Code(err) != "write_not_allowed" {
+	all, _, err := svc.ListTools(ctx, "u1", acct, "", 0, true)
+	if err != nil || len(all) != 2 || all[1].Name != "notion.create_page" || all[1].ReadOnly {
+		t.Fatalf("list with writes: %+v %v", all, err)
+	}
+	// The service's definition decides, whatever the model claims: no
+	// way to ask, no write.
+	if _, err := svc.CallTool(ctx, "u1", acct, "notion.create_page", nil, nil); Code(err) != "write_not_allowed" {
 		t.Fatalf("write: %v", err)
 	}
-	if _, err := svc.CallTool(ctx, "u1", acct, "github.search", nil); Code(err) != "connector_mismatch" {
+	denied := errors.New("denied")
+	var asked []string
+	approve := func(_ context.Context, def ToolDefinition) error { asked = append(asked, def.Name); return denied }
+	if _, err := svc.CallTool(ctx, "u1", acct, "notion.create_page", nil, approve); !errors.Is(err, denied) {
+		t.Fatalf("denied write: %v", err)
+	}
+	for _, c := range f.calls {
+		if strings.Contains(c, "create_page") {
+			t.Fatalf("a denied write ran: %v", f.calls)
+		}
+	}
+	if _, err := svc.CallTool(ctx, "u1", acct, "notion.create_page", nil, func(context.Context, ToolDefinition) error { return nil }); err != nil {
+		t.Fatalf("approved write: %v", err)
+	}
+	// A read runs without asking.
+	if _, err := svc.CallTool(ctx, "u1", acct, "notion.search", nil, approve); err != nil || len(asked) != 1 {
+		t.Fatalf("read asked: %v %v", asked, err)
+	}
+	if _, err := svc.CallTool(ctx, "u1", acct, "github.search", nil, nil); Code(err) != "connector_mismatch" {
 		t.Fatalf("mismatch: %v", err)
 	}
-	data, err := svc.CallTool(ctx, "u1", acct, "notion.search", map[string]any{"query": "x"})
+	data, err := svc.CallTool(ctx, "u1", acct, "notion.search", map[string]any{"query": "x"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
