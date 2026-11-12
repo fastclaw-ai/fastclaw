@@ -57,6 +57,22 @@ RUN camoufox-cli install --with-deps
 
 RUN rm -rf /var/lib/apt/lists/*
 
+# Screenshots came out cropped: Camoufox's fingerprint sizes the window
+# (e.g. 1728 or 1920 wide) and the page lays out at that width, but
+# camoufox-cli opens the page with Playwright's default 1280x720 viewport,
+# so `screenshot` captured only the top-left part of the layout. With
+# no_viewport the viewport follows the fingerprinted window and the
+# screenshot matches what the page rendered. The assert fails the build
+# if an upgrade changes that line, rather than silently shipping crops.
+RUN python3 - <<'EOF'
+import camoufox_cli, os
+p = os.path.join(os.path.dirname(camoufox_cli.__file__), "browser.py")
+s = open(p).read()
+old = "self._page = result.new_page()"
+assert s.count(old) == 1, "camoufox-cli browser.py changed; revisit the no_viewport patch"
+open(p, "w").write(s.replace(old, "self._page = result.new_page(no_viewport=True)"))
+EOF
+
 # Auto-inject --proxy from $HTTPS_PROXY (or its lowercase variants) into
 # every camoufox-cli call when the caller didn't pass --proxy explicitly.
 # Playwright/Camoufox don't pick up HTTPS_PROXY for the browser process —
