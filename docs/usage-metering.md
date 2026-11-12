@@ -33,10 +33,18 @@ One row per billable thing, in table `usage_events` (both dialects).
 FastClaw doesn't know what a skill's API charges, and doesn't try: every
 skill depends on different APIs priced differently. It counts runs, and the
 app prices a run per skill (a flat average is fine). Skills without
-configured secrets aren't metered. A run is one command that ran the
-skill's script, whatever its exit status (the command is the model's, so a
-failing tail can't make it free); one command calling the skill several
-times (two scripts, a loop) is still one run.
+configured secrets aren't metered.
+
+A run is a script under the skill's directory being **executed** — as the
+command (`/skills/x/bin/q`) or an interpreter's script (`python
+/skills/x/a.py`, `uv run …`, `bash -c "…"` is read in turn). Only then does
+the command get the skill's secrets. Reading the skill (`cat SKILL.md`,
+`ls`, `grep`, `sed -n` on a script, `python -c` inline code) gets no
+secrets and costs nothing. Since secrets and metering go together, a
+command FastClaw misreads can only miss its keys, never use them unmetered.
+`units` = the simple commands that run the skill's scripts (`a.py && b.py`
+is 2), counted whatever the exit status (the command is the model's: a
+failing tail can't make it free); a loop inside one is still one.
 
 Only successful work is recorded (a failed provider call records nothing;
 a failed model call that still reported usage records it). `cost_usd` is
@@ -134,7 +142,7 @@ When it's asked, for accounts with a hook:
   …). Denied: the turn doesn't run; the user sees `message` (`/v1` returns
   `402 payment_required` with it).
 - **Before costly tool calls**: `image_gen`, `tts`, starting a sandbox
-  command, and running a keyed skill's script (`estimate` 1 run, `provider`
+  command, and running a keyed skill's script (`estimate` = its runs, `provider`
   the skill's name). Denied: the tool returns `message` to the model as its error, so
   the agent can tell the user. Cheap calls (model calls, search, fetch) are
   not asked about individually.

@@ -408,7 +408,7 @@ func firstSentence(s string) string {
 const skillsDirective = `<skill_usage_rules>
 The skills listed below are pre-installed for this agent. Only the catalog is always in context. Before using a skill, call the "load_skill" tool with its name to load the full SKILL.md instructions, then follow those instructions exactly. If an always-loaded skill is included inline below, you may use those inline instructions directly.
 
-A skill's configured secrets (API keys such as FAL_KEY) are injected only into commands that run its scripts under /skills/<name>/, so ` + "`env`" + ` or ` + "`echo $KEY`" + ` in any other command never shows them. Don't check for them first: run the skill's script, and only if it reports a missing key, tell the user to configure it in the skill's settings.
+A skill's configured secrets (API keys such as FAL_KEY) are injected only into commands that run its scripts under /skills/<name>/, so ` + "`env`" + ` or ` + "`echo $KEY`" + ` in any other command never shows them. Run a skill's script by its full path ("python /skills/<name>/scripts/x.py", not cd and a relative path) or it gets no keys. Reading the skill's files is free and gets none. Don't check for the keys first: run the skill's script, and only if it reports a missing key, tell the user to configure it in the skill's settings.
 
 The sandbox image already has: python3 + pip, uv + uvx, node + npm + npx, the camoufox-cli anti-detect browser (run as ` + "`camoufox-cli open <url>`" + ` then ` + "`camoufox-cli snapshot -i`" + ` for refs; Camoufox/Firefox is pre-downloaded), git, curl, requests / pillow / beautifulsoup4 / lxml. DO NOT reinstall any of these — wasted tool calls and timeouts. If you see "command not found", check the spelling before reaching for npm/pip.
 
