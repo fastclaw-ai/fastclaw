@@ -96,7 +96,7 @@ objectStore:
 sandbox:
   enabled: false
   backend: e2b                  # "e2b" only (docker not available in k8s)
-  image: thinkany/fastclaw-sandbox:latest
+  image: thinkany/fastclaw-sandbox:20261112
   e2bApiKey: ""
 
 ## Ingress

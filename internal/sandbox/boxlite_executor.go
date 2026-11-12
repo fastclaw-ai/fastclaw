@@ -50,7 +50,7 @@ const (
 	defaultBoxliteURL = "https://api.boxlite.ai/v1"
 	// Cloud takes any public registry reference as the box image (short
 	// names resolve to Docker Hub); snapshots are disabled there.
-	defaultBoxliteImage = "thinkany/fastclaw-sandbox:latest"
+	defaultBoxliteImage = DefaultImage
 
 	// legacyBoxliteDevHost still routes under /{prefix}/boxes, so configs
 	// that pinned it keep their old implicit "default" prefix.

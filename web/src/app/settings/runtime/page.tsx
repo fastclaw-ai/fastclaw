@@ -104,16 +104,19 @@ export default function RuntimeSettingsPage() {
           enabled: sandboxEnabled,
           enforce: sandboxEnabled && sandboxEnforce,
           backend: sandboxBackend,
-          // "" (not undefined) so switching backends clears the previous
-          // backend's value from the legacy slot instead of leaving, say,
-          // an E2B template id as the BoxLite image.
+          // Send "" (not undefined) for every optional field: the server
+          // PATCHes, so undefined means "keep", and a cleared field never
+          // cleared — e.g. an E2B template id left in the legacy slot got
+          // pulled as the BoxLite image, and a stale BoxLite image pinned
+          // a cached :latest instead of the current default. API keys stay
+          // undefined-when-empty so a blank field doesn't wipe a stored key.
           image: activeImage,
-          dockerImage: sandboxDockerImage || undefined,
-          e2bTemplate: sandboxE2BTemplate || undefined,
-          boxliteSnapshot: sandboxBoxliteImage || undefined,
+          dockerImage: sandboxDockerImage,
+          e2bTemplate: sandboxE2BTemplate,
+          boxliteSnapshot: sandboxBoxliteImage,
           e2bKey: sandboxE2BKey || undefined,
           boxliteKey: sandboxBoxliteKey || undefined,
-          boxliteUrl: sandboxBoxliteURL || undefined,
+          boxliteUrl: sandboxBoxliteURL,
         },
       }, "system");
       if (result?.ok === false) {
@@ -291,7 +294,7 @@ export default function RuntimeSettingsPage() {
                     <Input
                       value={sandboxBoxliteImage}
                       onChange={(e) => setSandboxBoxliteImage(e.target.value)}
-                      placeholder="thinkany/fastclaw-sandbox:latest"
+                      placeholder="thinkany/fastclaw-sandbox:20261112"
                       className="font-mono text-sm"
                     />
                     <p className="text-xs text-muted-foreground">
@@ -317,7 +320,7 @@ export default function RuntimeSettingsPage() {
                   <Input
                     value={sandboxDockerImage}
                     onChange={(e) => setSandboxDockerImage(e.target.value)}
-                    placeholder="thinkany/fastclaw-sandbox:latest"
+                    placeholder="thinkany/fastclaw-sandbox:20261112"
                     className="font-mono text-sm"
                   />
                 </div>

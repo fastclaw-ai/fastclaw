@@ -44,8 +44,18 @@ instead of failing.
 ### Fixed — cropped browser screenshots in the sandbox image
 
 `camoufox-cli screenshot` captured only the top-left 1280×720 of pages
-laid out at the fingerprinted window width. Fixed in
-`thinkany/fastclaw-sandbox` (rebuild/pull the image to pick it up).
+laid out at the fingerprinted window width. Fixed in the sandbox image,
+now published as `thinkany/fastclaw-sandbox:20261112` and used by default.
+BoxLite Cloud never re-pulls a moved `:latest`, so the default is now a
+dated tag; if Admin → Tools → Runtime pins `thinkany/fastclaw-sandbox`
+(or `:latest`), clear the field or set the dated tag.
+
+### Fixed — sandbox settings page showed stale values
+
+The sandbox is deployment-wide but was also copied into users' own
+settings whenever they saved anything, and those copies shadowed the
+system value on the settings page. It is now system-only, and clearing an
+optional field (image, URL) on the page actually clears it.
 
 ### Added — connectors for a product's end users
 

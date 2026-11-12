@@ -5,6 +5,13 @@ import (
 	"time"
 )
 
+// DefaultImage is the sandbox image used when none is configured. It is a
+// dated tag, not :latest — BoxLite Cloud caches images by reference and
+// never re-pulls a moved :latest, so a fixed image only reaches boxes
+// under a new tag. When publishing a new image (deploy/docker/sandbox/
+// build.sh), push a new dated tag and bump this.
+const DefaultImage = "thinkany/fastclaw-sandbox:20261112"
+
 // Executor abstracts a sandboxed execution environment for one user.
 // All agent tool calls (exec, read_file, write_file, list_dir) are routed
 // through this interface in cloud mode so that each user gets an isolated

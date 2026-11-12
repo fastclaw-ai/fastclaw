@@ -78,7 +78,7 @@ type DockerSandbox struct {
 // explicit policy with NetMode: "none".
 func NewDockerSandbox(image, workspace string, policy *Policy) *DockerSandbox {
 	if image == "" {
-		image = "thinkany/fastclaw-sandbox:latest"
+		image = DefaultImage
 	}
 	if policy == nil {
 		policy = &Policy{}

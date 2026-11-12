@@ -12,7 +12,13 @@
 #                                                       # multi-arch buildx
 #
 # After building, point the gateway at it via Settings → Sandbox →
-# Image, or during onboard. Default: thinkany/fastclaw-sandbox:latest.
+# Image, or during onboard. Default: thinkany/fastclaw-sandbox:<date>.
+#
+# Releasing a new image: push BOTH :latest and a new dated tag
+# (-t YYYYMMDD), then bump sandbox.DefaultImage (internal/sandbox/
+# executor.go) and the web placeholders. BoxLite Cloud caches images by
+# reference and never re-pulls a moved :latest, so only a new tag
+# reaches existing deployments.
 
 set -euo pipefail
 
