@@ -29,6 +29,7 @@ export default function RuntimeSettingsPage() {
   const [saveError, setSaveError] = useState("");
 
   const [sandboxEnabled, setSandboxEnabled] = useState(false);
+  const [sandboxEnforce, setSandboxEnforce] = useState(false);
   const [sandboxBackend, setSandboxBackend] = useState("docker");
   const [sandboxDockerImage, setSandboxDockerImage] = useState("");
   const [sandboxE2BTemplate, setSandboxE2BTemplate] = useState("base");
@@ -51,6 +52,7 @@ export default function RuntimeSettingsPage() {
         .then((cfg) => {
           setConfig(cfg);
           setSandboxEnabled(cfg.sandbox?.enabled || false);
+          setSandboxEnforce(cfg.sandbox?.enforce || false);
           const backend = cfg.sandbox?.backend || "docker";
           setSandboxBackend(backend);
           // Each backend has its own persisted field. For configs
@@ -98,6 +100,7 @@ export default function RuntimeSettingsPage() {
         },
         sandbox: {
           enabled: sandboxEnabled,
+          enforce: sandboxEnabled && sandboxEnforce,
           backend: sandboxBackend,
           image: activeImage || undefined,
           dockerImage: sandboxDockerImage || undefined,
@@ -212,6 +215,18 @@ export default function RuntimeSettingsPage() {
         {sandboxEnabled && (
           <div className="px-5 pb-5 space-y-4">
             <Separator />
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <Label>{tr("Always run in the sandbox", "强制在沙盒执行")}</Label>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {tr(
+                    "On: every command runs inside the sandbox and never on this machine. Off: commands run on this machine by default and the agent opts into the sandbox per call (guest chatters are always sandboxed).",
+                    "开启后所有命令都在沙盒中执行，不会在本机运行。关闭时默认在本机执行，由智能体按需选择沙盒（非管理员的访客始终在沙盒中执行）。",
+                  )}
+                </p>
+              </div>
+              <Switch checked={sandboxEnforce} onCheckedChange={setSandboxEnforce} />
+            </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>{tr("Backend", "后端")}</Label>

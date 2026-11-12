@@ -8,6 +8,7 @@ package buildinfo
 import (
 	"os"
 	"strings"
+	"sync/atomic"
 )
 
 // Version is the FastClaw release tag (e.g. "v0.4.2") set by the
@@ -86,12 +87,22 @@ func IsHostExecAllowed() bool {
 //
 // A self-hosted operator who exposes agents to untrusted IM chatters
 // (WeChat, Discord, Feishu, …) and wants the old sandbox-or-nothing
-// boundary back opts in with FASTCLAW_SANDBOX_ENFORCE=1 (or true/yes).
+// boundary back opts in with FASTCLAW_SANDBOX_ENFORCE=1 (or true/yes),
+// or flips "force sandbox" in the admin runtime settings (sandbox.enforce,
+// published here via SetSandboxEnforceSetting whenever the sandbox pool
+// is (re)built, so it takes effect without a restart).
 // Read per call, same as IsHostedDeploy.
 func IsSandboxEnforced() bool {
-	if IsHostedDeploy() {
+	if IsHostedDeploy() || sandboxEnforceSetting.Load() {
 		return true
 	}
 	v := strings.ToLower(strings.TrimSpace(os.Getenv("FASTCLAW_SANDBOX_ENFORCE")))
 	return v == "1" || v == "true" || v == "yes"
 }
+
+var sandboxEnforceSetting atomic.Bool
+
+// SetSandboxEnforceSetting publishes the system sandbox config's
+// "force sandbox" toggle. Callers pass enabled && enforce: forcing a
+// sandbox that isn't configured would only make every exec refuse.
+func SetSandboxEnforceSetting(v bool) { sandboxEnforceSetting.Store(v) }

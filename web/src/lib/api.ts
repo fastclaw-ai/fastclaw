@@ -236,6 +236,8 @@ export interface ConfigResponse {
   storage: { type: string; dsn?: string };
   sandbox?: {
     enabled: boolean;
+    // Self-hosted: make the sandbox a hard boundary (every exec inside it).
+    enforce?: boolean;
     backend?: string;
     // Legacy single-slot image field; read-only fallback. The per-
     // backend fields below are authoritative when set so switching

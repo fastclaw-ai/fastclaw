@@ -185,7 +185,11 @@ type PrefsCfg struct {
 // per-backend field is empty (migration path for configs predating the
 // split).
 type SandboxCfg struct {
-	Enabled         bool   `json:"enabled"`
+	Enabled bool `json:"enabled"`
+	// Enforce makes the sandbox a hard boundary on self-hosted installs:
+	// every exec runs inside it, instead of the host being the default
+	// and the sandbox an opt-in per call. Hosted deploys always enforce.
+	Enforce         bool   `json:"enforce,omitempty"`
 	Image           string `json:"image,omitempty"`
 	DockerImage     string `json:"dockerImage,omitempty"`
 	E2BTemplate     string `json:"e2bTemplate,omitempty"`

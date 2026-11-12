@@ -96,6 +96,7 @@ func globalSkillsDirPath() (string, error) {
 // but no executor available" to the user. Pulling the pool up to
 // gateway scope makes the borrow path the default for every UserSpace.
 func buildSystemSandboxPool(cfg config.SandboxCfg, ws workspace.Store) sandbox.ExecutorPool {
+	buildinfo.SetSandboxEnforceSetting(cfg.Enabled && cfg.Enforce)
 	if !cfg.Enabled {
 		return nil
 	}
