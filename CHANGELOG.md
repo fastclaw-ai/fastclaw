@@ -5,6 +5,26 @@ action on upgrade — read those notes before deploying.
 
 ## [Unreleased]
 
+### Changed — custom MCP servers are offered on agents; OAuth is per person
+
+**BREAKING (API):** a custom MCP server is no longer mounted on its adder's
+own turns automatically. Whoever made an agent offers their servers on it
+(`GET/PUT /api/agents/{id}/mcp-servers`), and everyone chatting with that
+agent may use them there. A header server runs on its adder's headers; an
+OAuth server is now added without signing in (`POST /api/mcp-servers` no
+longer answers `oauth_required`; optional `redirectUri` registers the
+client up front), and each person signs in with their own account from a
+link the agent sends in the chat (turn param `__fastclawMCPRedirectURI`).
+`oauth/start` takes only `{serverId, redirectUri}`; `oauth/finish` with the
+account's own key and no end user finishes it for the end user who started
+it. The list shows `signIn` and `agentIds` instead of `needsReauth`. Tables
+`user_mcp_tokens` and `user_mcp_agent_servers` are created at boot, and an
+adder's tokens saved on a server row move to their own sign-in.
+
+An app's end users may now use their own connected accounts on **any** of
+the app's agents in their 1:1 chats, not only their own and the ones marked
+`endUserConnectors` (which no longer matters).
+
 ### Added — OAuth for custom MCP servers
 
 A custom MCP server that asks for OAuth (401 with a `resource_metadata`

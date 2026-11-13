@@ -15,8 +15,9 @@ import (
 
 // EndUserConnectorGate reports whether chatterUID — an end user of the
 // account that owns agentID (X-Fastclaw-End-User) — may use their own
-// connected accounts on that agent: it is one of THEIR agents, so its
-// instructions are theirs. The gateway decides from the agent record.
+// connected accounts (and the custom MCP servers it offers) on that
+// agent. The gateway decides from the agent record: any agent of the
+// account.
 type EndUserConnectorGate func(ctx context.Context, agentID, chatterUID string) bool
 
 // ConnectorsURLParam is the turn param (set by the calling product's
@@ -36,14 +37,14 @@ const ConnectorsReturnURLParam = "__fastclawConnectorsReturnURL"
 // on those accounts for the system prompt ("" when nothing applies).
 //
 // Two cases, both a 1:1 conversation whose only reader is the accounts'
-// owner, on an agent whose instructions are theirs:
+// owner, who authorized them:
 //   - a web turn whose chatter owns this agent;
-//   - an end user's own turn (web or API) on an agent the account marked
-//     as theirs (EndUserConnectorGate), e.g. WeClaw's "my agents".
+//   - an end user's own turn (web or API) on one of the account's agents
+//     (EndUserConnectorGate), e.g. any WeClaw agent.
 //
-// IM channels, groups, cron and other people's agents never get them — an
-// agent someone else set up runs on their instructions and could carry
-// what it reads elsewhere (docs/connectors.md).
+// Fastclaw's own IM channels, groups and cron never get them: nobody
+// there is the single reader who authorized the accounts
+// (docs/connectors.md).
 func (a *Agent) mountConnectors(ctx context.Context, msg bus.InboundMessage, chatterUID, sessionKey string) string {
 	if a.registry == nil {
 		return ""

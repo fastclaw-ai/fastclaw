@@ -18,10 +18,9 @@ import "strings"
 const (
 	AgentCfgEndUserVisibility = "endUserVisibility"
 	AgentCfgEndUserOwner      = "endUserOwner"
-	// AgentCfgEndUserConnectors (bool): the account vouches for this
-	// agent's instructions (its own official agent), so any end user may
-	// use their own connected accounts on it in their 1:1 chat. Unset:
-	// only the end user it belongs to (endUserOwner).
+	// AgentCfgEndUserConnectors (bool): formerly opened an agent to every
+	// end user's connected accounts. Every agent of the account is open
+	// now (gateway endUserConnectorGate); kept so old writes still parse.
 	AgentCfgEndUserConnectors = "endUserConnectors"
 
 	EndUserVisibilityPublic  = "public"

@@ -91,17 +91,17 @@ func TestAddListCallDelete(t *testing.T) {
 			svc := newTestService(t, ts)
 			ctx := context.Background()
 
-			if _, err := svc.Add(ctx, "u1", "Mine", ts.URL, map[string]string{"Authorization": "Bearer wrong"}); Code(err) != "unauthorized" {
+			if _, err := svc.Add(ctx, "u1", "Mine", ts.URL, map[string]string{"Authorization": "Bearer wrong"}, nil); Code(err) != "unauthorized" {
 				t.Fatalf("bad key: got %v", err)
 			}
-			srv, err := svc.Add(ctx, "u1", "Mine", ts.URL, map[string]string{"Authorization": "Bearer secret"})
+			srv, err := svc.Add(ctx, "u1", "Mine", ts.URL, map[string]string{"Authorization": "Bearer secret"}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if srv.ToolCount != 2 {
 				t.Fatalf("toolCount = %d", srv.ToolCount)
 			}
-			if _, err := svc.Add(ctx, "u1", "mine", ts.URL, map[string]string{"Authorization": "Bearer secret"}); Code(err) != "name_taken" {
+			if _, err := svc.Add(ctx, "u1", "mine", ts.URL, map[string]string{"Authorization": "Bearer secret"}, nil); Code(err) != "name_taken" {
 				t.Fatalf("duplicate name: got %v", err)
 			}
 
@@ -117,25 +117,25 @@ func TestAddListCallDelete(t *testing.T) {
 				t.Fatalf("list = %+v", list)
 			}
 
-			out, err := svc.Call(ctx, list[0], "search", nil, nil)
+			out, err := svc.Call(ctx, list[0], "u1", "search", nil, nil)
 			if err != nil || out != "ran search" {
 				t.Fatalf("read call: %q %v", out, err)
 			}
 			// A tool not marked read-only never runs without an approval.
-			if _, err := svc.Call(ctx, list[0], "delete", nil, nil); Code(err) != "write_not_allowed" {
+			if _, err := svc.Call(ctx, list[0], "u1", "delete", nil, nil); Code(err) != "write_not_allowed" {
 				t.Fatalf("write without approval: %v", err)
 			}
 			denied := errors.New("no")
-			if _, err := svc.Call(ctx, list[0], "delete", nil, func(context.Context, ToolDef) error { return denied }); !errors.Is(err, denied) {
+			if _, err := svc.Call(ctx, list[0], "u1", "delete", nil, func(context.Context, ToolDef) error { return denied }); !errors.Is(err, denied) {
 				t.Fatalf("declined write: %v", err)
 			}
 			if calls.Load() != 1 {
 				t.Fatalf("calls = %d, want only the read", calls.Load())
 			}
-			if _, err := svc.Call(ctx, list[0], "delete", nil, func(context.Context, ToolDef) error { return nil }); err != nil {
+			if _, err := svc.Call(ctx, list[0], "u1", "delete", nil, func(context.Context, ToolDef) error { return nil }); err != nil {
 				t.Fatalf("approved write: %v", err)
 			}
-			if _, err := svc.Call(ctx, list[0], "nope", nil, nil); Code(err) != "tool_not_found" {
+			if _, err := svc.Call(ctx, list[0], "u1", "nope", nil, nil); Code(err) != "tool_not_found" {
 				t.Fatalf("unknown tool: %v", err)
 			}
 
@@ -205,11 +205,11 @@ func TestUpdate(t *testing.T) {
 	ctx := context.Background()
 	auth := map[string]string{"Authorization": "Bearer secret"}
 
-	a, err := svc.Add(ctx, "u1", "A", ts.URL, auth)
+	a, err := svc.Add(ctx, "u1", "A", ts.URL, auth, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.Add(ctx, "u1", "B", ts.URL, auth); err != nil {
+	if _, err := svc.Add(ctx, "u1", "B", ts.URL, auth, nil); err != nil {
 		t.Fatal(err)
 	}
 

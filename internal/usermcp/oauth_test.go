@@ -140,42 +140,67 @@ func TestOAuthFlow(t *testing.T) {
 	mcpURL := f.URL + "/mcp"
 	redirect := "https://app.example/api/connectors/mcp/oauth/callback"
 
-	// Adding it plainly says it needs OAuth.
-	if _, err := svc.Add(ctx, "u1", "Galactic", mcpURL, nil); Code(err) != "oauth_required" {
-		t.Fatalf("plain add: %v", err)
+	// The adder saves it without signing in.
+	srv, err := svc.Add(ctx, "owner", "Galactic", mcpURL, nil, &OAuthClient{RedirectURI: redirect, ClientName: "WeClaw"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := svc.StartOAuth(ctx, "u1", OAuthStart{Name: "G", URL: mcpURL, RedirectURI: "javascript:alert(1)"}); Code(err) != "invalid_redirect" {
+	if srv.Auth() != "oauth" || svc.TokenStatus(ctx, srv, "owner") != "none" {
+		t.Fatalf("added = %+v", srv)
+	}
+	// Offered on the owner's agent; someone else's servers can't be.
+	if _, err := svc.SetAgentServers(ctx, "owner", "agent-1", []string{srv.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SetAgentServers(ctx, "u2", "agent-2", []string{srv.ID}); Code(err) != "not_found" {
+		t.Fatalf("foreign offer: %v", err)
+	}
+	offered, _ := svc.AgentServers(ctx, "agent-1")
+	if len(offered) != 1 || offered[0].ID != srv.ID {
+		t.Fatalf("offered = %+v", offered)
+	}
+	srv = offered[0]
+
+	// A chatter who never signed in is asked to.
+	if _, err := svc.Tools(ctx, srv, "u1"); Code(err) != "auth_needed" {
+		t.Fatalf("before sign-in: %v", err)
+	}
+	if _, err := svc.StartOAuth(ctx, "u1", srv, "javascript:alert(1)", ""); Code(err) != "invalid_redirect" {
 		t.Fatalf("bad redirect: %v", err)
 	}
-
-	authURL, err := svc.StartOAuth(ctx, "u1", OAuthStart{Name: "Galactic", URL: mcpURL, RedirectURI: redirect, ClientName: "WeClaw"})
+	authURL, err := svc.StartOAuth(ctx, "u1", srv, redirect, "WeClaw")
 	if err != nil {
 		t.Fatal(err)
 	}
 	code, state := f.authorize(t, authURL, redirect)
 
-	// Someone else can't finish it.
-	if _, err := svc.FinishOAuth(ctx, "u2", state, code); Code(err) != "oauth_expired" {
+	// Someone else can't finish it, nor can a link-open the app refuses.
+	if _, err := svc.FinishOAuth(ctx, "u2", state, code, nil); Code(err) != "oauth_expired" {
 		t.Fatalf("other user finished: %v", err)
 	}
-	srv, err := svc.FinishOAuth(ctx, "u1", state, code)
-	if err != nil {
+	if _, err := svc.FinishOAuth(ctx, "", state, code, nil); Code(err) != "unauthorized" {
+		t.Fatalf("no accept: %v", err)
+	}
+	// Opened from a chat: the app vouches for the user who started it.
+	if _, err := svc.FinishOAuth(ctx, "", state, code, func(uid string) bool { return uid == "u1" }); err != nil {
 		t.Fatal(err)
 	}
-	if srv.Auth() != "oauth" || srv.ToolCount != 1 || srv.NeedsReauth() {
-		t.Fatalf("saved = %+v", srv)
-	}
-	// A state works once.
-	if _, err := svc.FinishOAuth(ctx, "u1", state, code); Code(err) != "oauth_expired" {
+	if _, err := svc.FinishOAuth(ctx, "u1", state, code, nil); Code(err) != "oauth_expired" {
 		t.Fatalf("state reused: %v", err)
 	}
-
-	list, _ := svc.List(ctx, "u1")
-	if len(list) != 1 || list[0].OAuth == nil || list[0].OAuth.AccessToken == "" || list[0].OAuth.ClientID != "client-1" {
-		t.Fatalf("list = %+v", list)
+	if svc.TokenStatus(ctx, srv, "u1") != "ok" || svc.TokenStatus(ctx, srv, "owner") != "none" {
+		t.Fatal("u1's sign-in is theirs alone")
 	}
-	if out, err := svc.Call(ctx, list[0], "search", nil, nil); err != nil || out != "found" {
+	if out, err := svc.Call(ctx, srv, "u1", "search", nil, nil); err != nil || out != "found" {
 		t.Fatalf("call: %q %v", out, err)
+	}
+	if _, err := svc.Call(ctx, srv, "owner", "search", nil, nil); Code(err) != "auth_needed" {
+		t.Fatalf("owner without sign-in: %v", err)
+	}
+	// The client was registered once, for everyone.
+	saved, _, _ := svc.Server(ctx, srv.ID)
+	if saved.OAuth.ClientID != "client-1" || saved.OAuth.AccessToken != "" || saved.ToolCount != 1 {
+		t.Fatalf("server row = %+v", saved.OAuth)
 	}
 
 	// The server stops accepting the token: one refresh, then it works.
@@ -185,31 +210,29 @@ func TestOAuthFlow(t *testing.T) {
 	svc.mu.Lock()
 	svc.tools = map[string]toolsEntry{}
 	svc.mu.Unlock()
-	if out, err := svc.Call(ctx, list[0], "search", nil, nil); err != nil || out != "found" {
+	if out, err := svc.Call(ctx, srv, "u1", "search", nil, nil); err != nil || out != "found" {
 		t.Fatalf("call after refresh: %q %v", out, err)
 	}
 	if f.refreshes != 1 {
 		t.Fatalf("refreshes = %d", f.refreshes)
 	}
-	// The refreshed tokens are saved.
-	list, _ = svc.List(ctx, "u1")
+	tok, _ := svc.st.getToken(ctx, srv.ID, "u1")
 	f.mu.Lock()
-	saved := list[0].OAuth.AccessToken == f.access && list[0].OAuth.RefreshToken == f.refresh
+	ok := tok != nil && tok.AccessToken == f.access && tok.RefreshToken == f.refresh
 	f.mu.Unlock()
-	if !saved {
-		t.Fatalf("refreshed tokens not saved: %+v", list[0].OAuth)
+	if !ok {
+		t.Fatalf("refreshed tokens not saved: %+v", tok)
 	}
 
 	// An expiring token refreshes before use.
-	svc.forgetToken(list[0].ID)
-	list[0].OAuth.ExpiresAt = time.Now().UnixMilli()
-	_ = svc.st.setOAuth(ctx, list[0].ID, list[0].OAuth)
-	list, _ = svc.List(ctx, "u1")
-	if _, err := svc.headersFor(ctx, list[0], false); err != nil || f.refreshes != 2 {
+	svc.forgetTokens(srv.ID)
+	tok.ExpiresAt = time.Now().UnixMilli()
+	_ = svc.st.putToken(ctx, srv.ID, "u1", tok)
+	if _, err := svc.headersFor(ctx, srv, "u1", false); err != nil || f.refreshes != 2 {
 		t.Fatalf("expiring: %v refreshes=%d", err, f.refreshes)
 	}
 
-	// Refresh refused: the server needs a new authorization.
+	// Refresh refused: they need to sign in again.
 	f.mu.Lock()
 	f.access = "gone"
 	f.refuseRef = true
@@ -217,45 +240,68 @@ func TestOAuthFlow(t *testing.T) {
 	svc.mu.Lock()
 	svc.tools = map[string]toolsEntry{}
 	svc.mu.Unlock()
-	list, _ = svc.List(ctx, "u1")
-	if _, err := svc.Call(ctx, list[0], "search", nil, nil); Code(err) != "reauth_required" {
+	if _, err := svc.Call(ctx, srv, "u1", "search", nil, nil); Code(err) != "reauth_required" {
 		t.Fatalf("broken refresh: %v", err)
 	}
-	list, _ = svc.List(ctx, "u1")
-	if !list[0].NeedsReauth() {
-		t.Fatalf("not marked broken: %+v", list[0].OAuth)
+	if svc.TokenStatus(ctx, srv, "u1") != "broken" {
+		t.Fatal("not marked broken")
 	}
 
-	// Re-authorizing the same server fixes it, and keeps one server.
+	// Signing in again fixes it.
 	f.mu.Lock()
 	f.refuseRef = false
 	f.mu.Unlock()
-	authURL, err = svc.StartOAuth(ctx, "u1", OAuthStart{ServerID: list[0].ID, RedirectURI: redirect})
+	authURL, err = svc.StartOAuth(ctx, "u1", srv, redirect, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	code, state = f.authorize(t, authURL, redirect)
-	if _, err := svc.FinishOAuth(ctx, "u1", state, code); err != nil {
+	if _, err := svc.FinishOAuth(ctx, "u1", state, code, nil); err != nil {
 		t.Fatal(err)
 	}
-	list, _ = svc.List(ctx, "u1")
-	if len(list) != 1 || list[0].NeedsReauth() {
-		t.Fatalf("after reauth: %+v", list)
-	}
-	if out, err := svc.Call(ctx, list[0], "search", nil, nil); err != nil || out != "found" {
-		t.Fatalf("call after reauth: %q %v", out, err)
+	if out, err := svc.Call(ctx, srv, "u1", "search", nil, nil); err != nil || out != "found" {
+		t.Fatalf("call after sign-in: %q %v", out, err)
 	}
 
 	// An OAuth server can be renamed but not moved.
-	if _, err := svc.Update(ctx, "u1", list[0].ID, "Renamed", mcpURL, nil); err != nil {
+	if _, err := svc.Update(ctx, "owner", srv.ID, "Renamed", mcpURL, nil); err != nil {
 		t.Fatalf("rename: %v", err)
 	}
-	if _, err := svc.Update(ctx, "u1", list[0].ID, "Renamed", f.URL+"/other", nil); Code(err) != "invalid_url" {
+	if _, err := svc.Update(ctx, "owner", srv.ID, "Renamed", f.URL+"/other", nil); Code(err) != "invalid_url" {
 		t.Fatalf("move: %v", err)
 	}
-	// u2 can't re-authorize u1's server.
-	if _, err := svc.StartOAuth(ctx, "u2", OAuthStart{ServerID: list[0].ID, RedirectURI: redirect}); Code(err) != "not_found" {
-		t.Fatalf("u2 reauth: %v", err)
+
+	// Deleting it takes its offers and everyone's sign-ins with it.
+	if err := svc.Delete(ctx, "owner", srv.ID); err != nil {
+		t.Fatal(err)
+	}
+	if offered, _ := svc.AgentServers(ctx, "agent-1"); len(offered) != 0 {
+		t.Fatalf("still offered: %+v", offered)
+	}
+	if tok, _ := svc.st.getToken(ctx, srv.ID, "u1"); tok != nil {
+		t.Fatal("sign-in kept")
+	}
+}
+
+func TestMoveOwnerTokens(t *testing.T) {
+	f := newFakeOAuthMCP(t)
+	svc := newTestService(t, f.Server)
+	ctx := context.Background()
+	srv, err := svc.Add(ctx, "owner", "Old", f.URL+"/mcp", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// As saved before sign-ins were per person: tokens on the row.
+	old := *srv.OAuth
+	old.ClientID, old.AccessToken, old.RefreshToken = "client-1", "a", "r"
+	_ = svc.st.setOAuth(ctx, srv.ID, &old)
+	if err := svc.st.moveOwnerTokens(ctx); err != nil {
+		t.Fatal(err)
+	}
+	row, _, _ := svc.Server(ctx, srv.ID)
+	tok, _ := svc.st.getToken(ctx, srv.ID, "owner")
+	if row.OAuth.AccessToken != "" || row.OAuth.ClientID != "client-1" || tok == nil || tok.AccessToken != "a" {
+		t.Fatalf("row=%+v tok=%+v", row.OAuth, tok)
 	}
 }
 
@@ -263,7 +309,7 @@ func TestDiscoverPlainServer(t *testing.T) {
 	ts := fakeMCP(t, false, new(atomic.Int32))
 	svc := newTestService(t, ts)
 	// A 401 without an OAuth challenge stays "unauthorized".
-	if _, err := svc.Add(context.Background(), "u1", "A", ts.URL, nil); Code(err) != "unauthorized" {
+	if _, err := svc.Add(context.Background(), "u1", "A", ts.URL, nil, nil); Code(err) != "unauthorized" {
 		t.Fatalf("plain 401: %v", err)
 	}
 }

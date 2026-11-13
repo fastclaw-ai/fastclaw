@@ -7,9 +7,9 @@ import (
 	"github.com/fastclaw-ai/fastclaw/internal/store"
 )
 
-// An end user's connected accounts reach only the account's agents marked
-// as theirs or as the account's official ones (endUserConnectors): not other public agents (someone else's instructions), not another
-// end user's, not from another chatter or outside an end user's space.
+// An end user's connected accounts reach every agent of the app (and
+// their own), in their own chat: not another account's agents, not from
+// another chatter or outside an end user's space.
 func TestEndUserConnectorGate(t *testing.T) {
 	st := privateAgentFixture(t)
 	ctx := context.Background()
@@ -18,9 +18,9 @@ func TestEndUserConnectorGate(t *testing.T) {
 		{ID: "agt_mine", UserID: "app", Name: "Mine", Config: map[string]any{store.AgentCfgEndUserVisibility: store.EndUserVisibilityPublic, store.AgentCfgEndUserOwner: "user:alice"}},
 		{ID: "agt_draft", UserID: "app", Name: "Draft", Config: map[string]any{store.AgentCfgEndUserVisibility: store.EndUserVisibilityPrivate, store.AgentCfgEndUserOwner: "user:alice"}},
 		{ID: "agt_bob", UserID: "app", Name: "Bob's", Config: map[string]any{store.AgentCfgEndUserOwner: "user:bob"}},
-		// The app's official agent: every end user's accounts.
+		// The flag no longer matters: every app agent is open.
 		{ID: "agt_official", UserID: "app", Name: "拽姐", Config: map[string]any{store.AgentCfgEndUserVisibility: store.EndUserVisibilityPublic, store.AgentCfgEndUserOwner: "user:staff", store.AgentCfgEndUserConnectors: true}},
-		// The flag only counts on the app's own agents.
+		// Another account's agent stays closed.
 		{ID: "agt_other_official", UserID: "u_bob", Name: "Other", Config: map[string]any{store.AgentCfgEndUserConnectors: true}},
 	} {
 		a := a
@@ -38,9 +38,11 @@ func TestEndUserConnectorGate(t *testing.T) {
 	}{
 		{"agt_mine", "u_alice", true},
 		{"agt_draft", "u_alice", true},
-		{"agt_pub", "u_alice", false},
-		{"agt_bob", "u_alice", false},
-		{"agt_plat", "u_alice", false},
+		{"agt_pub", "u_alice", true},
+		{"agt_bob", "u_alice", true},
+		{"agt_plat", "u_alice", true},
+		{"agt_a1", "u_alice", true},
+		{"agt_b1", "u_alice", false},
 		{"agt_mine", "u_bob", false},
 		{"agt_official", "u_alice", true},
 		{"agt_official", "u_bob", false},

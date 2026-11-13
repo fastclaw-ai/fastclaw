@@ -1,7 +1,11 @@
 // Package usermcp holds the MCP servers a person added themselves
-// (Console / WeClaw → Connectors → Custom MCP). A server belongs to the
-// one user who added it: only that user's own turns can use it, under the
-// same rules as their connected accounts (docs/connectors.md).
+// (WeClaw → Connectors → Custom MCP). A server belongs to the one user who
+// added it, who offers it on agents they made (SetAgentServers): everyone
+// chatting with such an agent may use it there, under the same turn rules
+// as their connected accounts (docs/connectors.md).
+//
+// A server with headers (an API key) runs on the adder's headers for
+// everyone. An OAuth server runs on each person's own sign-in.
 package usermcp
 
 import (
@@ -50,7 +54,7 @@ type Server struct {
 	Name      string            `json:"name"`
 	URL       string            `json:"url"`
 	Headers   map[string]string `json:"-"` // values never leave the server
-	OAuth     *OAuth            `json:"-"` // set for a server authorized with OAuth
+	OAuth     *OAuth            `json:"-"` // its OAuth client; set for a server that signs in with OAuth
 	ToolCount int               `json:"toolCount"`
 	CreatedAt int64             `json:"createdAt"`
 }
@@ -62,10 +66,6 @@ func (s Server) Auth() string {
 	}
 	return "headers"
 }
-
-// NeedsReauth: its OAuth tokens stopped working; the person must
-// authorize again.
-func (s Server) NeedsReauth() bool { return s.OAuth != nil && s.OAuth.Broken }
 
 // HeaderNames lists the header names (values stay secret).
 func (s Server) HeaderNames() []string {
@@ -172,9 +172,19 @@ func Normalize(name, rawURL string, headers map[string]string) (string, string, 
 	return name, u.String(), clean, nil
 }
 
+// OAuthClient is where a product sends people back after signing in to
+// an OAuth server, and the name it registers there.
+type OAuthClient struct {
+	RedirectURI string
+	ClientName  string
+}
+
 // Add checks the server answers as MCP (initialize + tools/list), then
-// saves it for userID.
-func (s *Service) Add(ctx context.Context, userID, name, rawURL string, headers map[string]string) (Server, error) {
+// saves it for userID. A server that asks for OAuth is saved without
+// signing in (each person signs in when they use it); with client set,
+// its client is registered now, so a server that won't take this app
+// says so here rather than to the first person who tries it.
+func (s *Service) Add(ctx context.Context, userID, name, rawURL string, headers map[string]string, client *OAuthClient) (Server, error) {
 	if userID == "" {
 		return Server{}, &Error{Code: "unauthorized"}
 	}
@@ -194,21 +204,40 @@ func (s *Service) Add(ctx context.Context, userID, name, rawURL string, headers 
 			return Server{}, &Error{Code: "name_taken"}
 		}
 	}
+	srv := Server{ID: "mcp_" + strings.ReplaceAll(uuid.NewString(), "-", ""), Name: name, URL: u, Headers: headers, CreatedAt: time.Now().UnixMilli()}
 	sess, err := dial(ctx, u, headers)
 	if err != nil {
-		// A server that asks for OAuth is added through StartOAuth.
-		if Code(err) == "unauthorized" {
-			if _, derr := discover(ctx, u); derr == nil {
-				return Server{}, &Error{Code: "oauth_required"}
-			}
+		if Code(err) != "unauthorized" {
+			return Server{}, err
 		}
-		return Server{}, err
+		// It asks for OAuth: saved as is. Each person signs in with their
+		// own account when they first use it; the adder needn't.
+		d, derr := discover(ctx, u)
+		if derr != nil {
+			return Server{}, err // a plain 401: the key is wrong
+		}
+		srv.OAuth = oauthConfig(d)
+		if client != nil {
+			if !validRedirect(client.RedirectURI) {
+				return Server{}, &Error{Code: "invalid_redirect"}
+			}
+			reg, err := register(ctx, d, client.RedirectURI, clientName(client.ClientName))
+			if err != nil {
+				return Server{}, err
+			}
+			reg.RedirectURI = client.RedirectURI
+			srv.OAuth = reg
+		}
+		if err := s.st.insert(ctx, userID, srv); err != nil {
+			return Server{}, err
+		}
+		return srv, nil
 	}
 	tools, err := sess.listTools(ctx)
 	if err != nil {
 		return Server{}, err
 	}
-	srv := Server{ID: "mcp_" + strings.ReplaceAll(uuid.NewString(), "-", ""), Name: name, URL: u, Headers: headers, ToolCount: len(tools), CreatedAt: time.Now().UnixMilli()}
+	srv.ToolCount = len(tools)
 	if err := s.st.insert(ctx, userID, srv); err != nil {
 		return Server{}, err
 	}
@@ -240,7 +269,8 @@ func (s *Service) Update(ctx context.Context, userID, id, name, rawURL string, h
 		return Server{}, &Error{Code: "not_found"}
 	}
 	if cur.OAuth != nil {
-		// Its tokens belong to this address: only the name changes.
+		// Its client and everyone's sign-ins belong to this address:
+		// only the name changes.
 		if strings.TrimSpace(rawURL) != cur.URL {
 			return Server{}, &Error{Code: "invalid_url", Detail: "an OAuth server's address can't change"}
 		}
@@ -316,10 +346,87 @@ func (s *Service) Delete(ctx context.Context, userID, id string) error {
 		return &Error{Code: "not_found"}
 	}
 	s.mu.Lock()
-	delete(s.tools, id)
+	for k := range s.tools {
+		if k == id || strings.HasPrefix(k, id+"\x00") {
+			delete(s.tools, k)
+		}
+	}
 	s.mu.Unlock()
-	s.forgetToken(id)
+	s.forgetTokens(id)
 	return nil
+}
+
+// ── offered on agents ──────────────────────────────────────────────────
+
+// MaxAgentServers caps the servers offered on one agent.
+const MaxAgentServers = MaxServers
+
+// SetAgentServers makes ids (servers ownerID added) the custom MCP servers
+// offered on agentID, replacing what it had. The caller checks ownerID
+// made the agent.
+func (s *Service) SetAgentServers(ctx context.Context, ownerID, agentID string, ids []string) ([]string, error) {
+	if ownerID == "" || agentID == "" {
+		return nil, &Error{Code: "unauthorized"}
+	}
+	own, err := s.st.list(ctx, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	mine := map[string]bool{}
+	for _, srv := range own {
+		mine[srv.ID] = true
+	}
+	seen := map[string]bool{}
+	clean := []string{}
+	for _, id := range ids {
+		if seen[id] {
+			continue
+		}
+		if !mine[id] {
+			return nil, &Error{Code: "not_found", Detail: id}
+		}
+		seen[id] = true
+		clean = append(clean, id)
+	}
+	if len(clean) > MaxAgentServers {
+		return nil, &Error{Code: "too_many"}
+	}
+	if err := s.st.setAgentServers(ctx, agentID, clean); err != nil {
+		return nil, err
+	}
+	return clean, nil
+}
+
+// AgentServerIDs are the servers offered on agentID.
+func (s *Service) AgentServerIDs(ctx context.Context, agentID string) ([]string, error) {
+	return s.st.agentServerIDs(ctx, agentID)
+}
+
+// AgentServers are the servers offered on agentID, oldest first.
+func (s *Service) AgentServers(ctx context.Context, agentID string) ([]Server, error) {
+	if agentID == "" {
+		return nil, nil
+	}
+	return s.st.agentServers(ctx, agentID)
+}
+
+// ServerAgents maps each of ownerID's servers to the agents it's offered on.
+func (s *Service) ServerAgents(ctx context.Context, ownerID string) (map[string][]string, error) {
+	return s.st.serverAgents(ctx, ownerID)
+}
+
+// Server is one server by id, whoever added it (nil when there is none),
+// and who added it.
+func (s *Service) Server(ctx context.Context, id string) (*Server, string, error) {
+	return s.st.get(ctx, id)
+}
+
+// toolsKey: an OAuth server lists what the person signed in may see.
+func toolsKey(srv Server, userID string) string {
+	if srv.OAuth == nil {
+		return srv.ID
+	}
+	return tokenKey(srv.ID, userID)
 }
 
 func (s *Service) remember(id string, tools []ToolDef) {
@@ -334,15 +441,17 @@ func (s *Service) remember(id string, tools []ToolDef) {
 	s.tools[id] = toolsEntry{at: now, tools: tools}
 }
 
-// Tools lists a server's tools (cached for a few minutes).
-func (s *Service) Tools(ctx context.Context, srv Server) ([]ToolDef, error) {
+// Tools lists a server's tools as userID sees them (cached for a few
+// minutes). An OAuth server answers auth_needed until they sign in.
+func (s *Service) Tools(ctx context.Context, srv Server, userID string) ([]ToolDef, error) {
+	key := toolsKey(srv, userID)
 	s.mu.Lock()
-	e, ok := s.tools[srv.ID]
+	e, ok := s.tools[key]
 	s.mu.Unlock()
 	if ok && time.Since(e.at) < toolsTTL {
 		return e.tools, nil
 	}
-	sess, err := s.dialFor(ctx, srv)
+	sess, err := s.dialFor(ctx, srv, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -350,7 +459,7 @@ func (s *Service) Tools(ctx context.Context, srv Server) ([]ToolDef, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.remember(srv.ID, tools)
+	s.remember(key, tools)
 	return tools, nil
 }
 
@@ -361,8 +470,8 @@ type Approve func(ctx context.Context, def ToolDef) error
 // tool list, so a tool can't be called under another's read-only flag. A
 // tool not marked read-only runs only when approve allows it (nil
 // approve: refused).
-func (s *Service) Call(ctx context.Context, srv Server, tool string, args map[string]any, approve Approve) (string, error) {
-	tools, err := s.Tools(ctx, srv)
+func (s *Service) Call(ctx context.Context, srv Server, userID, tool string, args map[string]any, approve Approve) (string, error) {
+	tools, err := s.Tools(ctx, srv, userID)
 	if err != nil {
 		return "", err
 	}
@@ -384,7 +493,7 @@ func (s *Service) Call(ctx context.Context, srv Server, tool string, args map[st
 			return "", err
 		}
 	}
-	sess, err := s.dialFor(ctx, srv)
+	sess, err := s.dialFor(ctx, srv, userID)
 	if err != nil {
 		return "", err
 	}
@@ -404,6 +513,13 @@ var schema = []string{
 		created_at BIGINT NOT NULL
 	)`,
 	`CREATE INDEX IF NOT EXISTS user_mcp_servers_user ON user_mcp_servers (user_id)`,
+	// The servers offered on an agent (all added by whoever made it).
+	`CREATE TABLE IF NOT EXISTS user_mcp_agent_servers (
+		agent_id TEXT NOT NULL,
+		server_id TEXT NOT NULL,
+		PRIMARY KEY (agent_id, server_id)
+	)`,
+	`CREATE INDEX IF NOT EXISTS user_mcp_agent_servers_server ON user_mcp_agent_servers (server_id)`,
 }
 
 type sqlStore struct {
@@ -420,6 +536,9 @@ func newSQLStore(ctx context.Context, d DB) (*sqlStore, error) {
 	}
 	if err := s.addOAuthColumn(ctx); err != nil {
 		return nil, fmt.Errorf("usermcp schema: %w", err)
+	}
+	if err := s.moveOwnerTokens(ctx); err != nil {
+		return nil, fmt.Errorf("usermcp tokens: %w", err)
 	}
 	return s, nil
 }
@@ -441,26 +560,106 @@ func (s *sqlStore) rebind(q string) string {
 	return b.String()
 }
 
-func (s *sqlStore) list(ctx context.Context, userID string) ([]Server, error) {
-	rows, err := s.db.QueryContext(ctx, s.rebind(
-		`SELECT id, name, url, headers, oauth, tool_count, created_at FROM user_mcp_servers WHERE user_id = ? ORDER BY created_at, id`), userID)
-	if err != nil {
-		return nil, err
-	}
+const serverCols = `s.id, s.name, s.url, s.headers, s.oauth, s.tool_count, s.created_at, s.user_id`
+
+func scanServers(rows *sql.Rows) ([]Server, []string, error) {
 	defer rows.Close()
 	var out []Server
+	var owners []string
 	for rows.Next() {
 		var srv Server
-		var headers, oauth string
-		if err := rows.Scan(&srv.ID, &srv.Name, &srv.URL, &headers, &oauth, &srv.ToolCount, &srv.CreatedAt); err != nil {
-			return nil, err
+		var headers, oauth, owner string
+		if err := rows.Scan(&srv.ID, &srv.Name, &srv.URL, &headers, &oauth, &srv.ToolCount, &srv.CreatedAt, &owner); err != nil {
+			return nil, nil, err
 		}
 		srv.OAuth = decodeOAuth(oauth)
 		srv.Headers = map[string]string{}
 		_ = json.Unmarshal([]byte(headers), &srv.Headers)
 		out = append(out, srv)
+		owners = append(owners, owner)
+	}
+	return out, owners, rows.Err()
+}
+
+func (s *sqlStore) list(ctx context.Context, userID string) ([]Server, error) {
+	rows, err := s.db.QueryContext(ctx, s.rebind(
+		`SELECT `+serverCols+` FROM user_mcp_servers s WHERE s.user_id = ? ORDER BY s.created_at, s.id`), userID)
+	if err != nil {
+		return nil, err
+	}
+	out, _, err := scanServers(rows)
+	return out, err
+}
+
+func (s *sqlStore) get(ctx context.Context, id string) (*Server, string, error) {
+	rows, err := s.db.QueryContext(ctx, s.rebind(`SELECT `+serverCols+` FROM user_mcp_servers s WHERE s.id = ?`), id)
+	if err != nil {
+		return nil, "", err
+	}
+	out, owners, err := scanServers(rows)
+	if err != nil || len(out) == 0 {
+		return nil, "", err
+	}
+	return &out[0], owners[0], nil
+}
+
+func (s *sqlStore) agentServers(ctx context.Context, agentID string) ([]Server, error) {
+	rows, err := s.db.QueryContext(ctx, s.rebind(
+		`SELECT `+serverCols+` FROM user_mcp_servers s JOIN user_mcp_agent_servers a ON a.server_id = s.id
+		 WHERE a.agent_id = ? ORDER BY s.created_at, s.id`), agentID)
+	if err != nil {
+		return nil, err
+	}
+	out, _, err := scanServers(rows)
+	return out, err
+}
+
+func (s *sqlStore) agentServerIDs(ctx context.Context, agentID string) ([]string, error) {
+	list, err := s.agentServers(ctx, agentID)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(list))
+	for _, srv := range list {
+		ids = append(ids, srv.ID)
+	}
+	return ids, nil
+}
+
+func (s *sqlStore) serverAgents(ctx context.Context, ownerID string) (map[string][]string, error) {
+	rows, err := s.db.QueryContext(ctx, s.rebind(
+		`SELECT a.server_id, a.agent_id FROM user_mcp_agent_servers a JOIN user_mcp_servers s ON s.id = a.server_id
+		 WHERE s.user_id = ? ORDER BY a.agent_id`), ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string][]string{}
+	for rows.Next() {
+		var sid, aid string
+		if err := rows.Scan(&sid, &aid); err != nil {
+			return nil, err
+		}
+		out[sid] = append(out[sid], aid)
 	}
 	return out, rows.Err()
+}
+
+func (s *sqlStore) setAgentServers(ctx context.Context, agentID string, ids []string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM user_mcp_agent_servers WHERE agent_id = ?`), agentID); err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if _, err := tx.ExecContext(ctx, s.rebind(`INSERT INTO user_mcp_agent_servers (agent_id, server_id) VALUES (?, ?)`), agentID, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *sqlStore) insert(ctx context.Context, userID string, srv Server) error {
@@ -493,5 +692,19 @@ func (s *sqlStore) delete(ctx context.Context, userID, id string) (int64, error)
 	if err != nil {
 		return 0, err
 	}
-	return res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil || n == 0 {
+		return n, err
+	}
+	// Its offers on agents and everyone's sign-ins go with it.
+	for _, q := range []string{
+		`DELETE FROM user_mcp_agent_servers WHERE server_id = ?`,
+		`DELETE FROM user_mcp_tokens WHERE server_id = ?`,
+		`DELETE FROM user_mcp_oauth_pending WHERE server_id = ?`,
+	} {
+		if _, err := s.db.ExecContext(ctx, s.rebind(q), id); err != nil {
+			return n, err
+		}
+	}
+	return n, nil
 }

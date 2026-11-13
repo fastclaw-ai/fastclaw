@@ -19,24 +19,26 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
-
-	"github.com/google/uuid"
 )
 
 // OAuth for custom MCP servers (MCP authorization spec, 2025-06-18): a
 // server that answers 401 with a WWW-Authenticate Bearer challenge names
 // its protected-resource metadata, which names the authorization server.
-// We register a public client there (dynamic client registration), send
-// the person through the authorization-code flow with PKCE, and keep the
-// tokens with the server, refreshing them as they expire.
+// We register a public client there (dynamic client registration) and
+// send each person through the authorization-code flow with PKCE.
 //
-// The caller (Console, or a product such as WeClaw) owns the redirect: it
-// asks StartOAuth for the authorization URL with its own redirect URI, and
-// hands the code and state it got back to FinishOAuth. A state is bound to
-// the user who started it and works once.
+// Whoever adds such a server doesn't sign in: it may be offered on their
+// agents to everyone who chats with them, and each person signs in with
+// their own account the first time they use it (a link sent in the chat).
+// The server row keeps the client; each person's tokens are their own
+// (user_mcp_tokens), refreshed as they expire.
+//
+// The caller (a product such as WeClaw) owns the redirect: StartOAuth gets
+// its redirect URI, and the code and state it got back go to FinishOAuth.
+// A state works once.
 
-// OAuth is a server's authorization: the client we registered and the
-// tokens we hold. Never sent to the UI.
+// OAuth is a server's client (on the server row) or, with tokens, one
+// person's sign-in (user_mcp_tokens). Never sent to the UI.
 type OAuth struct {
 	Issuer        string `json:"issuer,omitempty"`
 	TokenEndpoint string `json:"tokenEndpoint"`
@@ -44,7 +46,9 @@ type OAuth struct {
 	ClientSecret  string `json:"clientSecret,omitempty"`
 	// AuthMethod is how the client authenticates at the token endpoint:
 	// "none", "client_secret_post" or "client_secret_basic".
-	AuthMethod   string `json:"authMethod,omitempty"`
+	AuthMethod string `json:"authMethod,omitempty"`
+	// RedirectURI is the one the client was registered with.
+	RedirectURI  string `json:"redirectUri,omitempty"`
 	Resource     string `json:"resource,omitempty"`
 	Scope        string `json:"scope,omitempty"`
 	AccessToken  string `json:"accessToken"`
@@ -411,16 +415,6 @@ func pkceChallenge(verifier string) string {
 
 // ── the flow ───────────────────────────────────────────────────────────
 
-// OAuthStart is what StartOAuth needs. ServerID set re-authorizes one of
-// the user's servers; otherwise Name and URL describe a new one.
-type OAuthStart struct {
-	ServerID    string
-	Name        string
-	URL         string
-	RedirectURI string
-	ClientName  string
-}
-
 type pendingData struct {
 	OAuth       OAuth  `json:"oauth"`
 	Verifier    string `json:"verifier"`
@@ -442,62 +436,68 @@ func validRedirect(raw string) bool {
 	return u.Scheme == "http" && (h == "localhost" || h == "127.0.0.1")
 }
 
-// StartOAuth registers a client with the server's authorization server
-// and returns the URL to send the person to.
-func (s *Service) StartOAuth(ctx context.Context, userID string, in OAuthStart) (string, error) {
+// oauthConfig is what an OAuth server's row keeps: where its
+// authorization server is and the client we registered there — never
+// anyone's tokens (those are per user: user_mcp_tokens).
+func oauthConfig(d *discovered) *OAuth {
+	return &OAuth{Issuer: d.as.Issuer, TokenEndpoint: d.as.TokenEndpoint, Resource: d.resource, Scope: d.scope}
+}
+
+func clientName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" || utf8.RuneCountInString(name) > maxClientName {
+		return "Fastclaw"
+	}
+	return name
+}
+
+func (o OAuth) config() *OAuth {
+	o.AccessToken, o.RefreshToken, o.ExpiresAt, o.Broken = "", "", 0, false
+	return &o
+}
+
+// StartOAuth returns the URL that sends userID to srv's authorization
+// server to sign in with their own account. Anyone the server is
+// available to signs in for themselves; the person who added it needn't.
+// The client is registered on first use (and again for a new redirect URI)
+// and shared by everyone who signs in to srv.
+func (s *Service) StartOAuth(ctx context.Context, userID string, srv Server, redirectURI, name string) (string, error) {
 	if userID == "" {
 		return "", &Error{Code: "unauthorized"}
 	}
-	if !validRedirect(in.RedirectURI) {
+	if srv.OAuth == nil {
+		return "", &Error{Code: "oauth_not_required"}
+	}
+	if !validRedirect(redirectURI) {
 		return "", &Error{Code: "invalid_redirect"}
 	}
-	clientName := strings.TrimSpace(in.ClientName)
-	if clientName == "" || utf8.RuneCountInString(clientName) > maxClientName {
-		clientName = "Fastclaw"
-	}
-	existing, err := s.st.list(ctx, userID)
+	d, err := discover(ctx, srv.URL)
 	if err != nil {
 		return "", err
 	}
-	name, u := "", ""
-	if in.ServerID != "" {
-		for _, e := range existing {
-			if e.ID == in.ServerID {
-				name, u = e.Name, e.URL
-			}
-		}
-		if u == "" {
-			return "", &Error{Code: "not_found"}
-		}
-	} else {
-		name, u, _, err = Normalize(in.Name, in.URL, nil)
+	o := srv.OAuth.config()
+	if o.ClientID == "" || o.RedirectURI != redirectURI || o.TokenEndpoint != d.as.TokenEndpoint {
+		reg, err := register(ctx, d, redirectURI, clientName(name))
 		if err != nil {
 			return "", err
 		}
-		if err := checkNew(existing, name); err != nil {
+		reg.RedirectURI = redirectURI
+		o = reg
+		if err := s.st.setOAuth(ctx, srv.ID, o); err != nil {
 			return "", err
 		}
 	}
-
-	d, err := discover(ctx, u)
-	if err != nil {
-		return "", err
-	}
-	o, err := register(ctx, d, in.RedirectURI, clientName)
-	if err != nil {
-		return "", err
-	}
 	verifier := randomToken(48)
 	state := randomToken(32)
-	data, _ := json.Marshal(pendingData{OAuth: *o, Verifier: verifier, RedirectURI: in.RedirectURI})
-	if err := s.st.putPending(ctx, state, userID, in.ServerID, name, u, string(data), time.Now().Add(pendingTTL).UnixMilli()); err != nil {
+	data, _ := json.Marshal(pendingData{OAuth: *o, Verifier: verifier, RedirectURI: redirectURI})
+	if err := s.st.putPending(ctx, state, userID, srv.ID, srv.Name, srv.URL, string(data), time.Now().Add(pendingTTL).UnixMilli()); err != nil {
 		return "", err
 	}
 
 	q := url.Values{}
 	q.Set("response_type", "code")
 	q.Set("client_id", o.ClientID)
-	q.Set("redirect_uri", in.RedirectURI)
+	q.Set("redirect_uri", redirectURI)
 	q.Set("state", state)
 	q.Set("code_challenge", pkceChallenge(verifier))
 	q.Set("code_challenge_method", "S256")
@@ -516,31 +516,28 @@ func (s *Service) StartOAuth(ctx context.Context, userID string, in OAuthStart) 
 	return authURL, nil
 }
 
-func checkNew(existing []Server, name string) error {
-	if len(existing) >= MaxServers {
-		return &Error{Code: "too_many"}
-	}
-	for _, e := range existing {
-		if strings.EqualFold(e.Name, name) {
-			return &Error{Code: "name_taken"}
-		}
-	}
-	return nil
-}
-
-// FinishOAuth trades the code for tokens, checks the server answers as
-// MCP with them, and saves it (or the new tokens of the server being
-// re-authorized).
-func (s *Service) FinishOAuth(ctx context.Context, userID, state, code string) (Server, error) {
-	if userID == "" {
+// FinishOAuth trades the code for userID's tokens, checks the server
+// answers as MCP with them, and keeps them. userID "" finishes whoever
+// started this state, when accept (required then) allows that user: a
+// link sent in an IM chat is opened in a browser that isn't signed in.
+// A state works once.
+func (s *Service) FinishOAuth(ctx context.Context, userID, state, code string, accept func(userID string) bool) (Server, error) {
+	if userID == "" && accept == nil {
 		return Server{}, &Error{Code: "unauthorized"}
 	}
 	p, err := s.st.takePending(ctx, state, userID)
 	if err != nil {
 		return Server{}, err
 	}
-	if p == nil {
+	if p == nil || (userID == "" && !accept(p.userID)) {
 		return Server{}, &Error{Code: "oauth_expired"}
+	}
+	srv, _, err := s.st.get(ctx, p.serverID)
+	if err != nil {
+		return Server{}, err
+	}
+	if srv == nil || srv.OAuth == nil {
+		return Server{}, &Error{Code: "not_found"}
 	}
 	var data pendingData
 	if err := json.Unmarshal([]byte(p.data), &data); err != nil {
@@ -556,7 +553,7 @@ func (s *Service) FinishOAuth(ctx context.Context, userID, state, code string) (
 		return Server{}, &Error{Code: "oauth_failed", Detail: err.Error()}
 	}
 
-	sess, err := dial(ctx, p.url, bearer(nil, &o))
+	sess, err := dial(ctx, srv.URL, bearer(srv.Headers, &o))
 	if err != nil {
 		return Server{}, err
 	}
@@ -564,40 +561,33 @@ func (s *Service) FinishOAuth(ctx context.Context, userID, state, code string) (
 	if err != nil {
 		return Server{}, err
 	}
+	if err := s.st.putToken(ctx, srv.ID, p.userID, &o); err != nil {
+		return Server{}, err
+	}
+	key := tokenKey(srv.ID, p.userID)
+	s.keepToken(key, &o)
+	s.remember(key, tools)
+	if srv.ToolCount != len(tools) {
+		srv.ToolCount = len(tools)
+		_ = s.st.setToolCount(ctx, srv.ID, len(tools))
+	}
+	return *srv, nil
+}
 
-	existing, err := s.st.list(ctx, userID)
-	if err != nil {
-		return Server{}, err
+// TokenStatus is userID's own sign-in to srv: "" (srv doesn't use
+// OAuth), "none", "ok" or "broken" (they must sign in again).
+func (s *Service) TokenStatus(ctx context.Context, srv Server, userID string) string {
+	if srv.OAuth == nil {
+		return ""
 	}
-	if p.serverID != "" {
-		for _, e := range existing {
-			if e.ID != p.serverID {
-				continue
-			}
-			e.Headers = map[string]string{}
-			e.OAuth = &o
-			e.ToolCount = len(tools)
-			if _, err := s.st.update(ctx, userID, e); err != nil {
-				return Server{}, err
-			}
-			s.forgetToken(e.ID)
-			s.remember(e.ID, tools)
-			return e, nil
-		}
-		return Server{}, &Error{Code: "not_found"}
+	o, err := s.userToken(ctx, srv.ID, userID)
+	switch {
+	case err != nil || o == nil:
+		return "none"
+	case o.Broken:
+		return "broken"
 	}
-	if err := checkNew(existing, p.name); err != nil {
-		return Server{}, err
-	}
-	srv := Server{
-		ID: "mcp_" + strings.ReplaceAll(uuid.NewString(), "-", ""), Name: p.name, URL: p.url,
-		Headers: map[string]string{}, OAuth: &o, ToolCount: len(tools), CreatedAt: time.Now().UnixMilli(),
-	}
-	if err := s.st.insert(ctx, userID, srv); err != nil {
-		return Server{}, err
-	}
-	s.remember(srv.ID, tools)
-	return srv, nil
+	return "ok"
 }
 
 // ── tokens in use ──────────────────────────────────────────────────────
@@ -618,67 +608,86 @@ func bearer(headers map[string]string, o *OAuth) map[string]string {
 	return out
 }
 
-// tokenState is the newest tokens of each OAuth server this process
-// knows, so concurrent turns refresh once and share the result.
+// tokenKey names one person's tokens for one server (also the key of
+// the tools they see there).
+func tokenKey(serverID, userID string) string { return serverID + "\x00" + userID }
+
+// tokenState is the newest tokens this process knows per (server, user),
+// so concurrent turns refresh once and share the result.
 type tokenState struct {
 	mu     sync.Mutex
 	latest map[string]*OAuth
 	locks  map[string]*sync.Mutex
 }
 
-func (s *Service) serverLock(id string) *sync.Mutex {
+func (s *Service) tokenLock(key string) *sync.Mutex {
 	s.tok.mu.Lock()
 	defer s.tok.mu.Unlock()
 	if s.tok.locks == nil {
 		s.tok.locks = map[string]*sync.Mutex{}
-		s.tok.latest = map[string]*OAuth{}
 	}
-	l, ok := s.tok.locks[id]
+	l, ok := s.tok.locks[key]
 	if !ok {
 		l = &sync.Mutex{}
-		s.tok.locks[id] = l
+		s.tok.locks[key] = l
 	}
 	return l
 }
 
-func (s *Service) latestToken(srv Server) *OAuth {
-	s.tok.mu.Lock()
-	defer s.tok.mu.Unlock()
-	if o, ok := s.tok.latest[srv.ID]; ok && o != nil {
-		cp := *o
-		return &cp
-	}
-	cp := *srv.OAuth
-	return &cp
-}
-
-func (s *Service) keepToken(id string, o *OAuth) {
+func (s *Service) keepToken(key string, o *OAuth) {
 	s.tok.mu.Lock()
 	defer s.tok.mu.Unlock()
 	if s.tok.latest == nil {
 		s.tok.latest = map[string]*OAuth{}
 	}
 	cp := *o
-	s.tok.latest[id] = &cp
+	s.tok.latest[key] = &cp
 }
 
-func (s *Service) forgetToken(id string) {
+// forgetTokens drops what this process holds for a server (every user).
+func (s *Service) forgetTokens(serverID string) {
 	s.tok.mu.Lock()
 	defer s.tok.mu.Unlock()
-	delete(s.tok.latest, id)
+	for k := range s.tok.latest {
+		if strings.HasPrefix(k, serverID+"\x00") {
+			delete(s.tok.latest, k)
+		}
+	}
 }
 
-// headersFor is what a request to srv carries: its headers, plus a fresh
-// access token for an OAuth server (refreshed when it is about to expire,
-// or when force is set after the server refused the current one).
-func (s *Service) headersFor(ctx context.Context, srv Server, force bool) (map[string]string, error) {
+// userToken is userID's tokens for a server (nil: they never signed in).
+func (s *Service) userToken(ctx context.Context, serverID, userID string) (*OAuth, error) {
+	if userID == "" {
+		return nil, nil
+	}
+	s.tok.mu.Lock()
+	o, ok := s.tok.latest[tokenKey(serverID, userID)]
+	s.tok.mu.Unlock()
+	if ok && o != nil {
+		cp := *o
+		return &cp, nil
+	}
+	return s.st.getToken(ctx, serverID, userID)
+}
+
+// headersFor is what userID's request to srv carries: its headers, plus
+// userID's own access token for an OAuth server (refreshed when it is
+// about to expire, or when force is set after the server refused it).
+func (s *Service) headersFor(ctx context.Context, srv Server, userID string, force bool) (map[string]string, error) {
 	if srv.OAuth == nil {
 		return srv.Headers, nil
 	}
-	l := s.serverLock(srv.ID)
+	key := tokenKey(srv.ID, userID)
+	l := s.tokenLock(key)
 	l.Lock()
 	defer l.Unlock()
-	o := s.latestToken(srv)
+	o, err := s.userToken(ctx, srv.ID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if o == nil {
+		return nil, &Error{Code: "auth_needed"}
+	}
 	if o.Broken {
 		return nil, &Error{Code: "reauth_required"}
 	}
@@ -693,27 +702,32 @@ func (s *Service) headersFor(ctx context.Context, srv Server, force bool) (map[s
 				// A network or server hiccup: try the current token anyway.
 				return bearer(srv.Headers, o), nil
 			}
+			// Another replica may have refreshed (and rotated) it first.
+			if saved, _ := s.st.getToken(ctx, srv.ID, userID); saved != nil && !saved.Broken && saved.RefreshToken != form.Get("refresh_token") {
+				s.keepToken(key, saved)
+				return bearer(srv.Headers, saved), nil
+			}
 			o.Broken = true
 		}
-		s.keepToken(srv.ID, o)
-		_ = s.st.setOAuth(ctx, srv.ID, o)
+		s.keepToken(key, o)
+		_ = s.st.putToken(ctx, srv.ID, userID, o)
 		if o.Broken {
 			return nil, &Error{Code: "reauth_required"}
 		}
 	} else if force {
 		// Refused and nothing to refresh with.
 		o.Broken = true
-		s.keepToken(srv.ID, o)
-		_ = s.st.setOAuth(ctx, srv.ID, o)
+		s.keepToken(key, o)
+		_ = s.st.putToken(ctx, srv.ID, userID, o)
 		return nil, &Error{Code: "reauth_required"}
 	}
 	return bearer(srv.Headers, o), nil
 }
 
-// dialFor opens a session to srv, refreshing an OAuth server's token once
-// when the server refuses it.
-func (s *Service) dialFor(ctx context.Context, srv Server) (*session, error) {
-	headers, err := s.headersFor(ctx, srv, false)
+// dialFor opens userID's session to srv, refreshing their OAuth token
+// once when the server refuses it.
+func (s *Service) dialFor(ctx context.Context, srv Server, userID string) (*session, error) {
+	headers, err := s.headersFor(ctx, srv, userID, false)
 	if err != nil {
 		return nil, err
 	}
@@ -721,7 +735,7 @@ func (s *Service) dialFor(ctx context.Context, srv Server) (*session, error) {
 	if err == nil || srv.OAuth == nil || Code(err) != "unauthorized" {
 		return sess, err
 	}
-	if headers, err = s.headersFor(ctx, srv, true); err != nil {
+	if headers, err = s.headersFor(ctx, srv, userID, true); err != nil {
 		return nil, err
 	}
 	return dial(ctx, srv.URL, headers)
@@ -739,6 +753,14 @@ var oauthSchema = []string{
 		data TEXT NOT NULL,
 		expires_at BIGINT NOT NULL
 	)`,
+	// One person's own sign-in to one OAuth server.
+	`CREATE TABLE IF NOT EXISTS user_mcp_tokens (
+		server_id TEXT NOT NULL,
+		user_id TEXT NOT NULL,
+		data TEXT NOT NULL,
+		updated_at BIGINT NOT NULL,
+		PRIMARY KEY (server_id, user_id)
+	)`,
 }
 
 // addOAuthColumn adds user_mcp_servers.oauth to a table created before it.
@@ -751,6 +773,48 @@ func (s *sqlStore) addOAuthColumn(ctx context.Context) error {
 		}
 	}
 	return err
+}
+
+// moveOwnerTokens: servers authorized before tokens were per person kept
+// the adder's tokens on the server row. They become the adder's own
+// sign-in, and the row keeps only the client.
+func (s *sqlStore) moveOwnerTokens(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, user_id, oauth FROM user_mcp_servers WHERE oauth <> ''`)
+	if err != nil {
+		return err
+	}
+	type old struct {
+		id, userID string
+		o          *OAuth
+	}
+	var olds []old
+	for rows.Next() {
+		var id, uid, raw string
+		if err := rows.Scan(&id, &uid, &raw); err != nil {
+			rows.Close()
+			return err
+		}
+		if o := decodeOAuth(raw); o != nil && o.AccessToken != "" {
+			olds = append(olds, old{id, uid, o})
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, r := range olds {
+		if cur, err := s.getToken(ctx, r.id, r.userID); err != nil {
+			return err
+		} else if cur == nil {
+			if err := s.putToken(ctx, r.id, r.userID, r.o); err != nil {
+				return err
+			}
+		}
+		if err := s.setOAuth(ctx, r.id, r.o.config()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func encodeOAuth(o *OAuth) string {
@@ -777,8 +841,33 @@ func (s *sqlStore) setOAuth(ctx context.Context, id string, o *OAuth) error {
 	return err
 }
 
+func (s *sqlStore) setToolCount(ctx context.Context, id string, n int) error {
+	_, err := s.db.ExecContext(ctx, s.rebind(`UPDATE user_mcp_servers SET tool_count = ? WHERE id = ?`), n, id)
+	return err
+}
+
+func (s *sqlStore) getToken(ctx context.Context, serverID, userID string) (*OAuth, error) {
+	var raw string
+	err := s.db.QueryRowContext(ctx, s.rebind(`SELECT data FROM user_mcp_tokens WHERE server_id = ? AND user_id = ?`), serverID, userID).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return decodeOAuth(raw), nil
+}
+
+func (s *sqlStore) putToken(ctx context.Context, serverID, userID string, o *OAuth) error {
+	_, err := s.db.ExecContext(ctx, s.rebind(
+		`INSERT INTO user_mcp_tokens (server_id, user_id, data, updated_at) VALUES (?, ?, ?, ?)
+		 ON CONFLICT (server_id, user_id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at`),
+		serverID, userID, encodeOAuth(o), time.Now().UnixMilli())
+	return err
+}
+
 type pendingRow struct {
-	serverID, name, url, data string
+	userID, serverID, name, url, data string
 }
 
 func (s *sqlStore) putPending(ctx context.Context, state, userID, serverID, name, u, data string, expiresAt int64) error {
@@ -789,8 +878,9 @@ func (s *sqlStore) putPending(ctx context.Context, state, userID, serverID, name
 	return err
 }
 
-// takePending claims a state once: nil when it is unknown, someone
-// else's, used or expired.
+// takePending claims a state once: nil when it is unknown, used, expired
+// or (userID set) someone else's. userID "" claims it for whoever
+// started it.
 func (s *sqlStore) takePending(ctx context.Context, state, userID string) (*pendingRow, error) {
 	if state == "" {
 		return nil, nil
@@ -798,15 +888,18 @@ func (s *sqlStore) takePending(ctx context.Context, state, userID string) (*pend
 	var p pendingRow
 	var expiresAt int64
 	err := s.db.QueryRowContext(ctx, s.rebind(
-		`SELECT server_id, name, url, data, expires_at FROM user_mcp_oauth_pending WHERE state = ? AND user_id = ?`), state, userID).
-		Scan(&p.serverID, &p.name, &p.url, &p.data, &expiresAt)
+		`SELECT user_id, server_id, name, url, data, expires_at FROM user_mcp_oauth_pending WHERE state = ?`), state).
+		Scan(&p.userID, &p.serverID, &p.name, &p.url, &p.data, &expiresAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	res, err := s.db.ExecContext(ctx, s.rebind(`DELETE FROM user_mcp_oauth_pending WHERE state = ? AND user_id = ?`), state, userID)
+	if userID != "" && p.userID != userID {
+		return nil, nil // someone else's: leave it for them
+	}
+	res, err := s.db.ExecContext(ctx, s.rebind(`DELETE FROM user_mcp_oauth_pending WHERE state = ? AND user_id = ?`), state, p.userID)
 	if err != nil {
 		return nil, err
 	}
