@@ -23,10 +23,9 @@ type MCPSignIn struct {
 }
 
 // RegisterCustomMCP mounts the custom_mcp tool on one turn's registry, for
-// the chatter's own custom MCP servers and the ones offered on this agent. Same turn rules as
-// RegisterConnectors; the chatter (userID) is bound here, never from the
-// model, which names servers by name only. A header server runs on its
-// adder's headers; an OAuth server on userID's own sign-in.
+// the MCP servers the chatter (userID) added themselves. Same turn rules
+// as RegisterConnectors; the owner is bound here, never from the model,
+// which names servers by name only.
 //
 // approvals, when set, lets a tool the server doesn't mark read-only run
 // after the person approves it in this chat. Nil: read-only tools only.
@@ -40,7 +39,7 @@ func RegisterCustomMCP(r *Registry, svc *usermcp.Service, userID string, servers
 		call = `"call_tool" server + tool + input — call a tool found with list_tools, with arguments matching its input_schema. A read_only tool runs at once. Any other tool first asks the person in this chat — they see the server, the tool and your input — and runs only if they approve; the call waits for their answer. Make the input complete first, and don't ask "shall I?" in the chat: the approval request is that question. If they declined, don't retry it another way.`
 	}
 	desc := strings.Join([]string{
-		"Use the MCP servers available here (the person's own, and any this agent's maker offers on it): " + strings.Join(names, ", ") + ".",
+		"Use the MCP servers the person added themselves (Connectors → Custom MCP). Their servers: " + strings.Join(names, ", ") + ".",
 		"",
 		"USAGE",
 		`"list_tools" server [+ query] — the server's tools with each exact input_schema and read_only. Always look before calling.`,
@@ -215,7 +214,7 @@ func (t *customMCPTool) explain(ctx context.Context, err error, srv usermcp.Serv
 		}
 		return fmt.Sprintf("Error: %q needs the person to sign in with their own account, which they can't do from this chat. Tell them.", srv.Name)
 	}
-	link, lerr := t.svc.StartOAuth(ctx, t.userID, srv, t.signIn.RedirectURI, t.signIn.ClientName)
+	link, lerr := t.svc.StartOAuth(ctx, t.userID, usermcp.OAuthStart{Server: &srv, RedirectURI: t.signIn.RedirectURI, ClientName: t.signIn.ClientName})
 	if lerr != nil {
 		return mcpExplain(lerr, srv.Name)
 	}
@@ -233,7 +232,7 @@ func mcpExplain(err error, name string) string {
 	}
 	switch e.Code {
 	case "unauthorized":
-		return fmt.Sprintf("Error: the MCP server %q refused its saved credentials. Tell the person it isn't working right now (whoever added it must update its key).", name)
+		return fmt.Sprintf("Error: the MCP server %q refused its saved credentials. Tell the person it isn't working right now (they can update its key in Connectors → Custom MCP).", name)
 	case "oauth_unsupported", "oauth_redirect_refused":
 		return fmt.Sprintf("Error: %q doesn't let this app sign people in. Tell the person it can't be used here.", name)
 	case "unreachable", "not_mcp":

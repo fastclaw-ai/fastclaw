@@ -91,17 +91,17 @@ func TestAddListCallDelete(t *testing.T) {
 			svc := newTestService(t, ts)
 			ctx := context.Background()
 
-			if _, err := svc.Add(ctx, "u1", "Mine", ts.URL, map[string]string{"Authorization": "Bearer wrong"}, nil); Code(err) != "unauthorized" {
+			if _, err := svc.Add(ctx, "u1", "Mine", ts.URL, map[string]string{"Authorization": "Bearer wrong"}); Code(err) != "unauthorized" {
 				t.Fatalf("bad key: got %v", err)
 			}
-			srv, err := svc.Add(ctx, "u1", "Mine", ts.URL, map[string]string{"Authorization": "Bearer secret"}, nil)
+			srv, err := svc.Add(ctx, "u1", "Mine", ts.URL, map[string]string{"Authorization": "Bearer secret"})
 			if err != nil {
 				t.Fatal(err)
 			}
 			if srv.ToolCount != 2 {
 				t.Fatalf("toolCount = %d", srv.ToolCount)
 			}
-			if _, err := svc.Add(ctx, "u1", "mine", ts.URL, map[string]string{"Authorization": "Bearer secret"}, nil); Code(err) != "name_taken" {
+			if _, err := svc.Add(ctx, "u1", "mine", ts.URL, map[string]string{"Authorization": "Bearer secret"}); Code(err) != "name_taken" {
 				t.Fatalf("duplicate name: got %v", err)
 			}
 
@@ -205,11 +205,11 @@ func TestUpdate(t *testing.T) {
 	ctx := context.Background()
 	auth := map[string]string{"Authorization": "Bearer secret"}
 
-	a, err := svc.Add(ctx, "u1", "A", ts.URL, auth, nil)
+	a, err := svc.Add(ctx, "u1", "A", ts.URL, auth)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.Add(ctx, "u1", "B", ts.URL, auth, nil); err != nil {
+	if _, err := svc.Add(ctx, "u1", "B", ts.URL, auth); err != nil {
 		t.Fatal(err)
 	}
 

@@ -1,12 +1,8 @@
 // Package usermcp holds the MCP servers a person added themselves
 // (WeClaw → Connectors → Custom MCP). A server belongs to the one user who
-// added it, who may use it with every agent they chat with. They may also
-// offer it on agents they made (SetAgentServers): then everyone chatting
-// with such an agent may use it there. Same turn rules as connected
-// accounts (docs/connectors.md).
-//
-// A server with headers (an API key) runs on the adder's headers for
-// everyone. An OAuth server runs on each person's own sign-in.
+// added it: only they use it, with every agent they chat with, on the same
+// turns as their connected accounts (docs/connectors.md). An OAuth server
+// is added by signing in (StartOAuth → FinishOAuth).
 package usermcp
 
 import (
@@ -55,7 +51,7 @@ type Server struct {
 	Name      string            `json:"name"`
 	URL       string            `json:"url"`
 	Headers   map[string]string `json:"-"` // values never leave the server
-	OAuth     *OAuth            `json:"-"` // its OAuth client; set for a server that signs in with OAuth
+	OAuth     *OAuth            `json:"-"` // its OAuth client (the tokens are in user_mcp_tokens); set for an OAuth server
 	ToolCount int               `json:"toolCount"`
 	CreatedAt int64             `json:"createdAt"`
 }
@@ -173,19 +169,10 @@ func Normalize(name, rawURL string, headers map[string]string) (string, string, 
 	return name, u.String(), clean, nil
 }
 
-// OAuthClient is where a product sends people back after signing in to
-// an OAuth server, and the name it registers there.
-type OAuthClient struct {
-	RedirectURI string
-	ClientName  string
-}
-
 // Add checks the server answers as MCP (initialize + tools/list), then
-// saves it for userID. A server that asks for OAuth is saved without
-// signing in (each person signs in when they use it); with client set,
-// its client is registered now, so a server that won't take this app
-// says so here rather than to the first person who tries it.
-func (s *Service) Add(ctx context.Context, userID, name, rawURL string, headers map[string]string, client *OAuthClient) (Server, error) {
+// saves it for userID. One that asks for OAuth answers oauth_required: it
+// is added by signing in (StartOAuth).
+func (s *Service) Add(ctx context.Context, userID, name, rawURL string, headers map[string]string) (Server, error) {
 	if userID == "" {
 		return Server{}, &Error{Code: "unauthorized"}
 	}
@@ -211,28 +198,10 @@ func (s *Service) Add(ctx context.Context, userID, name, rawURL string, headers 
 		if Code(err) != "unauthorized" {
 			return Server{}, err
 		}
-		// It asks for OAuth: saved as is. Each person signs in with their
-		// own account when they first use it; the adder needn't.
-		d, derr := discover(ctx, u)
-		if derr != nil {
-			return Server{}, err // a plain 401: the key is wrong
+		if _, derr := discover(ctx, u); derr == nil {
+			return Server{}, &Error{Code: "oauth_required"}
 		}
-		srv.OAuth = oauthConfig(d)
-		if client != nil {
-			if !validRedirect(client.RedirectURI) {
-				return Server{}, &Error{Code: "invalid_redirect"}
-			}
-			reg, err := register(ctx, d, client.RedirectURI, clientName(client.ClientName))
-			if err != nil {
-				return Server{}, err
-			}
-			reg.RedirectURI = client.RedirectURI
-			srv.OAuth = reg
-		}
-		if err := s.st.insert(ctx, userID, srv); err != nil {
-			return Server{}, err
-		}
-		return srv, nil
+		return Server{}, err // a plain 401: the key is wrong
 	}
 	tools, err := sess.listTools(ctx)
 	if err != nil {
@@ -270,7 +239,7 @@ func (s *Service) Update(ctx context.Context, userID, id, name, rawURL string, h
 		return Server{}, &Error{Code: "not_found"}
 	}
 	if cur.OAuth != nil {
-		// Its client and everyone's sign-ins belong to this address:
+		// Its client and sign-in belong to this address:
 		// only the name changes.
 		if strings.TrimSpace(rawURL) != cur.URL {
 			return Server{}, &Error{Code: "invalid_url", Detail: "an OAuth server's address can't change"}
@@ -357,111 +326,7 @@ func (s *Service) Delete(ctx context.Context, userID, id string) error {
 	return nil
 }
 
-// ── offered on agents ──────────────────────────────────────────────────
-
-// MaxAgentServers caps the servers offered on one agent.
-const MaxAgentServers = MaxServers
-
-// SetAgentServers makes ids (servers ownerID added) the custom MCP servers
-// offered on agentID, replacing what it had. The caller checks ownerID
-// made the agent.
-func (s *Service) SetAgentServers(ctx context.Context, ownerID, agentID string, ids []string) ([]string, error) {
-	if ownerID == "" || agentID == "" {
-		return nil, &Error{Code: "unauthorized"}
-	}
-	own, err := s.st.list(ctx, ownerID)
-	if err != nil {
-		return nil, err
-	}
-	mine := map[string]bool{}
-	for _, srv := range own {
-		mine[srv.ID] = true
-	}
-	seen := map[string]bool{}
-	clean := []string{}
-	for _, id := range ids {
-		if seen[id] {
-			continue
-		}
-		if !mine[id] {
-			return nil, &Error{Code: "not_found", Detail: id}
-		}
-		seen[id] = true
-		clean = append(clean, id)
-	}
-	if len(clean) > MaxAgentServers {
-		return nil, &Error{Code: "too_many"}
-	}
-	if err := s.st.setAgentServers(ctx, agentID, clean); err != nil {
-		return nil, err
-	}
-	return clean, nil
-}
-
-// MaxServerAgents caps the agents one server is offered on.
-const MaxServerAgents = 200
-
-// SetServerAgents makes agentIDs the agents ownerID's server id is offered
-// on, replacing what it had. The caller checks ownerID made each agent.
-func (s *Service) SetServerAgents(ctx context.Context, ownerID, id string, agentIDs []string) ([]string, error) {
-	srv, owner, err := s.st.get(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	if srv == nil || owner != ownerID || ownerID == "" {
-		return nil, &Error{Code: "not_found"}
-	}
-	seen := map[string]bool{}
-	clean := []string{}
-	for _, a := range agentIDs {
-		if a == "" || seen[a] {
-			continue
-		}
-		seen[a] = true
-		clean = append(clean, a)
-	}
-	if len(clean) > MaxServerAgents {
-		return nil, &Error{Code: "too_many"}
-	}
-	for _, a := range clean {
-		ids, err := s.st.agentServerIDs(ctx, a)
-		if err != nil {
-			return nil, err
-		}
-		has := false
-		for _, x := range ids {
-			has = has || x == id
-		}
-		if !has && len(ids) >= MaxAgentServers {
-			return nil, &Error{Code: "too_many"}
-		}
-	}
-	if err := s.st.setServerAgents(ctx, id, clean); err != nil {
-		return nil, err
-	}
-	return clean, nil
-}
-
-// AgentServerIDs are the servers offered on agentID.
-func (s *Service) AgentServerIDs(ctx context.Context, agentID string) ([]string, error) {
-	return s.st.agentServerIDs(ctx, agentID)
-}
-
-// AgentServers are the servers offered on agentID, oldest first.
-func (s *Service) AgentServers(ctx context.Context, agentID string) ([]Server, error) {
-	if agentID == "" {
-		return nil, nil
-	}
-	return s.st.agentServers(ctx, agentID)
-}
-
-// ServerAgents maps each of ownerID's servers to the agents it's offered on.
-func (s *Service) ServerAgents(ctx context.Context, ownerID string) (map[string][]string, error) {
-	return s.st.serverAgents(ctx, ownerID)
-}
-
-// Server is one server by id, whoever added it (nil when there is none),
-// and who added it.
+// Server is one server by id (nil when there is none), and who added it.
 func (s *Service) Server(ctx context.Context, id string) (*Server, string, error) {
 	return s.st.get(ctx, id)
 }
@@ -558,13 +423,6 @@ var schema = []string{
 		created_at BIGINT NOT NULL
 	)`,
 	`CREATE INDEX IF NOT EXISTS user_mcp_servers_user ON user_mcp_servers (user_id)`,
-	// The servers offered on an agent (all added by whoever made it).
-	`CREATE TABLE IF NOT EXISTS user_mcp_agent_servers (
-		agent_id TEXT NOT NULL,
-		server_id TEXT NOT NULL,
-		PRIMARY KEY (agent_id, server_id)
-	)`,
-	`CREATE INDEX IF NOT EXISTS user_mcp_agent_servers_server ON user_mcp_agent_servers (server_id)`,
 }
 
 type sqlStore struct {
@@ -648,82 +506,6 @@ func (s *sqlStore) get(ctx context.Context, id string) (*Server, string, error) 
 	return &out[0], owners[0], nil
 }
 
-func (s *sqlStore) agentServers(ctx context.Context, agentID string) ([]Server, error) {
-	rows, err := s.db.QueryContext(ctx, s.rebind(
-		`SELECT `+serverCols+` FROM user_mcp_servers s JOIN user_mcp_agent_servers a ON a.server_id = s.id
-		 WHERE a.agent_id = ? ORDER BY s.created_at, s.id`), agentID)
-	if err != nil {
-		return nil, err
-	}
-	out, _, err := scanServers(rows)
-	return out, err
-}
-
-func (s *sqlStore) agentServerIDs(ctx context.Context, agentID string) ([]string, error) {
-	list, err := s.agentServers(ctx, agentID)
-	if err != nil {
-		return nil, err
-	}
-	ids := make([]string, 0, len(list))
-	for _, srv := range list {
-		ids = append(ids, srv.ID)
-	}
-	return ids, nil
-}
-
-func (s *sqlStore) serverAgents(ctx context.Context, ownerID string) (map[string][]string, error) {
-	rows, err := s.db.QueryContext(ctx, s.rebind(
-		`SELECT a.server_id, a.agent_id FROM user_mcp_agent_servers a JOIN user_mcp_servers s ON s.id = a.server_id
-		 WHERE s.user_id = ? ORDER BY a.agent_id`), ownerID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := map[string][]string{}
-	for rows.Next() {
-		var sid, aid string
-		if err := rows.Scan(&sid, &aid); err != nil {
-			return nil, err
-		}
-		out[sid] = append(out[sid], aid)
-	}
-	return out, rows.Err()
-}
-
-func (s *sqlStore) setServerAgents(ctx context.Context, serverID string, agentIDs []string) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM user_mcp_agent_servers WHERE server_id = ?`), serverID); err != nil {
-		return err
-	}
-	for _, a := range agentIDs {
-		if _, err := tx.ExecContext(ctx, s.rebind(`INSERT INTO user_mcp_agent_servers (agent_id, server_id) VALUES (?, ?)`), a, serverID); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
-}
-
-func (s *sqlStore) setAgentServers(ctx context.Context, agentID string, ids []string) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM user_mcp_agent_servers WHERE agent_id = ?`), agentID); err != nil {
-		return err
-	}
-	for _, id := range ids {
-		if _, err := tx.ExecContext(ctx, s.rebind(`INSERT INTO user_mcp_agent_servers (agent_id, server_id) VALUES (?, ?)`), agentID, id); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
-}
-
 func (s *sqlStore) insert(ctx context.Context, userID string, srv Server) error {
 	headers, err := json.Marshal(srv.Headers)
 	if err != nil {
@@ -758,9 +540,8 @@ func (s *sqlStore) delete(ctx context.Context, userID, id string) (int64, error)
 	if err != nil || n == 0 {
 		return n, err
 	}
-	// Its offers on agents and everyone's sign-ins go with it.
+	// Its sign-in goes with it.
 	for _, q := range []string{
-		`DELETE FROM user_mcp_agent_servers WHERE server_id = ?`,
 		`DELETE FROM user_mcp_tokens WHERE server_id = ?`,
 		`DELETE FROM user_mcp_oauth_pending WHERE server_id = ?`,
 	} {

@@ -19,6 +19,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/google/uuid"
 )
 
 // OAuth for custom MCP servers (MCP authorization spec, 2025-06-18): a
@@ -27,11 +29,11 @@ import (
 // We register a public client there (dynamic client registration) and
 // send each person through the authorization-code flow with PKCE.
 //
-// Whoever adds such a server doesn't sign in: it may be offered on their
-// agents to everyone who chats with them, and each person signs in with
-// their own account the first time they use it (a link sent in the chat).
-// The server row keeps the client; each person's tokens are their own
-// (user_mcp_tokens), refreshed as they expire.
+// Such a server is added by signing in (StartOAuth with a name and URL,
+// then FinishOAuth saves it). The server row keeps the client; the adder's
+// tokens are in user_mcp_tokens, refreshed as they expire. When they stop
+// working, the adder signs in again (StartOAuth with the server, from the
+// Connectors page or a link the agent sends in the chat).
 //
 // The caller (a product such as WeClaw) owns the redirect: StartOAuth gets
 // its redirect URI, and the code and state it got back go to FinishOAuth.
@@ -456,20 +458,45 @@ func (o OAuth) config() *OAuth {
 	return &o
 }
 
-// StartOAuth returns the URL that sends userID to srv's authorization
-// server to sign in with their own account. Anyone the server is
-// available to signs in for themselves; the person who added it needn't.
-// The client is registered on first use (and again for a new redirect URI)
-// and shared by everyone who signs in to srv.
-func (s *Service) StartOAuth(ctx context.Context, userID string, srv Server, redirectURI, name string) (string, error) {
+// OAuthStart is what StartOAuth signs in to: Server (one of the user's,
+// again), or Name and URL for a new one.
+type OAuthStart struct {
+	Server      *Server
+	Name        string
+	URL         string
+	RedirectURI string
+	ClientName  string
+}
+
+// StartOAuth returns the URL that sends userID to the server's
+// authorization server to sign in.
+func (s *Service) StartOAuth(ctx context.Context, userID string, in OAuthStart) (string, error) {
 	if userID == "" {
 		return "", &Error{Code: "unauthorized"}
 	}
-	if srv.OAuth == nil {
-		return "", &Error{Code: "oauth_not_required"}
-	}
+	redirectURI := in.RedirectURI
 	if !validRedirect(redirectURI) {
 		return "", &Error{Code: "invalid_redirect"}
+	}
+	var srv Server
+	if in.Server != nil {
+		srv = *in.Server
+		if srv.OAuth == nil {
+			return "", &Error{Code: "oauth_not_required"}
+		}
+	} else {
+		name, u, _, err := Normalize(in.Name, in.URL, nil)
+		if err != nil {
+			return "", err
+		}
+		existing, err := s.st.list(ctx, userID)
+		if err != nil {
+			return "", err
+		}
+		if err := checkNew(existing, name); err != nil {
+			return "", err
+		}
+		srv = Server{Name: name, URL: u, OAuth: &OAuth{}}
 	}
 	d, err := discover(ctx, srv.URL)
 	if err != nil {
@@ -477,14 +504,16 @@ func (s *Service) StartOAuth(ctx context.Context, userID string, srv Server, red
 	}
 	o := srv.OAuth.config()
 	if o.ClientID == "" || o.RedirectURI != redirectURI || o.TokenEndpoint != d.as.TokenEndpoint {
-		reg, err := register(ctx, d, redirectURI, clientName(name))
+		reg, err := register(ctx, d, redirectURI, clientName(in.ClientName))
 		if err != nil {
 			return "", err
 		}
 		reg.RedirectURI = redirectURI
 		o = reg
-		if err := s.st.setOAuth(ctx, srv.ID, o); err != nil {
-			return "", err
+		if srv.ID != "" {
+			if err := s.st.setOAuth(ctx, srv.ID, o); err != nil {
+				return "", err
+			}
 		}
 	}
 	verifier := randomToken(48)
@@ -516,11 +545,23 @@ func (s *Service) StartOAuth(ctx context.Context, userID string, srv Server, red
 	return authURL, nil
 }
 
-// FinishOAuth trades the code for userID's tokens, checks the server
-// answers as MCP with them, and keeps them. userID "" finishes whoever
-// started this state, when accept (required then) allows that user: a
-// link sent in an IM chat is opened in a browser that isn't signed in.
-// A state works once.
+func checkNew(existing []Server, name string) error {
+	if len(existing) >= MaxServers {
+		return &Error{Code: "too_many"}
+	}
+	for _, e := range existing {
+		if strings.EqualFold(e.Name, name) {
+			return &Error{Code: "name_taken"}
+		}
+	}
+	return nil
+}
+
+// FinishOAuth trades the code for the tokens of whoever started it, checks
+// the server answers as MCP with them, and saves them (and the server,
+// when it is new). userID "" finishes whoever started this state, when
+// accept (required then) allows that user: a link sent in an IM chat is
+// opened in a browser that isn't signed in. A state works once.
 func (s *Service) FinishOAuth(ctx context.Context, userID, state, code string, accept func(userID string) bool) (Server, error) {
 	if userID == "" && accept == nil {
 		return Server{}, &Error{Code: "unauthorized"}
@@ -532,12 +573,14 @@ func (s *Service) FinishOAuth(ctx context.Context, userID, state, code string, a
 	if p == nil || (userID == "" && !accept(p.userID)) {
 		return Server{}, &Error{Code: "oauth_expired"}
 	}
-	srv, _, err := s.st.get(ctx, p.serverID)
-	if err != nil {
-		return Server{}, err
-	}
-	if srv == nil || srv.OAuth == nil {
-		return Server{}, &Error{Code: "not_found"}
+	srv := &Server{Name: p.name, URL: p.url, Headers: map[string]string{}}
+	if p.serverID != "" {
+		if srv, _, err = s.st.get(ctx, p.serverID); err != nil {
+			return Server{}, err
+		}
+		if srv == nil || srv.OAuth == nil {
+			return Server{}, &Error{Code: "not_found"}
+		}
 	}
 	var data pendingData
 	if err := json.Unmarshal([]byte(p.data), &data); err != nil {
@@ -560,6 +603,22 @@ func (s *Service) FinishOAuth(ctx context.Context, userID, state, code string, a
 	tools, err := sess.listTools(ctx)
 	if err != nil {
 		return Server{}, err
+	}
+	if srv.ID == "" {
+		existing, err := s.st.list(ctx, p.userID)
+		if err != nil {
+			return Server{}, err
+		}
+		if err := checkNew(existing, srv.Name); err != nil {
+			return Server{}, err
+		}
+		srv.ID = "mcp_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+		srv.OAuth = o.config()
+		srv.ToolCount = len(tools)
+		srv.CreatedAt = time.Now().UnixMilli()
+		if err := s.st.insert(ctx, p.userID, *srv); err != nil {
+			return Server{}, err
+		}
 	}
 	if err := s.st.putToken(ctx, srv.ID, p.userID, &o); err != nil {
 		return Server{}, err

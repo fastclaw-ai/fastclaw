@@ -31,22 +31,15 @@ This raises the bar; it can't stop a chatter with root in the sandbox who
 rewrites the script first. Keys a chatter must never see belong to skills
 that run outside the chatter's sandbox, or to server-side tools.
 
-### Changed — custom MCP servers are offered on agents; OAuth is per person
+### Changed — custom MCP sign-ins live in their own table
 
-**BREAKING (API):** a custom MCP server still works for its adder with
-every agent they chat with, and whoever made an agent may now also offer
-their servers on it (`GET/PUT /api/agents/{id}/mcp-servers`,
-`PUT /api/mcp-servers/{id}/agents`): everyone chatting with that agent may
-then use them there. A header server runs on its adder's headers; an
-OAuth server is now added without signing in (`POST /api/mcp-servers` no
-longer answers `oauth_required`; optional `redirectUri` registers the
-client up front), and each person signs in with their own account from a
-link the agent sends in the chat (turn param `__fastclawMCPRedirectURI`).
-`oauth/start` takes only `{serverId, redirectUri}`; `oauth/finish` with the
-account's own key and no end user finishes it for the end user who started
-it. The list shows `signIn` and `agentIds` instead of `needsReauth`. Tables
-`user_mcp_tokens` and `user_mcp_agent_servers` are created at boot, and an
-adder's tokens saved on a server row move to their own sign-in.
+An OAuth custom MCP server keeps its client on the row and the adder's
+tokens in the new table `user_mcp_tokens` (moved there at boot). The list
+shows `signIn` (`ok`/`broken`/`none`) instead of `needsReauth`. When a
+sign-in stops working, the agent sends the person a new sign-in link in
+their chat if the product names its redirect URI as the turn param
+`__fastclawMCPRedirectURI`; `oauth/finish` with the account's own key and
+no end user finishes it for the end user who started it.
 
 An app's end users may now use their own connected accounts on **any** of
 the app's agents in their 1:1 chats, not only their own and the ones marked

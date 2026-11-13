@@ -149,39 +149,27 @@ turn waits.
 ## Custom MCP servers
 
 A person may also add MCP servers of their own (Connectors → Custom MCP;
-`internal/usermcp`). Each belongs to the one user who added it, who may use
-it with **every agent they chat with**. They may also offer it on agents
-they made: then everyone chatting with such an agent may use it there.
-Nobody else can.
-
-- A server with **headers** (an API key) runs on the adder's headers for
-  everyone who uses it.
-- An **OAuth** server is added without signing in. Each person signs in
-  with their own account the first time they use it, from a link the agent
-  sends in the chat; their tokens are theirs alone (`user_mcp_tokens`).
+`internal/usermcp`). Each belongs to the one user who added it: only they
+use it, with every agent they chat with.
 
 | Route | |
 | --- | --- |
-| `GET /api/mcp-servers` | the caller's servers: `{servers:[{id,name,url,headerNames,toolCount,createdAt,auth,signIn,agentIds}], max}` (`auth`: `oauth` or `headers`; `signIn`: the caller's own sign-in to an OAuth server, `none`/`ok`/`broken`) |
-| `POST /api/mcp-servers` | `{name, url, headers?, redirectUri?, clientName?}`: connects (initialize + tools/list) and saves only if it answers as MCP. A server that asks for OAuth is saved without signing in; with `redirectUri` its client is registered now, so one that refuses this app fails here |
+| `GET /api/mcp-servers` | the caller's servers: `{servers:[{id,name,url,headerNames,toolCount,createdAt,auth,signIn}], max}` (`auth`: `oauth` or `headers`; `signIn`: their sign-in to an OAuth server, `ok`/`broken`/`none`) |
+| `POST /api/mcp-servers` | `{name, url, headers?}`: connects (initialize + tools/list) and saves only if it answers as MCP. One that asks for OAuth answers `oauth_required` |
 | `PATCH /api/mcp-servers/{id}` | `{name, url, headers?}`: the caller's own only. `headers` absent keeps them; otherwise it's the full set, and an empty value keeps that header's saved value. A new address or headers are checked again before saving |
-| `DELETE /api/mcp-servers/{id}` | the caller's own only; its offers on agents and everyone's sign-ins go with it |
-| `POST /api/mcp-servers/oauth/start` | `{serverId, redirectUri, clientName?}` → `{authorizeUrl}`: the caller signs in to one of their own servers |
-| `POST /api/mcp-servers/oauth/finish` | `{state, code}` from the redirect → `{server}`, as the person who started it. The account's own key **without** an end user finishes it for whichever of its end users started it (a link opened from an IM chat, in a browser not signed in to the product) |
-| `PUT /api/mcp-servers/{id}/agents` | `{agentIds}`: replaces the agents one of the caller's servers is offered on (each one they made) |
-| `GET /api/agents/{id}/mcp-servers` | `{serverIds}` offered on an agent the caller made |
-| `PUT /api/agents/{id}/mcp-servers` | `{serverIds}`: replaces them; only the caller's own servers, on an agent they made (their own, or the account's agent whose `endUserOwner` is them) |
+| `DELETE /api/mcp-servers/{id}` | the caller's own only; its sign-in goes with it |
+| `POST /api/mcp-servers/oauth/start` | `{name, url, redirectUri, clientName?}` adds an OAuth server by signing in; `{serverId, redirectUri}` signs in to one again → `{authorizeUrl}` |
+| `POST /api/mcp-servers/oauth/finish` | `{state, code}` from the redirect → `{server}`, as the person who started it: trades the code, checks the server with the token, saves it. The account's own key **without** an end user finishes it for whichever of its end users started it (a sign-in link opened from an IM chat, in a browser not signed in to the product) |
 
 Errors carry a closed `code`: `invalid_name`, `invalid_url`,
-`invalid_headers`, `name_taken`, `too_many` (20 per user, 20 per agent),
-`not_found`, `unauthorized` (the server refused the headers), `unreachable`,
-`not_mcp`; for OAuth: `oauth_unsupported` (no usable authorization server:
-no metadata, no dynamic client registration or no PKCE S256),
-`oauth_redirect_refused` (its registration only accepts certain apps'
-redirect URIs), `invalid_redirect`, `oauth_expired` (unknown, used, expired
-or someone else's state), `oauth_failed` (the code was refused),
-`auth_needed` / `reauth_required` (in a turn: the person hasn't signed in,
-or must sign in again).
+`invalid_headers`, `name_taken`, `too_many` (20 per user), `not_found`,
+`unauthorized` (the server refused the headers), `unreachable`, `not_mcp`;
+for OAuth: `oauth_required` (add it by signing in), `oauth_unsupported` (no
+usable authorization server: no metadata, no dynamic client registration or
+no PKCE S256), `oauth_redirect_refused` (its registration only accepts
+certain apps' redirect URIs), `invalid_redirect`, `oauth_expired` (unknown,
+used, expired or someone else's state), `oauth_failed` (the code was
+refused), `reauth_required` (in a turn: sign in again).
 
 ### OAuth servers
 
@@ -190,28 +178,28 @@ A server that answers 401 and has OAuth metadata (MCP authorization spec
 the older origin-as-authorization-server layout works too). A 401 without
 it is a wrong key (`unauthorized`).
 
-1. Added: the row keeps where its authorization server is and, once
-   registered (dynamic client registration, the product's redirect URI as
-   its only one), the client — shared by everyone, never anyone's tokens.
-2. A person uses it in a chat: their first `list_tools`/`call_tool` answers
-   `auth_needed`, and the tool mints their sign-in link (code flow, PKCE
-   S256, `resource` = the server, the challenge's `scope`; state bound to
-   them, 15 minutes, works once) for the model to send. The product names
-   its redirect URI as the turn param `__fastclawMCPRedirectURI` (and
-   optionally `__fastclawMCPClientName`); without it the tool says they
-   can't sign in from that chat.
-3. They approve; the authorization server returns to the redirect URI with
-   `code` and `state`, which the product passes to `oauth/finish`. Their
-   tokens are saved, and they ask the agent again.
+1. `POST /api/mcp-servers` answers `oauth_required`.
+2. `oauth/start` reads the protected-resource and authorization-server
+   metadata, registers a public client there (dynamic client registration,
+   `redirectUri` as its only redirect URI), and returns the authorization
+   URL (code flow, PKCE S256, `resource` = the server, the challenge's
+   `scope`). The state is bound to the caller, lasts 15 minutes and works
+   once.
+3. The person approves; the authorization server returns to `redirectUri`
+   with `code` and `state`, which the product passes to `oauth/finish`. The
+   server is saved (the row keeps the client) with their tokens
+   (`user_mcp_tokens`).
 
 Tokens never leave Fastclaw. An access token about to expire, or one the
-server refuses, is refreshed (once per person and server at a time; a
-token another replica already rotated is picked up from the database);
-when the refresh is refused, that person's calls answer `reauth_required`
-and the tool sends them a new sign-in link. An OAuth server can be
-renamed, not moved to another address. Servers saved before sign-ins were
-per person kept the adder's tokens on the row: on start-up those become the
-adder's own sign-in.
+server refuses, is refreshed (once at a time; a token another replica
+already rotated is picked up from the database). When the refresh is
+refused the server shows `signIn: "broken"` and its calls answer
+`reauth_required`: the person signs in again from Connectors
+(`oauth/start` with `serverId`), or from the link the tool sends in the
+chat when the product names its redirect URI as the turn param
+`__fastclawMCPRedirectURI` (optionally `__fastclawMCPClientName`). An OAuth
+server can be renamed, not moved to another address. Servers saved before
+tokens had their own table kept them on the row: on start-up they move.
 
 - Streamable HTTP only (`https://`, no stdio). The client dials public
   addresses only (checked again at dial time, no proxy, no redirects),
@@ -219,15 +207,13 @@ adder's own sign-in.
 - Header values (API keys) are stored server-side (`user_mcp_servers`) and
   never returned: the list shows header names only.
 - Mounted as one `custom_mcp` tool (`list_tools`, `call_tool`) with the
-  chatter's own servers plus the ones the agent offers (an offered one
-  whose name they already use gets a numbered name), on exactly the turns that may use the chatter's
-  connected accounts (`ownAccountsTurn`), with a system note naming them.
-  IM groups and cron never see them.
+  chatter's own servers, on exactly the turns that may use their connected
+  accounts (`ownAccountsTurn`), with a system note naming them. Nobody
+  else's turns, IM groups or cron ever see them.
 - A tool the server doesn't mark `readOnlyHint: true` runs only after the
   person chatting approves it in the chat (same channel and session grants
   as connector writes); where the turn can't ask, only read-only tools are
-  offered. On a header server that is the adder's account: whoever offers
-  one on a public agent lets its users ask for those changes.
+  offered.
 
 ## Not yet
 
