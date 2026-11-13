@@ -150,9 +150,39 @@ turn waits.
    input — a runtime message, never shown as a user bubble — and a turn runs
    like a typed message (`Server.wakeConnectorChat`).
 
+## Custom MCP servers
+
+A person may also add MCP servers of their own (Connectors → Custom MCP;
+`internal/usermcp`). Each belongs to the one user who added it.
+
+| Route | |
+| --- | --- |
+| `GET /api/mcp-servers` | the caller's servers: `{servers:[{id,name,url,headerNames,toolCount,createdAt}], max}` |
+| `POST /api/mcp-servers` | `{name, url, headers?}`: connects (initialize + tools/list) and saves only if it answers as MCP |
+| `PATCH /api/mcp-servers/{id}` | `{name, url, headers?}`: the caller's own only. `headers` absent keeps them; otherwise it's the full set, and an empty value keeps that header's saved value. A new address or headers are checked again before saving |
+| `DELETE /api/mcp-servers/{id}` | the caller's own only |
+
+Errors carry a closed `code`: `invalid_name`, `invalid_url`,
+`invalid_headers`, `name_taken`, `too_many` (20 per user), `unauthorized`
+(the server refused the headers), `unreachable`, `not_mcp`.
+
+- Streamable HTTP only (`https://`, no stdio). The client dials public
+  addresses only (checked again at dial time, no proxy, no redirects),
+  sends header values as given (no `$ENV` expansion) and caps responses.
+- Header values (API keys) are stored server-side (`user_mcp_servers`) and
+  never returned: the list shows header names only.
+- Mounted as one `custom_mcp` tool (`list_tools`, `call_tool`) on exactly the
+  turns that may use the person's connected accounts (`ownAccountsTurn`),
+  with a system note naming their servers. Nobody else's turns, IM groups,
+  cron or other people's agents ever see them.
+- A tool the server doesn't mark `readOnlyHint: true` runs only after the
+  person approves it in the chat (same channel and session grants as
+  connector writes); where the turn can't ask, only read-only tools are
+  offered.
+
 ## Not yet
 
-- Writes where the turn can't ask (IM channels, cron), custom MCP servers.
+- Writes where the turn can't ask (IM channels, cron).
 - IM channels, groups, API end users.
 - Polling Connany's event stream: a revocation on the platform is noticed on
   the next call.

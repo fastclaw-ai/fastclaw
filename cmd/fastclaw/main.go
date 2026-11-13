@@ -23,6 +23,7 @@ import (
 	"github.com/fastclaw-ai/fastclaw/internal/sandbox"
 	"github.com/fastclaw-ai/fastclaw/internal/setup"
 	"github.com/fastclaw-ai/fastclaw/internal/store"
+	"github.com/fastclaw-ai/fastclaw/internal/usermcp"
 )
 
 // apiResolver adapts *gateway.Gateway to api.UserResolver.
@@ -222,6 +223,10 @@ func runGateway(port int) error {
 	connectors.SetEnvFallback(connectors.Settings{URL: env.Connany.URL, APIKey: env.Connany.APIKey})
 	if _, err := connectors.Apply(context.Background(), gw.Store()); err != nil {
 		slog.Error("connectors disabled", "error", err)
+	}
+	// MCP servers people add themselves (Connectors → Custom MCP).
+	if err := usermcp.Init(context.Background(), gw.Store()); err != nil {
+		slog.Error("custom MCP servers disabled", "error", err)
 	}
 
 	// Remove credential-bearing env vars from the process environment

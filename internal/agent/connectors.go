@@ -51,18 +51,8 @@ func (a *Agent) mountConnectors(ctx context.Context, msg bus.InboundMessage, cha
 	// A previous turn's mount (bound to that turn's chatter) never
 	// carries over: each turn decides afresh below.
 	a.registry.Unregister(tools.ConnectorsToolName)
-	if chatterUID == "" {
-		return ""
-	}
-	if msg.Source != bus.SourceUser && msg.Source != bus.SourceConnector {
-		return ""
-	}
-	var links *tools.ConnectLinks
-	switch {
-	case msg.Channel == "web" && chatterUID == a.trustOwnerID():
-	case a.endUserTurnMayUseConnectors(ctx, msg, chatterUID):
-		links = connectLinks(msg.Params)
-	default:
+	links, ok := a.ownAccountsTurn(ctx, msg, chatterUID)
+	if !ok {
 		return ""
 	}
 	// Their own Connany when they saved one, else the deployment's.
@@ -79,6 +69,25 @@ func (a *Agent) mountConnectors(ctx context.Context, msg bus.InboundMessage, cha
 	}
 	tools.RegisterConnectors(a.registry, svc, chatterUID, connectors.ChatRef{AgentID: a.name, SessionID: sessionKey}, platforms, links, a.connectorApprovals(ctx, chatterUID))
 	return connectorAccountsNote(cctx, svc, chatterUID, platforms)
+}
+
+// ownAccountsTurn reports whether this turn may use what the chatter
+// connected or added themselves (accounts, custom MCP servers): see
+// mountConnectors. links is set when their chat can't show cards.
+func (a *Agent) ownAccountsTurn(ctx context.Context, msg bus.InboundMessage, chatterUID string) (*tools.ConnectLinks, bool) {
+	if chatterUID == "" {
+		return nil, false
+	}
+	if msg.Source != bus.SourceUser && msg.Source != bus.SourceConnector {
+		return nil, false
+	}
+	switch {
+	case msg.Channel == "web" && chatterUID == a.trustOwnerID():
+		return nil, true
+	case a.endUserTurnMayUseConnectors(ctx, msg, chatterUID):
+		return connectLinks(msg.Params), true
+	}
+	return nil, false
 }
 
 // connectorApprovals is how the person approves a change to one of their

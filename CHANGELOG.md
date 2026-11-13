@@ -5,6 +5,16 @@ action on upgrade — read those notes before deploying.
 
 ## [Unreleased]
 
+### Added — custom MCP servers per person
+
+People can add their own Streamable HTTP MCP servers (`GET/POST
+/api/mcp-servers`, `PATCH`/`DELETE /api/mcp-servers/{id}`, end users included).
+A server is checked as MCP before it is saved, belongs only to the person
+who added it, and is offered to their own turns as the `custom_mcp` tool,
+on the same turns as their connected accounts. Tools the server doesn't
+mark read-only run only after the person approves them in the chat. New
+table `user_mcp_servers` is created at boot. See `docs/connectors.md`.
+
 ### Added — macOS privacy prompts name the product, not agl
 
 `POST /v1/machines/pairing` takes an optional `appName` (the product's

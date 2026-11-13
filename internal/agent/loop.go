@@ -2474,6 +2474,8 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 	// The chatter's connected third-party accounts (internal/connectors):
 	// mounted only where they may be used; see mountConnectors.
 	connectorNote := a.mountConnectors(ctx, msg, chatterUID, sess.SessionKey())
+	// MCP servers the chatter added themselves: same turns as their accounts.
+	customMCPNote := a.mountCustomMCP(ctx, msg, chatterUID)
 	// The person's own computers (agl): run_local_agent on 1:1 IM turns
 	// of the person the chat belongs to; see mountLocalAgents.
 	localAgentsNote := a.mountLocalAgents(ctx, msg)
@@ -2560,6 +2562,9 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 	}
 	if connectorNote != "" {
 		messages = append(messages, provider.Message{Role: "system", Content: connectorNote})
+	}
+	if customMCPNote != "" {
+		messages = append(messages, provider.Message{Role: "system", Content: customMCPNote})
 	}
 	if agentsNote != "" {
 		messages = append(messages, provider.Message{Role: "system", Content: agentsNote})
