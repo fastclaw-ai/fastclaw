@@ -155,6 +155,13 @@ func TestOAuthFlow(t *testing.T) {
 	if _, err := svc.SetAgentServers(ctx, "u2", "agent-2", []string{srv.ID}); Code(err) != "not_found" {
 		t.Fatalf("foreign offer: %v", err)
 	}
+	// Or from the server's side: replaces the agents it's on.
+	if got, err := svc.SetServerAgents(ctx, "owner", srv.ID, []string{"agent-1", "agent-1"}); err != nil || len(got) != 1 {
+		t.Fatalf("server agents: %v %v", got, err)
+	}
+	if _, err := svc.SetServerAgents(ctx, "u2", srv.ID, []string{"agent-2"}); Code(err) != "not_found" {
+		t.Fatalf("foreign server agents: %v", err)
+	}
 	offered, _ := svc.AgentServers(ctx, "agent-1")
 	if len(offered) != 1 || offered[0].ID != srv.ID {
 		t.Fatalf("offered = %+v", offered)

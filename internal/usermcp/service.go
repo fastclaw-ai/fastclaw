@@ -397,6 +397,50 @@ func (s *Service) SetAgentServers(ctx context.Context, ownerID, agentID string, 
 	return clean, nil
 }
 
+// MaxServerAgents caps the agents one server is offered on.
+const MaxServerAgents = 200
+
+// SetServerAgents makes agentIDs the agents ownerID's server id is offered
+// on, replacing what it had. The caller checks ownerID made each agent.
+func (s *Service) SetServerAgents(ctx context.Context, ownerID, id string, agentIDs []string) ([]string, error) {
+	srv, owner, err := s.st.get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if srv == nil || owner != ownerID || ownerID == "" {
+		return nil, &Error{Code: "not_found"}
+	}
+	seen := map[string]bool{}
+	clean := []string{}
+	for _, a := range agentIDs {
+		if a == "" || seen[a] {
+			continue
+		}
+		seen[a] = true
+		clean = append(clean, a)
+	}
+	if len(clean) > MaxServerAgents {
+		return nil, &Error{Code: "too_many"}
+	}
+	for _, a := range clean {
+		ids, err := s.st.agentServerIDs(ctx, a)
+		if err != nil {
+			return nil, err
+		}
+		has := false
+		for _, x := range ids {
+			has = has || x == id
+		}
+		if !has && len(ids) >= MaxAgentServers {
+			return nil, &Error{Code: "too_many"}
+		}
+	}
+	if err := s.st.setServerAgents(ctx, id, clean); err != nil {
+		return nil, err
+	}
+	return clean, nil
+}
+
 // AgentServerIDs are the servers offered on agentID.
 func (s *Service) AgentServerIDs(ctx context.Context, agentID string) ([]string, error) {
 	return s.st.agentServerIDs(ctx, agentID)
@@ -643,6 +687,23 @@ func (s *sqlStore) serverAgents(ctx context.Context, ownerID string) (map[string
 		out[sid] = append(out[sid], aid)
 	}
 	return out, rows.Err()
+}
+
+func (s *sqlStore) setServerAgents(ctx context.Context, serverID string, agentIDs []string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM user_mcp_agent_servers WHERE server_id = ?`), serverID); err != nil {
+		return err
+	}
+	for _, a := range agentIDs {
+		if _, err := tx.ExecContext(ctx, s.rebind(`INSERT INTO user_mcp_agent_servers (agent_id, server_id) VALUES (?, ?)`), a, serverID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *sqlStore) setAgentServers(ctx context.Context, agentID string, ids []string) error {

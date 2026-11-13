@@ -37,6 +37,8 @@ import (
 //                                  started it. The account's own key with no end user
 //                                  finishes it for whichever of its end users started
 //                                  it (a link opened from a chat, not signed in).
+//   PUT    /api/mcp-servers/{id}/agents  {agentIds}: the agents (the caller made)
+//                                  one of their servers is offered on
 //   GET    /api/agents/{id}/mcp-servers  → {serverIds}
 //   PUT    /api/agents/{id}/mcp-servers  {serverIds}: the caller's servers offered
 //                                  on an agent they made
@@ -48,6 +50,7 @@ func (s *Server) registerMCPServerRoutes(mux *http.ServeMux, auth func(http.Hand
 	mux.HandleFunc("DELETE /api/mcp-servers/{id}", auth(s.handleDeleteMCPServer))
 	mux.HandleFunc("POST /api/mcp-servers/oauth/start", auth(s.handleStartMCPOAuth))
 	mux.HandleFunc("POST /api/mcp-servers/oauth/finish", auth(s.handleFinishMCPOAuth))
+	mux.HandleFunc("PUT /api/mcp-servers/{id}/agents", auth(s.handleSetMCPServerAgents))
 	mux.HandleFunc("GET /api/agents/{id}/mcp-servers", auth(s.handleGetAgentMCPServers))
 	mux.HandleFunc("PUT /api/agents/{id}/mcp-servers", auth(s.handleSetAgentMCPServers))
 }
@@ -269,25 +272,61 @@ func (s *Server) handleFinishMCPOAuth(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, map[string]any{"server": map[string]any{"id": srv.ID, "name": srv.Name, "auth": srv.Auth()}})
 }
 
-// mcpAgentOwner is the agent when the caller made it: their own agent,
-// or (a product's end user) one of the account's agents marked theirs.
-func (s *Server) mcpAgentOwner(w http.ResponseWriter, r *http.Request, uid string) *store.AgentRecord {
-	rec, err := s.dataStore.GetAgent(r.Context(), r.PathValue("id"))
+// madeAgent is the agent when the caller made it: their own agent, or (a
+// product's end user) one of the account's agents marked theirs.
+func (s *Server) madeAgent(r *http.Request, uid, agentID string) *store.AgentRecord {
+	rec, err := s.dataStore.GetAgent(r.Context(), agentID)
 	if err != nil || rec == nil {
-		mcpServerError(w, &usermcp.Error{Code: "not_found"})
 		return nil
 	}
 	ident, _ := auth.FromContext(r.Context())
-	mine := rec.UserID == uid
-	if !mine && ident.EndUser != "" && rec.UserID == ident.AccountID() {
-		owner := strings.TrimSpace(store.AgentEndUserOwner(rec))
-		mine = owner != "" && owner == strings.TrimSpace(ident.EndUser)
+	if rec.UserID == uid {
+		return rec
 	}
-	if !mine {
+	if ident.EndUser != "" && rec.UserID == ident.AccountID() {
+		owner := strings.TrimSpace(store.AgentEndUserOwner(rec))
+		if owner != "" && owner == strings.TrimSpace(ident.EndUser) {
+			return rec
+		}
+	}
+	return nil
+}
+
+func (s *Server) mcpAgentOwner(w http.ResponseWriter, r *http.Request, uid string) *store.AgentRecord {
+	rec := s.madeAgent(r, uid, r.PathValue("id"))
+	if rec == nil {
 		mcpServerError(w, &usermcp.Error{Code: "not_found"})
-		return nil
 	}
 	return rec
+}
+
+func (s *Server) handleSetMCPServerAgents(w http.ResponseWriter, r *http.Request) {
+	if !s.requireWritable(w, r) {
+		return
+	}
+	svc, uid, ok := s.mcpServerCaller(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		AgentIDs []string `json:"agentIds"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil || len(req.AgentIDs) > usermcp.MaxServerAgents {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "invalid_request", "code": "invalid_request"})
+		return
+	}
+	for _, id := range req.AgentIDs {
+		if s.madeAgent(r, uid, id) == nil {
+			mcpServerError(w, &usermcp.Error{Code: "not_found"})
+			return
+		}
+	}
+	ids, err := svc.SetServerAgents(r.Context(), uid, r.PathValue("id"), req.AgentIDs)
+	if err != nil {
+		mcpServerError(w, err)
+		return
+	}
+	jsonResponse(w, http.StatusOK, map[string]any{"agentIds": ids})
 }
 
 func (s *Server) handleGetAgentMCPServers(w http.ResponseWriter, r *http.Request) {

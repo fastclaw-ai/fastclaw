@@ -167,6 +167,7 @@ there; nobody else can.
 | `DELETE /api/mcp-servers/{id}` | the caller's own only; its offers on agents and everyone's sign-ins go with it |
 | `POST /api/mcp-servers/oauth/start` | `{serverId, redirectUri, clientName?}` → `{authorizeUrl}`: the caller signs in to one of their own servers |
 | `POST /api/mcp-servers/oauth/finish` | `{state, code}` from the redirect → `{server}`, as the person who started it. The account's own key **without** an end user finishes it for whichever of its end users started it (a link opened from an IM chat, in a browser not signed in to the product) |
+| `PUT /api/mcp-servers/{id}/agents` | `{agentIds}`: replaces the agents one of the caller's servers is offered on (each one they made) |
 | `GET /api/agents/{id}/mcp-servers` | `{serverIds}` offered on an agent the caller made |
 | `PUT /api/agents/{id}/mcp-servers` | `{serverIds}`: replaces them; only the caller's own servers, on an agent they made (their own, or the account's agent whose `endUserOwner` is them) |
 
