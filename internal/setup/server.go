@@ -320,7 +320,6 @@ func (s *Server) Run(ctx context.Context) error {
 	// The caller's own connected third-party accounts (handlers_connectors.go).
 	s.registerConnectorRoutes(mux, auth)
 	s.registerMCPServerRoutes(mux, auth)
-	s.registerMySkillRoutes(mux, auth)
 
 	// Agents
 	mux.HandleFunc("GET /api/agents", auth(s.handleListAgents))

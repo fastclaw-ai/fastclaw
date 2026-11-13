@@ -72,9 +72,10 @@ func (s *Server) skillInstallTarget(w http.ResponseWriter, r *http.Request, agen
 	return skillTarget{UserID: uid}, ok
 }
 
-// ownSkillsUser returns the caller whose personal skills a request
-// manages. End-user and channel accounts have no console and no skills of
-// their own.
+// ownSkillsUser returns the console user whose personal skills a request
+// manages. End users never get here: their uploads and deletes go through
+// handleUploadMySkill / handleDeleteMySkill (checked and capped), and
+// channel accounts have no skills of their own.
 func ownSkillsUser(w http.ResponseWriter, r *http.Request) (string, bool) {
 	ident, ok := auth.FromContext(r.Context())
 	uid := ident.EffectiveUserID()
@@ -87,4 +88,10 @@ func ownSkillsUser(w http.ResponseWriter, r *http.Request) (string, bool) {
 		return "", false
 	}
 	return uid, true
+}
+
+// isEndUserCaller: the request acts for a product's end user.
+func isEndUserCaller(r *http.Request) bool {
+	ident, ok := auth.FromContext(r.Context())
+	return ok && ident.Role == users.RoleAppUser
 }

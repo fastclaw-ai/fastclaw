@@ -11,14 +11,17 @@ run as.
 
 ## API
 
-The caller is the signed-in user or the end user a product acts for.
-Channel accounts are refused.
+These are the console's skill routes with `?scope=user`. The caller is the
+signed-in user or the end user a product acts for (an api key with
+`X-Fastclaw-End-User`). Channel accounts are refused. The checks, limits
+and error codes below apply to end users' uploads; console users keep the
+console's upload.
 
 | Route | |
 |---|---|
-| `GET /api/me/skills` | `{skills:[{name,description,files,bytes,updatedAt,source}], mine, max}`: the caller's skills merged with the product's and the global ones, one per name (see below). `mine` counts the caller's own against `max`. |
-| `POST /api/me/skills` | multipart `file`: a `.zip` holding a skill, or a bare `SKILL.md`. Re-uploading a name replaces that skill whole. `{skill, replaced}` |
-| `DELETE /api/me/skills/{name}` | the caller's own only |
+| `GET /api/skills?scope=user` | `[{name,description,type,envSpec?,source}]`: the caller's skills merged with the product's and the global ones, one per name (see below). End users get no `location`. |
+| `POST /api/skills/upload?scope=user` | multipart `file`: a `.zip` holding a skill, or a bare `SKILL.md`. Re-uploading a name replaces that skill whole. For end users: `{skill, replaced}`, with the checks and limits below. |
+| `DELETE /api/skills/{name}?scope=user` | the caller's own only |
 
 Errors are `{code, detail?}`, where `code` is one of:
 
@@ -42,7 +45,7 @@ A conversation's skills come from, highest first:
 4. **team**, then **global** (`$FASTCLAW_HOME/skills`), then extra dirs.
 
 The same name in a higher layer replaces the lower one. `GET
-/api/me/skills` lists the chain for the caller: `mine` > `product` (the
+/api/skills?scope=user` lists the chain for the caller: `mine` > `product` (the
 api key's owner, for end users) > `system`. Agent skills depend on the
 agent and aren't listed.
 

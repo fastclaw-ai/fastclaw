@@ -14,14 +14,16 @@ account adds its skills there. They are also pushed to the sandbox's
 `/skills` (agent > owner > global), so their scripts run. A chatter's own
 skills now rank above the agent's (they affect only that person) and may
 take any name, global ones included; they still never reach `/skills` or
-any keys. `GET /api/me/skills` returns the merged chain with a `source`
-(`mine`, `product`, `system`) and a `mine` count; `name_reserved` is gone.
+any keys. `GET /api/skills?scope=user` returns the merged chain, each
+with a `source` (`mine`, `product`, `system`); `name_reserved` is gone.
+The console's own-skills view lists only `mine`.
 
-### Added — personal skills for end users (`/api/me/skills`)
+### Added — personal skills for end users (`/api/skills?scope=user`)
 
 Anyone signed in, including a product's end users (`X-Fastclaw-End-User`),
-can upload skills of their own (`GET/POST /api/me/skills`,
-`DELETE /api/me/skills/{name}`). A skill lands in their personal layer, so
+can upload skills of their own through the console's routes with
+`?scope=user` (`GET /api/skills`, `POST /api/skills/upload`,
+`DELETE /api/skills/{name}`). A skill lands in their personal layer, so
 it is used in their own conversations only, with any agent. An upload is
 the folder of the zip's shallowest SKILL.md, kept whole (templates, images
 and scripts included; `.git/` and OS clutter skipped). Its files don't

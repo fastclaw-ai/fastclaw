@@ -184,6 +184,11 @@ func runInstall(source, name, repo, targetDir string) (*skills.Result, error) {
 func (s *Server) handleUploadSkill(w http.ResponseWriter, r *http.Request) {
 	const maxUploadSize = 64 << 20 // 64 MiB
 	agentID := r.URL.Query().Get("agent")
+	// An end user's own skill: checked and capped (see handleUploadMySkill).
+	if agentID == "" && r.URL.Query().Get("scope") == "user" && isEndUserCaller(r) {
+		s.handleUploadMySkill(w, r)
+		return
+	}
 	target, ok := s.skillInstallTarget(w, r, agentID, r.URL.Query().Get("scope") == "user")
 	if !ok {
 		return

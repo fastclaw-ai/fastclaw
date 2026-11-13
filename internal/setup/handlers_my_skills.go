@@ -31,16 +31,19 @@ import (
 // a skill usable in their own conversations only.
 //
 // An upload is a whole skill folder: SKILL.md plus whatever it carries
-// (references, templates, images, scripts). Personal skills are not given
-// any configured keys, and their names can't take a deployment skill's, so
-// their scripts get nothing the chatter couldn't already run in their own
-// sandbox.
+// (references, templates, images, scripts). It may take any name; it
+// overrides only that person's view. A personal skill never reaches the
+// sandbox's /skills, so it is never given configured keys.
 //
-//   GET    /api/me/skills          → {skills:[{name,description,files,bytes,updatedAt,source}], mine, max}
-//                                     the caller's skills merged with the product's and the global ones
-//                                     (mine > product > system, one per name)
-//   POST   /api/me/skills          multipart `file`: a .zip of the skill folder (or a bare SKILL.md)
-//   DELETE /api/me/skills/{name}
+// The routes are the console's own, with ?scope=user (an end user is the
+// api key's app_user named by X-Fastclaw-End-User):
+//
+//   GET    /api/skills?scope=user          → [{name,description,type,envSpec?,source}]
+//                                             the caller's skills merged with the product's and
+//                                             the global ones (mine > product > system, one per name)
+//   POST   /api/skills/upload?scope=user   multipart `file`: a .zip holding a SKILL.md
+//                                             (end users: handleUploadMySkill's checks and caps)
+//   DELETE /api/skills/{name}?scope=user
 
 const (
 	maxMySkills       = 20
@@ -51,12 +54,6 @@ const (
 )
 
 var mySkillNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,47}$`)
-
-func (s *Server) registerMySkillRoutes(mux *http.ServeMux, auth func(http.HandlerFunc) http.HandlerFunc) {
-	mux.HandleFunc("GET /api/me/skills", auth(s.handleListMySkills))
-	mux.HandleFunc("POST /api/me/skills", auth(s.handleUploadMySkill))
-	mux.HandleFunc("DELETE /api/me/skills/{name}", auth(s.handleDeleteMySkill))
-}
 
 func mySkillError(w http.ResponseWriter, status int, code, detail string) {
 	body := map[string]any{"ok": false, "error": code, "code": code}
@@ -149,50 +146,57 @@ func readMySkills(dir, source string) []mySkillView {
 	return out
 }
 
-// handleListMySkills returns the skills the caller's conversations use,
-// along the same chain the agent loop loads them (chatter > owner > global;
-// an agent's own skills depend on the agent, so they aren't listed): one
-// entry per name, from the highest layer that has it.
-func (s *Server) handleListMySkills(w http.ResponseWriter, r *http.Request) {
+// listUserScopeSkills answers GET /api/skills?scope=user: the skills the
+// caller's conversations use, along the chain the agent loop loads them
+// (chatter > owner > global; an agent's own skills depend on the agent,
+// so they aren't listed). One entry per name, from the highest layer
+// that has it, with its "source": mine (the caller's own, deletable),
+// product (the api key's owner — the product's skills — for an end user)
+// or system (the deployment's global skills).
+func (s *Server) listUserScopeSkills(w http.ResponseWriter, r *http.Request) {
 	uid, dir, ok := s.mySkillsCaller(w, r)
 	if !ok {
 		return
 	}
-	mine := readMySkills(dir, "mine")
-	list := append([]mySkillView{}, mine...)
+	endUser := isEndUserCaller(r)
+	out := []map[string]any{}
 	seen := map[string]bool{}
-	for _, v := range mine {
-		seen[v.Name] = true
-	}
-	add := func(views []mySkillView) {
-		for _, v := range views {
-			if !seen[v.Name] {
-				seen[v.Name] = true
-				list = append(list, v)
+	add := func(list []map[string]any, source string) {
+		for _, m := range list {
+			name, _ := m["name"].(string)
+			if name == "" || seen[name] {
+				continue
 			}
+			seen[name] = true
+			m["source"] = source
+			if endUser {
+				delete(m, "location") // a host path
+			}
+			out = append(out, m)
 		}
 	}
+	add(scanSkillsDir(dir), "mine")
 	ident, _ := auth.FromContext(r.Context())
 	if owner := ident.AppUserID; owner != "" && owner != uid && agent.SafeSkillOwnerID(owner) {
 		if ownerDir, err := userSkillsDir(owner); err == nil {
 			if s.workspaceStore != nil {
 				if err := skills.HydrateSkillsDown(r.Context(), s.workspaceStore, skills.UserSkillOwner(owner), ownerDir); err != nil {
-					slog.Warn("my skills: owner hydrate", "owner", owner, "error", err)
+					slog.Warn("user skills: owner hydrate", "owner", owner, "error", err)
 				}
 			}
-			add(readMySkills(ownerDir, "product"))
+			add(scanSkillsDir(ownerDir), "product")
 		}
 	}
 	if home, err := config.HomeDir(); err == nil {
 		globalDir := filepath.Join(home, "skills")
 		if s.workspaceStore != nil {
 			if err := skills.HydrateSkillsDown(r.Context(), s.workspaceStore, skills.GlobalSkillOwner, globalDir, agent.BundledSkillNames()...); err != nil {
-				slog.Warn("my skills: global hydrate", "error", err)
+				slog.Warn("user skills: global hydrate", "error", err)
 			}
 		}
-		add(readMySkills(globalDir, "system"))
+		add(scanSkillsDir(globalDir), "system")
 	}
-	jsonResponse(w, http.StatusOK, map[string]any{"skills": list, "mine": len(mine), "max": maxMySkills})
+	jsonResponse(w, http.StatusOK, out)
 }
 
 // mySkillUpload is a checked upload: relative path → content.

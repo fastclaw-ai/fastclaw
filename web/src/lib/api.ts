@@ -145,6 +145,8 @@ export interface SkillInfo {
   location: string;
   type: string;
   envSpec?: SkillEnvSpec[];
+  /** scope "user" lists: the layer it comes from (mine, product, system). */
+  source?: "mine" | "product" | "system";
 }
 
 export interface SkillEntryCfg {
@@ -1685,8 +1687,9 @@ export async function deleteAgent(id: string) {
 }
 
 // Skills
-// getSkills lists the global skills, or with scope "user" the caller's
-// own skills (loaded in all their conversations).
+// getSkills lists the global skills, or with scope "user" the skills the
+// caller's conversations use: their own (source "mine"), then the
+// product's and the global ones, one per name.
 export async function getSkills(scope?: "user"): Promise<SkillInfo[]> {
   const res = await apiFetch(scope === "user" ? "/api/skills?scope=user" : "/api/skills");
   return res.json();

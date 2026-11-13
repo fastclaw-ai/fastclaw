@@ -64,22 +64,30 @@ func TestMySkillsForEndUsers(t *testing.T) {
 
 	upload := func(id auth.Identity, filename string, files map[string]string) (int, map[string]any) {
 		body, ct := mySkillBody(t, filename, files)
-		req := httptest.NewRequest(http.MethodPost, "/api/me/skills", body)
+		req := httptest.NewRequest(http.MethodPost, "/api/skills/upload?scope=user", body)
 		req.Header.Set("Content-Type", ct)
 		rec := httptest.NewRecorder()
-		s.handleUploadMySkill(rec, req.WithContext(auth.WithIdentity(req.Context(), id)))
+		s.handleUploadSkill(rec, req.WithContext(auth.WithIdentity(req.Context(), id)))
 		var out map[string]any
 		_ = json.Unmarshal(rec.Body.Bytes(), &out)
 		return rec.Code, out
 	}
 	list := func(id auth.Identity) []any {
-		req := httptest.NewRequest(http.MethodGet, "/api/me/skills", nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/skills?scope=user", nil)
 		rec := httptest.NewRecorder()
-		s.handleListMySkills(rec, req.WithContext(auth.WithIdentity(req.Context(), id)))
-		var out map[string]any
-		_ = json.Unmarshal(rec.Body.Bytes(), &out)
-		items, _ := out["skills"].([]any)
-		return items
+		s.handleListSkills(rec, req.WithContext(auth.WithIdentity(req.Context(), id)))
+		var items []any
+		_ = json.Unmarshal(rec.Body.Bytes(), &items)
+		var mine []any
+		for _, it := range items {
+			if _, leak := it.(map[string]any)["location"]; leak {
+				t.Fatal("host path listed to an end user")
+			}
+			if it.(map[string]any)["source"] == "mine" {
+				mine = append(mine, it)
+			}
+		}
+		return mine
 	}
 
 	// A zip with a wrapping folder, SKILL.md and a reference file.
@@ -141,9 +149,9 @@ func TestMySkillsForEndUsers(t *testing.T) {
 		t.Fatal("files outside the skill folder were kept")
 	}
 	for _, name := range []string{"ppt", "deep"} {
-		del := httptest.NewRequest(http.MethodDelete, "/api/me/skills/"+name, nil)
+		del := httptest.NewRequest(http.MethodDelete, "/api/skills/"+name+"?scope=user", nil)
 		del.SetPathValue("name", name)
-		s.handleDeleteMySkill(httptest.NewRecorder(), del.WithContext(auth.WithIdentity(del.Context(), alice)))
+		s.handleDeleteSkill(httptest.NewRecorder(), del.WithContext(auth.WithIdentity(del.Context(), alice)))
 	}
 	if code, out := upload(alice, "x.zip", map[string]string{"SKILL.md": skillMD("x", "d"), "../evil.md": "x"}); code != http.StatusBadRequest || out["code"] != "file_not_allowed" {
 		t.Fatalf("traversal: %d %v", code, out)
@@ -171,10 +179,10 @@ func TestMySkillsForEndUsers(t *testing.T) {
 
 	// Delete: bob can't remove alice's; alice can.
 	del := func(id auth.Identity, name string) int {
-		req := httptest.NewRequest(http.MethodDelete, "/api/me/skills/"+name, nil)
+		req := httptest.NewRequest(http.MethodDelete, "/api/skills/"+name+"?scope=user", nil)
 		req.SetPathValue("name", name)
 		rec := httptest.NewRecorder()
-		s.handleDeleteMySkill(rec, req.WithContext(auth.WithIdentity(req.Context(), id)))
+		s.handleDeleteSkill(rec, req.WithContext(auth.WithIdentity(req.Context(), id)))
 		return rec.Code
 	}
 	if c := del(bob, "writer"); c != http.StatusNotFound {
@@ -199,7 +207,7 @@ func TestMySkillsLimit(t *testing.T) {
 	for i := 0; i <= maxMySkills; i++ {
 		name := "s" + strings.Repeat("x", i)
 		body, ct := mySkillBody(t, name+".zip", map[string]string{name + "/SKILL.md": skillMD(name, "d")})
-		req := httptest.NewRequest(http.MethodPost, "/api/me/skills", body)
+		req := httptest.NewRequest(http.MethodPost, "/api/skills/upload?scope=user", body)
 		req.Header.Set("Content-Type", ct)
 		rec := httptest.NewRecorder()
 		s.handleUploadMySkill(rec, req.WithContext(auth.WithIdentity(req.Context(), id)))
@@ -212,7 +220,7 @@ func TestMySkillsLimit(t *testing.T) {
 	}
 }
 
-// GET /api/me/skills walks the chain: mine > product (the api key's owner)
+// GET /api/skills?scope=user walks the chain: mine > product (the api key's owner)
 // > system, one entry per name. A personal skill may take a global name.
 func TestMySkillsListMergesLayers(t *testing.T) {
 	home := t.TempDir()
@@ -234,10 +242,10 @@ func TestMySkillsListMergesLayers(t *testing.T) {
 	owner := auth.Identity{UserID: "u_owner", Role: users.RoleUser, AuthMethod: "apikey", APIKeyID: "k1"}
 
 	body, ct := mySkillBody(t, "x.zip", map[string]string{"image-tool/SKILL.md": skillMD("image-tool", "mine")})
-	req := httptest.NewRequest(http.MethodPost, "/api/me/skills", body)
+	req := httptest.NewRequest(http.MethodPost, "/api/skills/upload?scope=user", body)
 	req.Header.Set("Content-Type", ct)
 	rec := httptest.NewRecorder()
-	s.handleUploadMySkill(rec, req.WithContext(auth.WithIdentity(req.Context(), alice)))
+	s.handleUploadSkill(rec, req.WithContext(auth.WithIdentity(req.Context(), alice)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("override a global name: %d %s", rec.Code, rec.Body.String())
 	}
@@ -245,14 +253,13 @@ func TestMySkillsListMergesLayers(t *testing.T) {
 		t.Fatal("upload touched the global skill")
 	}
 
-	list := func(id auth.Identity) (map[string]string, map[string]any) {
-		req := httptest.NewRequest(http.MethodGet, "/api/me/skills", nil)
+	list := func(id auth.Identity) map[string]string {
+		req := httptest.NewRequest(http.MethodGet, "/api/skills?scope=user", nil)
 		rec := httptest.NewRecorder()
-		s.handleListMySkills(rec, req.WithContext(auth.WithIdentity(req.Context(), id)))
-		var out map[string]any
-		_ = json.Unmarshal(rec.Body.Bytes(), &out)
+		s.handleListSkills(rec, req.WithContext(auth.WithIdentity(req.Context(), id)))
+		var items []any
+		_ = json.Unmarshal(rec.Body.Bytes(), &items)
 		got := map[string]string{}
-		items, _ := out["skills"].([]any)
 		for _, it := range items {
 			m := it.(map[string]any)
 			if _, dup := got[m["name"].(string)]; dup {
@@ -260,18 +267,15 @@ func TestMySkillsListMergesLayers(t *testing.T) {
 			}
 			got[m["name"].(string)] = m["source"].(string) + ":" + m["description"].(string)
 		}
-		return got, out
+		return got
 	}
-	got, out := list(alice)
+	got := list(alice)
 	want := map[string]string{"image-tool": "mine:mine", "ppt": "product:product", "brand": "product:product"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("alice: %v", got)
 	}
-	if out["mine"] != float64(1) {
-		t.Fatalf("mine count: %v", out["mine"])
-	}
 	// The owner's own skills are theirs ("mine"), over the global ones.
-	if got, _ := list(owner); got["ppt"] != "mine:product" || got["image-tool"] != "system:system" {
+	if got := list(owner); got["ppt"] != "mine:product" || got["image-tool"] != "system:system" {
 		t.Fatalf("owner: %v", got)
 	}
 }

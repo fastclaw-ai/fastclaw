@@ -93,8 +93,11 @@ export function SkillsManager({ target }: { target: SkillsTarget }) {
       getConfig(isUser ? "user" : undefined).catch(() => null),
       isUser ? getSkills().catch(() => [] as SkillInfo[]) : Promise.resolve([] as SkillInfo[]),
     ])
-      .then(([list, cfg, shared]) => {
-        setSkills(list || []);
+      .then(([all, cfg, shared]) => {
+        // The user list also carries inherited skills; this page edits
+        // the caller's own.
+        const list = (all || []).filter((sk) => !sk.source || sk.source === "mine");
+        setSkills(list);
         const own = new Set((list || []).map((sk) => sk.name));
         setSharedSkills((shared || []).filter((sk) => !own.has(sk.name)));
         // Per-agent override map first (this page edits there); merge
