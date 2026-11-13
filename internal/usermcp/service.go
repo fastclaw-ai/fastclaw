@@ -50,9 +50,22 @@ type Server struct {
 	Name      string            `json:"name"`
 	URL       string            `json:"url"`
 	Headers   map[string]string `json:"-"` // values never leave the server
+	OAuth     *OAuth            `json:"-"` // set for a server authorized with OAuth
 	ToolCount int               `json:"toolCount"`
 	CreatedAt int64             `json:"createdAt"`
 }
+
+// Auth is how requests to the server authenticate: "oauth" or "headers".
+func (s Server) Auth() string {
+	if s.OAuth != nil {
+		return "oauth"
+	}
+	return "headers"
+}
+
+// NeedsReauth: its OAuth tokens stopped working; the person must
+// authorize again.
+func (s Server) NeedsReauth() bool { return s.OAuth != nil && s.OAuth.Broken }
 
 // HeaderNames lists the header names (values stay secret).
 func (s Server) HeaderNames() []string {
@@ -84,6 +97,8 @@ type Service struct {
 
 	mu    sync.Mutex
 	tools map[string]toolsEntry // server id → tools
+
+	tok tokenState
 }
 
 type toolsEntry struct {
@@ -181,6 +196,12 @@ func (s *Service) Add(ctx context.Context, userID, name, rawURL string, headers 
 	}
 	sess, err := dial(ctx, u, headers)
 	if err != nil {
+		// A server that asks for OAuth is added through StartOAuth.
+		if Code(err) == "unauthorized" {
+			if _, derr := discover(ctx, u); derr == nil {
+				return Server{}, &Error{Code: "oauth_required"}
+			}
+		}
 		return Server{}, err
 	}
 	tools, err := sess.listTools(ctx)
@@ -217,6 +238,13 @@ func (s *Service) Update(ctx context.Context, userID, id, name, rawURL string, h
 	}
 	if cur == nil {
 		return Server{}, &Error{Code: "not_found"}
+	}
+	if cur.OAuth != nil {
+		// Its tokens belong to this address: only the name changes.
+		if strings.TrimSpace(rawURL) != cur.URL {
+			return Server{}, &Error{Code: "invalid_url", Detail: "an OAuth server's address can't change"}
+		}
+		headers = nil
 	}
 	merged := cur.Headers
 	if headers != nil {
@@ -290,6 +318,7 @@ func (s *Service) Delete(ctx context.Context, userID, id string) error {
 	s.mu.Lock()
 	delete(s.tools, id)
 	s.mu.Unlock()
+	s.forgetToken(id)
 	return nil
 }
 
@@ -313,7 +342,7 @@ func (s *Service) Tools(ctx context.Context, srv Server) ([]ToolDef, error) {
 	if ok && time.Since(e.at) < toolsTTL {
 		return e.tools, nil
 	}
-	sess, err := dial(ctx, srv.URL, srv.Headers)
+	sess, err := s.dialFor(ctx, srv)
 	if err != nil {
 		return nil, err
 	}
@@ -355,7 +384,7 @@ func (s *Service) Call(ctx context.Context, srv Server, tool string, args map[st
 			return "", err
 		}
 	}
-	sess, err := dial(ctx, srv.URL, srv.Headers)
+	sess, err := s.dialFor(ctx, srv)
 	if err != nil {
 		return "", err
 	}
@@ -384,10 +413,13 @@ type sqlStore struct {
 
 func newSQLStore(ctx context.Context, d DB) (*sqlStore, error) {
 	s := &sqlStore{db: d.DB(), postgres: d.Dialect() == "postgres"}
-	for _, stmt := range schema {
+	for _, stmt := range append(schema, oauthSchema...) {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
 			return nil, fmt.Errorf("usermcp schema: %w", err)
 		}
+	}
+	if err := s.addOAuthColumn(ctx); err != nil {
+		return nil, fmt.Errorf("usermcp schema: %w", err)
 	}
 	return s, nil
 }
@@ -411,7 +443,7 @@ func (s *sqlStore) rebind(q string) string {
 
 func (s *sqlStore) list(ctx context.Context, userID string) ([]Server, error) {
 	rows, err := s.db.QueryContext(ctx, s.rebind(
-		`SELECT id, name, url, headers, tool_count, created_at FROM user_mcp_servers WHERE user_id = ? ORDER BY created_at, id`), userID)
+		`SELECT id, name, url, headers, oauth, tool_count, created_at FROM user_mcp_servers WHERE user_id = ? ORDER BY created_at, id`), userID)
 	if err != nil {
 		return nil, err
 	}
@@ -419,10 +451,11 @@ func (s *sqlStore) list(ctx context.Context, userID string) ([]Server, error) {
 	var out []Server
 	for rows.Next() {
 		var srv Server
-		var headers string
-		if err := rows.Scan(&srv.ID, &srv.Name, &srv.URL, &headers, &srv.ToolCount, &srv.CreatedAt); err != nil {
+		var headers, oauth string
+		if err := rows.Scan(&srv.ID, &srv.Name, &srv.URL, &headers, &oauth, &srv.ToolCount, &srv.CreatedAt); err != nil {
 			return nil, err
 		}
+		srv.OAuth = decodeOAuth(oauth)
 		srv.Headers = map[string]string{}
 		_ = json.Unmarshal([]byte(headers), &srv.Headers)
 		out = append(out, srv)
@@ -436,8 +469,8 @@ func (s *sqlStore) insert(ctx context.Context, userID string, srv Server) error 
 		return err
 	}
 	_, err = s.db.ExecContext(ctx, s.rebind(
-		`INSERT INTO user_mcp_servers (id, user_id, name, url, headers, tool_count, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`),
-		srv.ID, userID, srv.Name, srv.URL, string(headers), srv.ToolCount, srv.CreatedAt)
+		`INSERT INTO user_mcp_servers (id, user_id, name, url, headers, oauth, tool_count, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
+		srv.ID, userID, srv.Name, srv.URL, string(headers), encodeOAuth(srv.OAuth), srv.ToolCount, srv.CreatedAt)
 	return err
 }
 
@@ -447,8 +480,8 @@ func (s *sqlStore) update(ctx context.Context, userID string, srv Server) (int64
 		return 0, err
 	}
 	res, err := s.db.ExecContext(ctx, s.rebind(
-		`UPDATE user_mcp_servers SET name = ?, url = ?, headers = ?, tool_count = ? WHERE user_id = ? AND id = ?`),
-		srv.Name, srv.URL, string(headers), srv.ToolCount, userID, srv.ID)
+		`UPDATE user_mcp_servers SET name = ?, url = ?, headers = ?, oauth = ?, tool_count = ? WHERE user_id = ? AND id = ?`),
+		srv.Name, srv.URL, string(headers), encodeOAuth(srv.OAuth), srv.ToolCount, userID, srv.ID)
 	if err != nil {
 		return 0, err
 	}

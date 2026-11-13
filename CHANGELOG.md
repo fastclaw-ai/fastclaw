@@ -5,6 +5,17 @@ action on upgrade — read those notes before deploying.
 
 ## [Unreleased]
 
+### Added — OAuth for custom MCP servers
+
+A custom MCP server that asks for OAuth (401 with a `resource_metadata`
+challenge, MCP authorization spec) is now added through the authorization
+code flow: `POST /api/mcp-servers` answers `oauth_required`, then
+`POST /api/mcp-servers/oauth/start` (dynamic client registration + PKCE,
+the caller's `redirectUri`) and `POST /api/mcp-servers/oauth/finish`
+(`{state, code}`). Tokens are kept with the server and refreshed; a server
+whose refresh is refused shows `needsReauth`. Adds the column
+`user_mcp_servers.oauth` and the table `user_mcp_oauth_pending` at boot.
+
 ### Added — custom MCP servers per person
 
 People can add their own Streamable HTTP MCP servers (`GET/POST

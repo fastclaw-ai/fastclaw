@@ -235,9 +235,16 @@ func TestUpdate(t *testing.T) {
 	if _, err := svc.Update(ctx, "u1", a.ID, "Renamed", ts.URL, map[string]string{"Authorization": "Bearer wrong"}); Code(err) != "unauthorized" {
 		t.Fatalf("bad key: %v", err)
 	}
+	// A and B can share a created_at: find A by id, not by position.
 	list, _ := svc.List(ctx, "u1")
-	if list[0].Name != "Renamed" || list[0].Headers["Authorization"] != "Bearer secret" || list[0].Headers["X-Extra"] != "1" {
-		t.Fatalf("saved = %+v", list[0])
+	var saved Server
+	for _, srv := range list {
+		if srv.ID == a.ID {
+			saved = srv
+		}
+	}
+	if saved.Name != "Renamed" || saved.Headers["Authorization"] != "Bearer secret" || saved.Headers["X-Extra"] != "1" {
+		t.Fatalf("saved = %+v", saved)
 	}
 	// Dropping a header removes it.
 	got, err = svc.Update(ctx, "u1", a.ID, "Renamed", ts.URL, map[string]string{"Authorization": ""})

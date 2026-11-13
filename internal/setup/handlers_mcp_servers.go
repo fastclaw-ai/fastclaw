@@ -21,12 +21,23 @@ import (
 //   PATCH  /api/mcp-servers/{id}   {name, url, headers?}: headers absent keeps them;
 //                                  an empty value keeps that header's saved value
 //   DELETE /api/mcp-servers/{id}
+//   POST   /api/mcp-servers/oauth/start  {name, url, serverId?, redirectUri, clientName?}
+//                                  → {authorizeUrl}: send the person there; the
+//                                  authorization server returns to redirectUri
+//                                  with ?code&state
+//   POST   /api/mcp-servers/oauth/finish {state, code} → {server}
+//
+// Adding a server that asks for OAuth answers code "oauth_required"; the
+// caller then starts the OAuth flow (serverId re-authorizes an existing
+// one, e.g. when it shows needsReauth).
 
 func (s *Server) registerMCPServerRoutes(mux *http.ServeMux, auth func(http.HandlerFunc) http.HandlerFunc) {
 	mux.HandleFunc("GET /api/mcp-servers", auth(s.handleListMCPServers))
 	mux.HandleFunc("POST /api/mcp-servers", auth(s.handleAddMCPServer))
 	mux.HandleFunc("PATCH /api/mcp-servers/{id}", auth(s.handleUpdateMCPServer))
 	mux.HandleFunc("DELETE /api/mcp-servers/{id}", auth(s.handleDeleteMCPServer))
+	mux.HandleFunc("POST /api/mcp-servers/oauth/start", auth(s.handleStartMCPOAuth))
+	mux.HandleFunc("POST /api/mcp-servers/oauth/finish", auth(s.handleFinishMCPOAuth))
 }
 
 func (s *Server) mcpServerCaller(w http.ResponseWriter, r *http.Request) (*usermcp.Service, string, bool) {
@@ -47,6 +58,7 @@ func mcpServerView(srv usermcp.Server) map[string]any {
 	return map[string]any{
 		"id": srv.ID, "name": srv.Name, "url": srv.URL, "headerNames": srv.HeaderNames(),
 		"toolCount": srv.ToolCount, "createdAt": srv.CreatedAt,
+		"auth": srv.Auth(), "needsReauth": srv.NeedsReauth(),
 	}
 }
 
@@ -147,4 +159,62 @@ func (s *Server) handleDeleteMCPServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonResponse(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleStartMCPOAuth(w http.ResponseWriter, r *http.Request) {
+	if !s.requireWritable(w, r) {
+		return
+	}
+	svc, uid, ok := s.mcpServerCaller(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		ServerID    string `json:"serverId"`
+		Name        string `json:"name"`
+		URL         string `json:"url"`
+		RedirectURI string `json:"redirectUri"`
+		ClientName  string `json:"clientName"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&req); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "invalid_request", "code": "invalid_request"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	defer cancel()
+	authURL, err := svc.StartOAuth(ctx, uid, usermcp.OAuthStart{
+		ServerID: req.ServerID, Name: req.Name, URL: req.URL,
+		RedirectURI: req.RedirectURI, ClientName: req.ClientName,
+	})
+	if err != nil {
+		mcpServerError(w, err)
+		return
+	}
+	jsonResponse(w, http.StatusOK, map[string]any{"authorizeUrl": authURL})
+}
+
+func (s *Server) handleFinishMCPOAuth(w http.ResponseWriter, r *http.Request) {
+	if !s.requireWritable(w, r) {
+		return
+	}
+	svc, uid, ok := s.mcpServerCaller(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		State string `json:"state"`
+		Code  string `json:"code"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&req); err != nil || req.State == "" || req.Code == "" {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"error": "invalid_request", "code": "invalid_request"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	defer cancel()
+	srv, err := svc.FinishOAuth(ctx, uid, req.State, req.Code)
+	if err != nil {
+		mcpServerError(w, err)
+		return
+	}
+	jsonResponse(w, http.StatusOK, map[string]any{"server": mcpServerView(srv)})
 }

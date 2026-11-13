@@ -157,14 +157,44 @@ A person may also add MCP servers of their own (Connectors → Custom MCP;
 
 | Route | |
 | --- | --- |
-| `GET /api/mcp-servers` | the caller's servers: `{servers:[{id,name,url,headerNames,toolCount,createdAt}], max}` |
+| `GET /api/mcp-servers` | the caller's servers: `{servers:[{id,name,url,headerNames,toolCount,createdAt,auth,needsReauth}], max}` (`auth`: `oauth` or `headers`) |
 | `POST /api/mcp-servers` | `{name, url, headers?}`: connects (initialize + tools/list) and saves only if it answers as MCP |
 | `PATCH /api/mcp-servers/{id}` | `{name, url, headers?}`: the caller's own only. `headers` absent keeps them; otherwise it's the full set, and an empty value keeps that header's saved value. A new address or headers are checked again before saving |
 | `DELETE /api/mcp-servers/{id}` | the caller's own only |
+| `POST /api/mcp-servers/oauth/start` | `{name, url, redirectUri, clientName?}` for a new server, or `{serverId, redirectUri}` to authorize one again → `{authorizeUrl}` |
+| `POST /api/mcp-servers/oauth/finish` | `{state, code}` from the redirect → `{server}`: trades the code, checks the server with the token, saves it |
 
 Errors carry a closed `code`: `invalid_name`, `invalid_url`,
 `invalid_headers`, `name_taken`, `too_many` (20 per user), `unauthorized`
-(the server refused the headers), `unreachable`, `not_mcp`.
+(the server refused the headers), `unreachable`, `not_mcp`; for OAuth:
+`oauth_required` (add it through the OAuth flow), `oauth_unsupported` (no
+usable authorization server: no metadata, no dynamic client registration or
+no PKCE S256), `invalid_redirect`, `oauth_expired` (unknown, used, expired
+or someone else's state), `oauth_failed` (the code was refused).
+
+### OAuth servers
+
+A server that answers 401 with a `WWW-Authenticate: Bearer
+resource_metadata="…"` challenge (MCP authorization spec 2025-06-18; the
+older origin-as-authorization-server layout works too) is added through
+OAuth. The caller owns the redirect:
+
+1. `POST /api/mcp-servers` answers `oauth_required`.
+2. `oauth/start` reads the protected-resource and authorization-server
+   metadata, registers a public client there (dynamic client registration,
+   `redirectUri` as its only redirect URI), and returns the authorization
+   URL (code flow, PKCE S256, `resource` = the server, the challenge's
+   `scope`). The state is bound to the caller and lasts 15 minutes.
+3. The person approves; the authorization server returns to `redirectUri`
+   with `code` and `state`, which the caller passes to `oauth/finish` as the
+   same user. A state works once.
+
+Tokens live with the server (`user_mcp_servers.oauth`) and never leave
+Fastclaw. An access token about to expire, or one the server refuses, is
+refreshed (once per server at a time); when the refresh is refused the
+server shows `needsReauth` and its tools answer `reauth_required` until
+the person authorizes it again (`oauth/start` with `serverId`). An OAuth
+server can be renamed, not moved to another address.
 
 - Streamable HTTP only (`https://`, no stdio). The client dials public
   addresses only (checked again at dial time, no proxy, no redirects),
@@ -187,3 +217,5 @@ Errors carry a closed `code`: `invalid_name`, `invalid_url`,
 - Polling Connany's event stream: a revocation on the platform is noticed on
   the next call.
 - Multi-replica: caches and the 429 cooldown are per process.
+- Custom MCP header values and OAuth tokens are stored unencrypted in the
+  database (no at-rest key yet).

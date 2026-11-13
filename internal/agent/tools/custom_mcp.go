@@ -198,6 +198,8 @@ func mcpExplain(err error, name string) string {
 	switch e.Code {
 	case "unauthorized":
 		return fmt.Sprintf("Error: the MCP server %q refused the credentials. Ask the person to re-add it in Connectors → Custom MCP with a valid key.", name)
+	case "reauth_required", "oauth_required":
+		return fmt.Sprintf("Error: the MCP server %q needs the person to sign in again. Ask them to authorize it again in Connectors → Custom MCP.", name)
 	case "unreachable", "not_mcp":
 		return fmt.Sprintf("Error: the MCP server %q can't be reached or didn't answer as MCP. Tell the person it isn't working right now.", name)
 	case "tool_not_found":
