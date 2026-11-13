@@ -169,7 +169,8 @@ Errors carry a closed `code`: `invalid_name`, `invalid_url`,
 (the server refused the headers), `unreachable`, `not_mcp`; for OAuth:
 `oauth_required` (add it through the OAuth flow), `oauth_unsupported` (no
 usable authorization server: no metadata, no dynamic client registration or
-no PKCE S256), `invalid_redirect`, `oauth_expired` (unknown, used, expired
+no PKCE S256), `oauth_redirect_refused` (its registration only accepts
+certain apps' redirect URIs), `invalid_redirect`, `oauth_expired` (unknown, used, expired
 or someone else's state), `oauth_failed` (the code was refused).
 
 ### OAuth servers

@@ -289,6 +289,11 @@ func register(ctx context.Context, d *discovered, redirectURI, clientName string
 		AuthMethod   string `json:"token_endpoint_auth_method"`
 	}
 	if err := postJSON(ctx, d.as.RegistrationEndpoint, req, &res); err != nil {
+		// Some servers only let named apps in (e.g. "only Claude and
+		// ChatGPT redirect URIs"): nothing we can change.
+		if strings.Contains(err.Error(), "invalid_redirect_uri") {
+			return nil, &Error{Code: "oauth_redirect_refused", Detail: err.Error()}
+		}
 		return nil, &Error{Code: "oauth_unsupported", Detail: "client registration: " + err.Error()}
 	}
 	if res.ClientID == "" {
