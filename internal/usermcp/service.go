@@ -1,8 +1,9 @@
 // Package usermcp holds the MCP servers a person added themselves
 // (WeClaw → Connectors → Custom MCP). A server belongs to the one user who
-// added it, who offers it on agents they made (SetAgentServers): everyone
-// chatting with such an agent may use it there, under the same turn rules
-// as their connected accounts (docs/connectors.md).
+// added it, who may use it with every agent they chat with. They may also
+// offer it on agents they made (SetAgentServers): then everyone chatting
+// with such an agent may use it there. Same turn rules as connected
+// accounts (docs/connectors.md).
 //
 // A server with headers (an API key) runs on the adder's headers for
 // everyone. An OAuth server runs on each person's own sign-in.

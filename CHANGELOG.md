@@ -7,10 +7,11 @@ action on upgrade — read those notes before deploying.
 
 ### Changed — custom MCP servers are offered on agents; OAuth is per person
 
-**BREAKING (API):** a custom MCP server is no longer mounted on its adder's
-own turns automatically. Whoever made an agent offers their servers on it
-(`GET/PUT /api/agents/{id}/mcp-servers`), and everyone chatting with that
-agent may use them there. A header server runs on its adder's headers; an
+**BREAKING (API):** a custom MCP server still works for its adder with
+every agent they chat with, and whoever made an agent may now also offer
+their servers on it (`GET/PUT /api/agents/{id}/mcp-servers`,
+`PUT /api/mcp-servers/{id}/agents`): everyone chatting with that agent may
+then use them there. A header server runs on its adder's headers; an
 OAuth server is now added without signing in (`POST /api/mcp-servers` no
 longer answers `oauth_required`; optional `redirectUri` registers the
 client up front), and each person signs in with their own account from a

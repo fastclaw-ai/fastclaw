@@ -149,9 +149,10 @@ turn waits.
 ## Custom MCP servers
 
 A person may also add MCP servers of their own (Connectors → Custom MCP;
-`internal/usermcp`). Each belongs to the one user who added it, who offers
-it on agents they made. Everyone chatting with such an agent may use it
-there; nobody else can.
+`internal/usermcp`). Each belongs to the one user who added it, who may use
+it with **every agent they chat with**. They may also offer it on agents
+they made: then everyone chatting with such an agent may use it there.
+Nobody else can.
 
 - A server with **headers** (an API key) runs on the adder's headers for
   everyone who uses it.
@@ -218,7 +219,8 @@ adder's own sign-in.
 - Header values (API keys) are stored server-side (`user_mcp_servers`) and
   never returned: the list shows header names only.
 - Mounted as one `custom_mcp` tool (`list_tools`, `call_tool`) with the
-  servers the agent offers, on exactly the turns that may use the chatter's
+  chatter's own servers plus the ones the agent offers (an offered one
+  whose name they already use gets a numbered name), on exactly the turns that may use the chatter's
   connected accounts (`ownAccountsTurn`), with a system note naming them.
   IM groups and cron never see them.
 - A tool the server doesn't mark `readOnlyHint: true` runs only after the
