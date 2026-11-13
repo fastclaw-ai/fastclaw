@@ -104,19 +104,53 @@ func TestMySkillsForEndUsers(t *testing.T) {
 		t.Fatalf("bob sees alice's skills: %v", got)
 	}
 
-	// Instructions only: no scripts, binaries or hidden files.
-	for _, bad := range []map[string]string{
-		{"x/SKILL.md": skillMD("x", "d"), "x/run.py": "print(1)"},
-		{"x/SKILL.md": skillMD("x", "d"), "x/scripts/a.sh": "env"},
-		{"x/SKILL.md": skillMD("x", "d"), "x/.env": "A=1"},
-		{"x/SKILL.md": skillMD("x", "d"), "x/data.json": "\xff\xfe"},
-	} {
-		if code, out := upload(alice, "x.zip", bad); code != http.StatusBadRequest || out["code"] != "file_not_allowed" {
-			t.Fatalf("%v: %d %v", bad, code, out)
+	// The whole skill folder goes up: scripts, templates and images too.
+	if code, out := upload(alice, "ppt.zip", map[string]string{
+		"ppt-main/SKILL.md":            skillMD("ppt", "Make slides"),
+		"ppt-main/.gitignore":          "node_modules",
+		"ppt-main/scripts/check.mjs":   "console.log(1)",
+		"ppt-main/assets/bg.webp":      "\xff\xfe\x00",
+		"ppt-main/.git/config":         "[core]",
+		"__MACOSX/ppt-main/._SKILL.md": "junk",
+	}); code != http.StatusOK {
+		t.Fatalf("full folder: %d %v", code, out)
+	}
+	pptDir := filepath.Join(home, "users", "u_alice", "skills", "ppt")
+	for _, f := range []string{"scripts/check.mjs", "assets/bg.webp", ".gitignore"} {
+		if _, err := os.Stat(filepath.Join(pptDir, f)); err != nil {
+			t.Fatalf("%s not kept: %v", f, err)
 		}
 	}
+	if _, err := os.Stat(filepath.Join(pptDir, ".git")); err == nil {
+		t.Fatal(".git was kept")
+	}
+	// SKILL.md in a subfolder: that folder is the skill, the rest is left out.
+	if code, out := upload(alice, "repo.zip", map[string]string{
+		"repo/README.md":                 "about",
+		"repo/skills/deep/SKILL.md":      skillMD("deep", "Nested"),
+		"repo/skills/deep/refs/notes.md": "n",
+	}); code != http.StatusOK {
+		t.Fatalf("nested: %d %v", code, out)
+	}
+	deepDir := filepath.Join(home, "users", "u_alice", "skills", "deep")
+	if _, err := os.Stat(filepath.Join(deepDir, "refs", "notes.md")); err != nil {
+		t.Fatalf("nested files: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(deepDir, "README.md")); err == nil {
+		t.Fatal("files outside the skill folder were kept")
+	}
+	for _, name := range []string{"ppt", "deep"} {
+		del := httptest.NewRequest(http.MethodDelete, "/api/me/skills/"+name, nil)
+		del.SetPathValue("name", name)
+		s.handleDeleteMySkill(httptest.NewRecorder(), del.WithContext(auth.WithIdentity(del.Context(), alice)))
+	}
+	if code, out := upload(alice, "x.zip", map[string]string{"SKILL.md": skillMD("x", "d"), "../evil.md": "x"}); code != http.StatusBadRequest || out["code"] != "file_not_allowed" {
+		t.Fatalf("traversal: %d %v", code, out)
+	}
+
 	for files, want := range map[string]map[string]string{
 		"no_skill_md":         {"x/README.md": "hi"},
+		"multiple_skills":     {"a/SKILL.md": skillMD("a", "d"), "b/SKILL.md": skillMD("b", "d")},
 		"invalid_frontmatter": {"x/SKILL.md": "# no frontmatter"},
 		"invalid_name":        {"写作/SKILL.md": "---\nname: 写作助手\ndescription: d\n---\n"},
 		"name_reserved":       {"image-tool/SKILL.md": skillMD("image-tool", "fake")},

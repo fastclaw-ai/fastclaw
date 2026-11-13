@@ -10,8 +10,10 @@ action on upgrade — read those notes before deploying.
 Anyone signed in, including a product's end users (`X-Fastclaw-End-User`),
 can upload skills of their own (`GET/POST /api/me/skills`,
 `DELETE /api/me/skills/{name}`). A skill lands in their personal layer, so
-it is used in their own conversations only, with any agent. Uploads are
-instructions only: SKILL.md plus text reference files, no scripts. The
+it is used in their own conversations only, with any agent. An upload is
+the folder of the zip's shallowest SKILL.md, kept whole (templates, images
+and scripts included; `.git/` and OS clutter skipped). Its files don't
+reach the sandbox yet, so scripts can be read but not run. The
 limits are 20 skills, 200 files and 10 MB each, and global skill names are
 reserved. `load_skill` points a personal skill's files at `skills/<name>/…`,
 which `read_file` reaches. See docs/personal-skills.md.

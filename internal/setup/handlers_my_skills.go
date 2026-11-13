@@ -30,9 +30,11 @@ import (
 // (agent.SkillsLoader.WithUserID with the chatter). So uploading here makes
 // a skill usable in their own conversations only.
 //
-// Uploads are instructions only: SKILL.md plus text reference files. A
-// script would run in the chatter's sandbox, which personal skills don't
-// reach, and isn't something to take from anyone who can sign up.
+// An upload is a whole skill folder: SKILL.md plus whatever it carries
+// (references, templates, images, scripts). Personal skills are not given
+// any configured keys, and their names can't take a deployment skill's, so
+// their scripts get nothing the chatter couldn't already run in their own
+// sandbox.
 //
 //   GET    /api/me/skills          → {skills:[{name,description,files,bytes,updatedAt}], max}
 //   POST   /api/me/skills          multipart `file`: a .zip of the skill folder (or a bare SKILL.md)
@@ -45,12 +47,6 @@ const (
 	maxMySkillFiles   = 200
 	maxMySkillMDBytes = 256 << 10
 )
-
-// mySkillTextExts are the reference files a skill may carry.
-var mySkillTextExts = map[string]bool{
-	".md": true, ".markdown": true, ".txt": true, ".json": true,
-	".yaml": true, ".yml": true, ".csv": true, ".tsv": true,
-}
 
 var mySkillNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,47}$`)
 
@@ -165,8 +161,11 @@ type mySkillUpload struct {
 	files map[string][]byte
 }
 
-// parseMySkillUpload reads a zip of one skill folder (or a bare SKILL.md)
-// and checks it. The returned code names what's wrong.
+// parseMySkillUpload reads a zip holding a skill (or a bare SKILL.md). The
+// skill is the folder of the shallowest SKILL.md in the zip — the zip's root,
+// a wrapping folder, or any subfolder — taken whole: templates, images and
+// scripts included. Everything outside that folder is left out. The
+// returned code names what's wrong.
 func parseMySkillUpload(filename string, data []byte) (*mySkillUpload, string, string) {
 	files := map[string][]byte{}
 	top := ""
@@ -178,27 +177,48 @@ func parseMySkillUpload(filename string, data []byte) (*mySkillUpload, string, s
 		if err != nil {
 			return nil, "invalid_file", ""
 		}
-		top = detectCommonTopDir(zr.File)
-		var total int64
+		root, depth, ambiguous := "", -1, false
 		for _, f := range zr.File {
-			name := f.Name
-			if f.FileInfo().IsDir() || strings.HasPrefix(name, "__MACOSX/") {
+			if f.FileInfo().IsDir() || skipZipEntry(f.Name) || path.Base(f.Name) != "SKILL.md" {
 				continue
 			}
-			if top != "" {
-				name = strings.TrimPrefix(name, top+"/")
+			clean := path.Clean(f.Name)
+			dir := path.Dir(clean)
+			if dir == "." {
+				dir = ""
 			}
-			base := path.Base(name)
-			if base == ".DS_Store" || strings.HasPrefix(base, "._") {
+			n := strings.Count(clean, "/")
+			switch {
+			case depth < 0 || n < depth:
+				root, depth, ambiguous = dir, n, false
+			case n == depth && dir != root:
+				ambiguous = true
+			}
+		}
+		if depth < 0 {
+			return nil, "no_skill_md", ""
+		}
+		if ambiguous {
+			return nil, "multiple_skills", ""
+		}
+		prefix := ""
+		if root != "" {
+			prefix = root + "/"
+			top = path.Base(root)
+		}
+		var total, read int64
+		for _, f := range zr.File {
+			if f.FileInfo().IsDir() || skipZipEntry(f.Name) {
 				continue
 			}
-			clean := path.Clean(name)
-			if clean == "." || strings.HasPrefix(clean, "../") || clean == ".." || path.IsAbs(clean) ||
-				f.Mode()&os.ModeSymlink != 0 || strings.HasPrefix(base, ".") {
-				return nil, "file_not_allowed", name
+			name := path.Clean(f.Name)
+			if !strings.HasPrefix(name, prefix) {
+				continue
 			}
-			if !mySkillTextExts[strings.ToLower(path.Ext(clean))] {
-				return nil, "file_not_allowed", clean
+			rel := strings.TrimPrefix(name, prefix)
+			if rel == "" || rel == "." || rel == ".." || strings.HasPrefix(rel, "../") || path.IsAbs(rel) ||
+				strings.HasPrefix(f.Name, "/") || f.Mode()&os.ModeSymlink != 0 {
+				return nil, "file_not_allowed", f.Name
 			}
 			if len(files) >= maxMySkillFiles {
 				return nil, "too_many_files", ""
@@ -211,21 +231,21 @@ func parseMySkillUpload(filename string, data []byte) (*mySkillUpload, string, s
 			if err != nil {
 				return nil, "invalid_file", ""
 			}
-			content, err := io.ReadAll(io.LimitReader(rc, maxMySkillBytes+1))
+			// Headers can understate sizes: read no more than what's left.
+			left := maxMySkillBytes - read
+			content, err := io.ReadAll(io.LimitReader(rc, left+1))
 			rc.Close()
-			if err != nil || int64(len(content)) > maxMySkillBytes {
+			if err != nil || int64(len(content)) > left {
 				return nil, "too_large", ""
 			}
-			files[clean] = content
+			read += int64(len(content))
+			files[rel] = content
 		}
 	}
 
 	var total int
-	for p, content := range files {
+	for _, content := range files {
 		total += len(content)
-		if !utf8.Valid(content) {
-			return nil, "file_not_allowed", p
-		}
 	}
 	if total > maxMySkillBytes {
 		return nil, "too_large", ""
@@ -236,6 +256,9 @@ func parseMySkillUpload(filename string, data []byte) (*mySkillUpload, string, s
 	}
 	if len(md) > maxMySkillMDBytes {
 		return nil, "too_large", "SKILL.md"
+	}
+	if !utf8.Valid(md) {
+		return nil, "invalid_frontmatter", ""
 	}
 	fm, _ := agent.SplitSkillFrontmatter(md)
 	if fm == nil || strings.TrimSpace(fm.Description) == "" {
@@ -253,6 +276,23 @@ func parseMySkillUpload(filename string, data []byte) (*mySkillUpload, string, s
 		return nil, "invalid_name", ""
 	}
 	return &mySkillUpload{name: name, files: files}, "", ""
+}
+
+// skipZipEntry: archive and OS clutter, never part of a skill.
+func skipZipEntry(name string) bool {
+	if strings.HasPrefix(name, "__MACOSX/") {
+		return true
+	}
+	base := path.Base(name)
+	if base == ".DS_Store" || strings.HasPrefix(base, "._") {
+		return true
+	}
+	for _, seg := range strings.Split(name, "/") {
+		if seg == ".git" {
+			return true
+		}
+	}
+	return false
 }
 
 // reservedSkillName: the deployment's own skills keep their names, so a
