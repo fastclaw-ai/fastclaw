@@ -58,6 +58,9 @@ func makeLoadSkill(r *Registry, skillDirs []string) ToolFunc {
 			skillPath := filepath.Join(dir, args.Name, "SKILL.md")
 			data, err := os.ReadFile(skillPath)
 			if err == nil {
+				if r.isPersonalSkillDir(dir) {
+					return personalSkillContent(dir, args.Name, data), nil
+				}
 				skillDir, _ := filepath.Abs(filepath.Join(dir, args.Name))
 				content := strings.ReplaceAll(string(data), "{baseDir}", skillDir)
 				if reason := unavailableReason(data, r.ExecRunsOnHost(), r.HasTool); reason != "" {
@@ -73,6 +76,41 @@ func makeLoadSkill(r *Registry, skillDirs []string) ToolFunc {
 
 		return "", fmt.Errorf("skill %q not found", args.Name)
 	}
+}
+
+// isPersonalSkillDir: dir is the chatter's own skills folder
+// (~/.fastclaw/users/<uid>/skills), which file tools reach as skills/….
+func (r *Registry) isPersonalSkillDir(dir string) bool {
+	if r.userSkillsRoot == "" {
+		return false
+	}
+	return filepath.Clean(dir) == filepath.Clean(filepath.Join(r.userSkillsRoot, "skills"))
+}
+
+// personalSkillContent is a skill the person chatting added themselves.
+// Its files are reached as skills/<name>/… (read_file routes that to their
+// own folder), not by a host path that a sandboxed turn can't open; and
+// it's theirs, so nothing about it is secret from them.
+func personalSkillContent(dir, name string, data []byte) string {
+	base := "skills/" + name
+	content := strings.ReplaceAll(string(data), "{baseDir}", base)
+	var files []string
+	root := filepath.Join(dir, name)
+	_ = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || len(files) >= 50 {
+			return nil
+		}
+		rel, rerr := filepath.Rel(root, p)
+		if rerr == nil && rel != "SKILL.md" {
+			files = append(files, base+"/"+filepath.ToSlash(rel))
+		}
+		return nil
+	})
+	head := "[The person's own skill " + name + " (they added it themselves). Follow it for their requests."
+	if len(files) > 0 {
+		head += " Its other files — read them with read_file at these paths when the instructions refer to them: " + strings.Join(files, ", ") + "."
+	}
+	return head + "]\n\n" + content
 }
 
 // wrapSkillContentInternal prefixes SKILL.md content with an explicit

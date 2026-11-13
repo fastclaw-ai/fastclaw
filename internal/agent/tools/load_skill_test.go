@@ -373,3 +373,33 @@ Body.`)
 		t.Errorf("expected zero value for a skill with no requires, got %+v", empty)
 	}
 }
+
+// A skill the chatter added themselves points at skills/<name>/… (their
+// own folder, which read_file reaches) rather than a host path, lists its
+// reference files, and isn't treated as a secret from them.
+func TestLoadSkillPersonalSkillUsesRelativePaths(t *testing.T) {
+	userRoot := t.TempDir()
+	skillDir := filepath.Join(userRoot, "skills", "writer")
+	if err := os.MkdirAll(filepath.Join(skillDir, "refs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: writer\ndescription: d\n---\nSee {baseDir}/refs/style.md"), 0o644)
+	os.WriteFile(filepath.Join(skillDir, "refs", "style.md"), []byte("short sentences"), 0o644)
+
+	r := NewRegistry(t.TempDir(), t.TempDir())
+	r.userSkillsRoot = userRoot
+	RegisterLoadSkill(r, []string{filepath.Join(t.TempDir(), "agent-skills"), filepath.Join(userRoot, "skills")})
+	got, err := r.GetFunc("load_skill")(context.Background(), json.RawMessage(`{"name":"writer"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "See skills/writer/refs/style.md") || strings.Contains(got, userRoot) {
+		t.Fatalf("paths: %s", got)
+	}
+	if !strings.Contains(got, "read_file at these paths when the instructions refer to them: skills/writer/refs/style.md") {
+		t.Fatalf("files not listed: %s", got)
+	}
+	if strings.Contains(got, "INTERNAL CONTEXT") {
+		t.Fatalf("their own skill was wrapped as internal: %s", got)
+	}
+}

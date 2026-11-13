@@ -380,8 +380,8 @@ func registerHostExec(r *Registry, envProvider SkillEnvProvider, skillDirs []str
 // registerSandboxedExec re-registers the exec tool so it delegates to a
 // sandbox.Executor instead of running on the host. Skill env vars
 // (FAL_KEY, REPLICATE_API_TOKEN, etc.) configured via the admin UI are
-// injected into the container by prepending POSIX `export` statements
-// to the command — sandbox.Executor.Exec only accepts a single command
+// given to the skill script's process alone, as `K=v cmd` prefixes
+// (skill_keyed.go) — sandbox.Executor.Exec only accepts a single command
 // string so we can't pass env via process attribute the way the host
 // path does.
 func registerSandboxedExec(r *Registry, ex sandbox.Executor) {
@@ -424,9 +424,9 @@ func registerSandboxedExec(r *Registry, ex sandbox.Executor) {
 }
 
 // runSandboxedCommand executes args inside the sandbox executor: stdin
-// delivered via heredoc (mirroring the host path), skill env vars
-// injected as `export` prefixes (sandbox.Executor.Exec only accepts a
-// single command string, so env can't ride a process attribute), and
+// delivered via heredoc (mirroring the host path), a keyed skill's env
+// given to its script's process alone (sandbox.Executor.Exec only accepts
+// a single command string, so env can't ride a process attribute), and
 // the result stamped with MetaSandboxPrefix. Shared by the enforced
 // path (registerSandboxedExec, where exec ALWAYS lands here) and the
 // optional path (makeExecToolFull, where the model opted in with
@@ -436,37 +436,49 @@ func runSandboxedCommand(ctx context.Context, ex sandbox.Executor, args execArgs
 	if args.Timeout > 0 {
 		timeout = args.Timeout
 	}
-	command := args.Command
-	if args.Stdin != "" {
-		command = fmt.Sprintf("(cat <<'__FCSTDIN__'\n%s\n__FCSTDIN__\n) | %s", args.Stdin, args.Command)
-	}
 	// Inject the configured env for whichever skill the command
 	// references (skill dirs may be host paths or the
-	// container-internal /skills/<name> mount — resolveSkillEnv
-	// matches both).
+	// container-internal /skills/<name> mount — resolveSkill matches
+	// both). Keys are secrets the chatter must not see: a keyed run must
+	// be the script alone, and only that process gets them
+	// (skill_keyed.go).
+	run := args.Command
 	injected := []string{}
 	skill := resolveSkill(args.Command, envProvider, skillDirs)
+	if skill.metered() {
+		keyed, err := keyedRun(args.Command, skill.name, skill.env, skillDirs)
+		if err != nil {
+			return "", err
+		}
+		run = keyed
+	} else if skill != nil && len(skill.env) > 0 {
+		// Every value empty: nothing secret, the names just exist.
+		var sb strings.Builder
+		for k, v := range skill.env {
+			sb.WriteString("export ")
+			sb.WriteString(k)
+			sb.WriteString("=")
+			sb.WriteString(shellQuote(v))
+			sb.WriteString("; ")
+		}
+		sb.WriteString(run)
+		run = sb.String()
+	}
+	if skill != nil {
+		for k, v := range skill.env {
+			if v == "" {
+				injected = append(injected, k+"=<empty>")
+			} else {
+				injected = append(injected, k+"=<set "+strconv.Itoa(len(v))+"chars>")
+			}
+		}
+	}
 	if err := skill.authorize(ctx); err != nil {
 		return "", err
 	}
-	if skill != nil {
-		if skillEnv := skill.env; len(skillEnv) > 0 {
-			var sb strings.Builder
-			for k, v := range skillEnv {
-				sb.WriteString("export ")
-				sb.WriteString(k)
-				sb.WriteString("=")
-				sb.WriteString(shellQuote(v))
-				sb.WriteString("; ")
-				if v == "" {
-					injected = append(injected, k+"=<empty>")
-				} else {
-					injected = append(injected, k+"=<set "+strconv.Itoa(len(v))+"chars>")
-				}
-			}
-			sb.WriteString(command)
-			command = sb.String()
-		}
+	command := run
+	if args.Stdin != "" {
+		command = fmt.Sprintf("(cat <<'__FCSTDIN__'\n%s\n__FCSTDIN__\n) | %s", args.Stdin, run)
 	}
 	slog.Info("sandboxed exec",
 		"backend", ex.Backend(),

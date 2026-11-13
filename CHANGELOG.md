@@ -5,6 +5,32 @@ action on upgrade — read those notes before deploying.
 
 ## [Unreleased]
 
+### Added — personal skills for end users (`/api/me/skills`)
+
+Anyone signed in, including a product's end users (`X-Fastclaw-End-User`),
+can upload skills of their own (`GET/POST /api/me/skills`,
+`DELETE /api/me/skills/{name}`). A skill lands in their personal layer, so
+it is used in their own conversations only, with any agent. Uploads are
+instructions only: SKILL.md plus text reference files, no scripts. The
+limits are 20 skills, 50 files and 1 MB each, and global skill names are
+reserved. `load_skill` points a personal skill's files at `skills/<name>/…`,
+which `read_file` reaches. See docs/personal-skills.md.
+
+### Security — a skill's keys reach only its own script
+
+In the sandbox, a skill's configured keys (`skills.entries` env such as
+`REPLICATE_API_TOKEN`) were exported in front of the whole command the
+model wrote, so a chatter could have them printed
+(`python /skills/<skill>/x.py; printenv …`). Now a command that gets keys
+must run the skill's script alone (`<python|node|bash|sh> /skills/<name>/<script> args`,
+optionally fed by `echo '<text>' |`), and only that process gets them
+(`K=v cmd`). Anything else is refused with what to change. Commands that
+get no keys run as before.
+
+This raises the bar; it can't stop a chatter with root in the sandbox who
+rewrites the script first. Keys a chatter must never see belong to skills
+that run outside the chatter's sandbox, or to server-side tools.
+
 ### Changed — custom MCP servers are offered on agents; OAuth is per person
 
 **BREAKING (API):** a custom MCP server still works for its adder with
