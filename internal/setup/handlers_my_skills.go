@@ -36,7 +36,9 @@ import (
 // their scripts get nothing the chatter couldn't already run in their own
 // sandbox.
 //
-//   GET    /api/me/skills          → {skills:[{name,description,files,bytes,updatedAt}], max}
+//   GET    /api/me/skills          → {skills:[{name,description,files,bytes,updatedAt,source}], mine, max}
+//                                     the caller's skills merged with the product's and the global ones
+//                                     (mine > product > system, one per name)
 //   POST   /api/me/skills          multipart `file`: a .zip of the skill folder (or a bare SKILL.md)
 //   DELETE /api/me/skills/{name}
 
@@ -101,9 +103,13 @@ type mySkillView struct {
 	Files       int    `json:"files"`
 	Bytes       int64  `json:"bytes"`
 	UpdatedAt   int64  `json:"updatedAt"`
+	// Source is the layer the skill comes from: "mine" (the caller's own,
+	// deletable), "product" (the account that owns the product's agents)
+	// or "system" (the deployment's global skills).
+	Source string `json:"source"`
 }
 
-func readMySkills(dir string) []mySkillView {
+func readMySkills(dir, source string) []mySkillView {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
@@ -118,7 +124,7 @@ func readMySkills(dir string) []mySkillView {
 		if err != nil {
 			continue
 		}
-		v := mySkillView{Name: e.Name()}
+		v := mySkillView{Name: e.Name(), Source: source}
 		if fm, _ := agent.SplitSkillFrontmatter(data); fm != nil {
 			v.Description = fm.Description
 		}
@@ -143,16 +149,50 @@ func readMySkills(dir string) []mySkillView {
 	return out
 }
 
+// handleListMySkills returns the skills the caller's conversations use,
+// along the same chain the agent loop loads them (chatter > owner > global;
+// an agent's own skills depend on the agent, so they aren't listed): one
+// entry per name, from the highest layer that has it.
 func (s *Server) handleListMySkills(w http.ResponseWriter, r *http.Request) {
-	_, dir, ok := s.mySkillsCaller(w, r)
+	uid, dir, ok := s.mySkillsCaller(w, r)
 	if !ok {
 		return
 	}
-	list := readMySkills(dir)
-	if list == nil {
-		list = []mySkillView{}
+	mine := readMySkills(dir, "mine")
+	list := append([]mySkillView{}, mine...)
+	seen := map[string]bool{}
+	for _, v := range mine {
+		seen[v.Name] = true
 	}
-	jsonResponse(w, http.StatusOK, map[string]any{"skills": list, "max": maxMySkills})
+	add := func(views []mySkillView) {
+		for _, v := range views {
+			if !seen[v.Name] {
+				seen[v.Name] = true
+				list = append(list, v)
+			}
+		}
+	}
+	ident, _ := auth.FromContext(r.Context())
+	if owner := ident.AppUserID; owner != "" && owner != uid && agent.SafeSkillOwnerID(owner) {
+		if ownerDir, err := userSkillsDir(owner); err == nil {
+			if s.workspaceStore != nil {
+				if err := skills.HydrateSkillsDown(r.Context(), s.workspaceStore, skills.UserSkillOwner(owner), ownerDir); err != nil {
+					slog.Warn("my skills: owner hydrate", "owner", owner, "error", err)
+				}
+			}
+			add(readMySkills(ownerDir, "product"))
+		}
+	}
+	if home, err := config.HomeDir(); err == nil {
+		globalDir := filepath.Join(home, "skills")
+		if s.workspaceStore != nil {
+			if err := skills.HydrateSkillsDown(r.Context(), s.workspaceStore, skills.GlobalSkillOwner, globalDir, agent.BundledSkillNames()...); err != nil {
+				slog.Warn("my skills: global hydrate", "error", err)
+			}
+		}
+		add(readMySkills(globalDir, "system"))
+	}
+	jsonResponse(w, http.StatusOK, map[string]any{"skills": list, "mine": len(mine), "max": maxMySkills})
 }
 
 // mySkillUpload is a checked upload: relative path → content.
@@ -295,19 +335,6 @@ func skipZipEntry(name string) bool {
 	return false
 }
 
-// reservedSkillName: the deployment's own skills keep their names, so a
-// person's upload can't stand in for one (and pick up its keys).
-func reservedSkillName(name string) bool {
-	home, err := config.HomeDir()
-	if err != nil {
-		return true
-	}
-	if _, err := os.Stat(filepath.Join(home, "skills", name)); err == nil {
-		return true
-	}
-	return false
-}
-
 func (s *Server) handleUploadMySkill(w http.ResponseWriter, r *http.Request) {
 	if !s.requireWritable(w, r) {
 		return
@@ -337,11 +364,7 @@ func (s *Server) handleUploadMySkill(w http.ResponseWriter, r *http.Request) {
 		mySkillError(w, http.StatusBadRequest, code, detail)
 		return
 	}
-	if reservedSkillName(up.name) {
-		mySkillError(w, http.StatusBadRequest, "name_reserved", up.name)
-		return
-	}
-	existing := readMySkills(dir)
+	existing := readMySkills(dir, "mine")
 	replacing := false
 	for _, e := range existing {
 		if e.Name == up.name {
@@ -393,7 +416,7 @@ func (s *Server) handleUploadMySkill(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	slog.Info("my skill uploaded", "user", uid, "skill", up.name, "files", len(up.files), "replaced", replacing)
-	for _, v := range readMySkills(dir) {
+	for _, v := range readMySkills(dir, "mine") {
 		if v.Name == up.name {
 			jsonResponse(w, http.StatusOK, map[string]any{"skill": v, "replaced": replacing})
 			return

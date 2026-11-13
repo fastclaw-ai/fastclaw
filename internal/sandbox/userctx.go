@@ -29,3 +29,25 @@ func UserIDFromContext(ctx context.Context) string {
 	}
 	return ""
 }
+
+// skillOwnerCtxKey carries the agent owner's id (agents.user_id) into
+// sandbox creation, so the owner's skills — the product's own — are pushed
+// to /skills next to the agent's and the global ones. The chatter's own
+// skills never are.
+type skillOwnerCtxKey struct{}
+
+// WithSkillOwner tags ctx with the agent owner's id. Empty is a no-op.
+func WithSkillOwner(ctx context.Context, ownerID string) context.Context {
+	if ownerID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, skillOwnerCtxKey{}, ownerID)
+}
+
+// SkillOwnerFromContext returns the id set by WithSkillOwner, or "".
+func SkillOwnerFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(skillOwnerCtxKey{}).(string); ok {
+		return v
+	}
+	return ""
+}

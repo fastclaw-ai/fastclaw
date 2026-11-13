@@ -42,7 +42,7 @@ func (p *SandboxPool) Get(agentID, image, workspace string, policy *Policy) *Doc
 	// standard layout (<home>/workspaces/<agentID>); falls through
 	// silently if the caller used a custom workspace path.
 	if home := homeFromWorkspace(workspace, agentID); home != "" {
-		if dirs := skillDirsForAgent(home, agentID); len(dirs) > 0 {
+		if dirs := skillDirsForAgent(home, agentID, ""); len(dirs) > 0 {
 			sb.SetSkillDirs(dirs)
 		}
 	}
@@ -62,19 +62,35 @@ func homeFromWorkspace(workspace, agentID string) string {
 
 // skillDirsForAgent returns the host paths whose `<dir>/<skill-name>/`
 // children should be mounted at /skills/<skill-name>/ inside the
-// sandbox. Per-agent dir comes first so its skills override
-// same-named global ones, matching SkillsLoader precedence.
+// sandbox, first dir winning: the agent's own skills, then its owner's
+// (the product's skills, ~/.fastclaw/users/<owner>/skills), then the
+// global ones. A chatter's personal skills are never here: whatever is
+// under /skills can be given a skill's configured keys.
 //
 // home is the resolved FASTCLAW_HOME (the pool's workspaceRoot), not
 // the process env — keeps tests / multi-instance debug honest.
-func skillDirsForAgent(home, agentID string) []string {
+func skillDirsForAgent(home, agentID, ownerID string) []string {
 	if home == "" {
 		return nil
 	}
-	return []string{
-		filepath.Join(home, "agents", agentID, "agent", "skills"),
-		filepath.Join(home, "skills"),
+	dirs := []string{filepath.Join(home, "agents", agentID, "agent", "skills")}
+	if safeOwnerID(ownerID) {
+		dirs = append(dirs, filepath.Join(home, "users", ownerID, "skills"))
 	}
+	return append(dirs, filepath.Join(home, "skills"))
+}
+
+// safeOwnerID: an id that is safe to join into a path.
+func safeOwnerID(id string) bool {
+	if id == "" || len(id) > 64 {
+		return false
+	}
+	for _, r := range id {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 // Close shuts down and removes all sandbox containers.

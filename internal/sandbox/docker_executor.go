@@ -297,7 +297,7 @@ func (p *DockerExecutorPool) Get(ctx context.Context, agentID, projectID, sessio
 	if workdir != "" {
 		sb.SetWorkdir(workdir)
 	}
-	sb.SetSkillDirs(skillDirsForAgent(p.workspaceRoot, agentID))
+	sb.SetSkillDirs(skillDirsForAgent(p.workspaceRoot, agentID, SkillOwnerFromContext(ctx)))
 	// Bind-mount the chatter's per-user skills host dir into the
 	// sandbox at the path `npx skills add -g -y` writes to, so any
 	// skill the agent installs mid-chat lands on host disk and is

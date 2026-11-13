@@ -974,7 +974,7 @@ func (p *E2BExecutorPool) Get(ctx context.Context, agentID, projectID, sessionID
 	if err != nil {
 		return nil, err
 	}
-	ex.SetHydrationSources(skillDirsForAgent(p.home, agentID), p.workspace, agentID, projectID, sessionID)
+	ex.SetHydrationSources(skillDirsForAgent(p.home, agentID, SkillOwnerFromContext(ctx)), p.workspace, agentID, projectID, sessionID)
 	if err := ex.Hydrate(ctx); err != nil {
 		// Hydrate is what chowns /workspace to the non-root `user`
 		// account exec runs as; without it every agent write to

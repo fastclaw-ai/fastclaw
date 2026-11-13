@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -153,14 +154,10 @@ func TestMySkillsForEndUsers(t *testing.T) {
 		"multiple_skills":     {"a/SKILL.md": skillMD("a", "d"), "b/SKILL.md": skillMD("b", "d")},
 		"invalid_frontmatter": {"x/SKILL.md": "# no frontmatter"},
 		"invalid_name":        {"写作/SKILL.md": "---\nname: 写作助手\ndescription: d\n---\n"},
-		"name_reserved":       {"image-tool/SKILL.md": skillMD("image-tool", "fake")},
 	} {
 		if code, out := upload(alice, "x.zip", want); code != http.StatusBadRequest || out["code"] != files {
 			t.Fatalf("want %s, got %d %v", files, code, out)
 		}
-	}
-	if _, err := os.Stat(filepath.Join(home, "skills", "image-tool", "SKILL.md")); err == nil {
-		t.Fatal("upload reached the global skills")
 	}
 
 	// Re-uploading a name replaces it whole.
@@ -212,5 +209,69 @@ func TestMySkillsLimit(t *testing.T) {
 		if i == maxMySkills && !strings.Contains(rec.Body.String(), "too_many") {
 			t.Fatalf("over the limit: %d %s", rec.Code, rec.Body.String())
 		}
+	}
+}
+
+// GET /api/me/skills walks the chain: mine > product (the api key's owner)
+// > system, one entry per name. A personal skill may take a global name.
+func TestMySkillsListMergesLayers(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("FASTCLAW_HOME", home)
+	write := func(dir, name, desc string) {
+		if err := os.MkdirAll(filepath.Join(dir, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		os.WriteFile(filepath.Join(dir, name, "SKILL.md"), []byte(skillMD(name, desc)), 0o644)
+	}
+	global := filepath.Join(home, "skills")
+	product := filepath.Join(home, "users", "u_owner", "skills")
+	write(global, "image-tool", "system")
+	write(global, "ppt", "system")
+	write(product, "ppt", "product")
+	write(product, "brand", "product")
+	s := NewServer(0)
+	alice := auth.Identity{UserID: "u_alice", Role: users.RoleAppUser, AuthMethod: "apikey", APIKeyID: "k1", AppUserID: "u_owner", EndUser: "user:u_alice"}
+	owner := auth.Identity{UserID: "u_owner", Role: users.RoleUser, AuthMethod: "apikey", APIKeyID: "k1"}
+
+	body, ct := mySkillBody(t, "x.zip", map[string]string{"image-tool/SKILL.md": skillMD("image-tool", "mine")})
+	req := httptest.NewRequest(http.MethodPost, "/api/me/skills", body)
+	req.Header.Set("Content-Type", ct)
+	rec := httptest.NewRecorder()
+	s.handleUploadMySkill(rec, req.WithContext(auth.WithIdentity(req.Context(), alice)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("override a global name: %d %s", rec.Code, rec.Body.String())
+	}
+	if data, _ := os.ReadFile(filepath.Join(global, "image-tool", "SKILL.md")); !strings.Contains(string(data), "system") {
+		t.Fatal("upload touched the global skill")
+	}
+
+	list := func(id auth.Identity) (map[string]string, map[string]any) {
+		req := httptest.NewRequest(http.MethodGet, "/api/me/skills", nil)
+		rec := httptest.NewRecorder()
+		s.handleListMySkills(rec, req.WithContext(auth.WithIdentity(req.Context(), id)))
+		var out map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &out)
+		got := map[string]string{}
+		items, _ := out["skills"].([]any)
+		for _, it := range items {
+			m := it.(map[string]any)
+			if _, dup := got[m["name"].(string)]; dup {
+				t.Fatalf("%v listed twice", m["name"])
+			}
+			got[m["name"].(string)] = m["source"].(string) + ":" + m["description"].(string)
+		}
+		return got, out
+	}
+	got, out := list(alice)
+	want := map[string]string{"image-tool": "mine:mine", "ppt": "product:product", "brand": "product:product"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("alice: %v", got)
+	}
+	if out["mine"] != float64(1) {
+		t.Fatalf("mine count: %v", out["mine"])
+	}
+	// The owner's own skills are theirs ("mine"), over the global ones.
+	if got, _ := list(owner); got["ppt"] != "mine:product" || got["image-tool"] != "system:system" {
+		t.Fatalf("owner: %v", got)
 	}
 }

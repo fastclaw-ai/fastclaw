@@ -5,6 +5,18 @@ action on upgrade — read those notes before deploying.
 
 ## [Unreleased]
 
+### Changed — skill layers: chatter > agent > owner > global
+
+The account that owns an agent (`agents.user_id`) now has its personal
+skills loaded into every conversation with that agent, between the
+agent's own and the global ones: a product whose agents belong to one
+account adds its skills there. They are also pushed to the sandbox's
+`/skills` (agent > owner > global), so their scripts run. A chatter's own
+skills now rank above the agent's (they affect only that person) and may
+take any name, global ones included; they still never reach `/skills` or
+any keys. `GET /api/me/skills` returns the merged chain with a `source`
+(`mine`, `product`, `system`) and a `mine` count; `name_reserved` is gone.
+
 ### Added — personal skills for end users (`/api/me/skills`)
 
 Anyone signed in, including a product's end users (`X-Fastclaw-End-User`),
