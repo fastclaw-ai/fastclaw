@@ -35,15 +35,15 @@ import (
 // reach, and isn't something to take from anyone who can sign up.
 //
 //   GET    /api/me/skills          → {skills:[{name,description,files,bytes,updatedAt}], max}
-//   POST   /api/me/skills          multipart `file`: a .zip of the skill folder, or a SKILL.md
+//   POST   /api/me/skills          multipart `file`: a .zip of the skill folder (or a bare SKILL.md)
 //   DELETE /api/me/skills/{name}
 
 const (
 	maxMySkills       = 20
-	maxMySkillUpload  = 2 << 20 // request body
-	maxMySkillBytes   = 1 << 20 // all files, uncompressed
-	maxMySkillFiles   = 50
-	maxMySkillMDBytes = 100 << 10
+	maxMySkillUpload  = 12 << 20 // request body
+	maxMySkillBytes   = 10 << 20 // all files, uncompressed
+	maxMySkillFiles   = 200
+	maxMySkillMDBytes = 256 << 10
 )
 
 // mySkillTextExts are the reference files a skill may carry.

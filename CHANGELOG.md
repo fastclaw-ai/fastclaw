@@ -12,7 +12,7 @@ can upload skills of their own (`GET/POST /api/me/skills`,
 `DELETE /api/me/skills/{name}`). A skill lands in their personal layer, so
 it is used in their own conversations only, with any agent. Uploads are
 instructions only: SKILL.md plus text reference files, no scripts. The
-limits are 20 skills, 50 files and 1 MB each, and global skill names are
+limits are 20 skills, 200 files and 10 MB each, and global skill names are
 reserved. `load_skill` points a personal skill's files at `skills/<name>/…`,
 which `read_file` reaches. See docs/personal-skills.md.
 

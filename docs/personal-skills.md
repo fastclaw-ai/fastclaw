@@ -31,9 +31,9 @@ Errors are `{code, detail?}`, where `code` is one of:
 
 ## Instructions only
 
-An upload may hold SKILL.md (100 KB at most) and UTF-8 text reference files
-(`.md .markdown .txt .json .yaml .yml .csv .tsv`). The limits are 50 files,
-1 MB in all, and 20 skills per person. Scripts, binaries and dotfiles are
+An upload may hold SKILL.md (256 KB at most) and UTF-8 text reference files
+(`.md .markdown .txt .json .yaml .yml .csv .tsv`). The limits are 200 files,
+10 MB in all (uncompressed), and 20 skills per person. Scripts, binaries and dotfiles are
 refused, for two reasons:
 
 - a personal skill's scripts don't reach the sandbox (`/skills` holds the
