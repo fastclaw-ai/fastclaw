@@ -20,7 +20,7 @@ const GenerateImageToolName = "generate_image"
 // agl.CapImageGeneration on the machine are used.
 var imageBriefs = []struct {
 	agent string
-	task  func(prompt, aspect, path string) string
+	task  func(prompt, aspect, path string, refs bool) string
 }{
 	{"codex", imageTask},
 }
@@ -33,7 +33,7 @@ func imageAgents() []string {
 	return out
 }
 
-func imageBrief(agent string) func(prompt, aspect, path string) string {
+func imageBrief(agent string) func(prompt, aspect, path string, refs bool) string {
 	for _, b := range imageBriefs {
 		if strings.EqualFold(b.agent, agent) {
 			return b.task
@@ -67,31 +67,41 @@ type LocalImageMaker interface {
 // that stays the default — faster, no approvals — and generate_image is
 // for pictures the person wants from their computer/Codex, or when
 // image_gen fails.
-func RegisterGenerateImage(r *Registry, svc LocalImageMaker, save SaveFileFunc, userID string, chat agl.ToolChat, notify func(agl.ToolNotice)) {
-	t := &generateImageTool{svc: svc, save: save, userID: userID, chat: chat, notify: notify, now: time.Now}
+//
+// load reads the reference images a call names ("images"); nil leaves
+// the parameter off.
+func RegisterGenerateImage(r *Registry, svc LocalImageMaker, save SaveFileFunc, load LoadFileFunc, userID string, chat agl.ToolChat, notify func(agl.ToolNotice)) {
+	t := &generateImageTool{svc: svc, save: save, load: load, userID: userID, chat: chat, notify: notify, now: time.Now}
 	when := "Use it for EVERY request to draw, paint, generate or make an image — including \"让 codex 画…\" — instead of run_local_agent."
 	if r.HasTool("image_gen") {
 		when = "Use it when the person asks for the picture from Codex or their computer (\"让 codex 画…\"), or when image_gen is unavailable or fails; otherwise image_gen is faster. Never run_local_agent for a picture."
 	}
-	r.RegisterSerialFrom(GenerateImageToolName, strings.Join([]string{
+	lines := []string{
 		"Generate a picture (photo, illustration, portrait, logo, poster, sticker, …) with the image generation model of Codex on the PERSON'S OWN computer, and get it ready to show in this chat.",
 		when + " Don't describe how to draw it; describe what the picture shows.",
 		"Write \"prompt\" as a rich visual description: subject, style, composition, colors, mood, and any text that must appear in the image. Never ask for code, SVG or a specific drawing library.",
 		"It can take a minute or two. It returns putInReply: put that exactly in your reply so the image is shown, plus a short line of your own.",
-	}, "\n"), map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"prompt":  map[string]any{"type": "string", "description": "What the picture shows, in detail."},
-			"aspect":  map[string]any{"type": "string", "enum": []string{"square", "portrait", "landscape"}, "description": "Shape of the picture; default square."},
-			"machine": map[string]any{"type": "string", "description": "Computer name or id; omit to use the first online computer that can generate images."},
-		},
-		"required": []string{"prompt"},
+	}
+	props := map[string]any{
+		"prompt":  map[string]any{"type": "string", "description": "What the picture shows, in detail."},
+		"aspect":  map[string]any{"type": "string", "enum": []string{"square", "portrait", "landscape"}, "description": "Shape of the picture; default square."},
+		"machine": map[string]any{"type": "string", "description": "Computer name or id; omit to use the first online computer that can generate images."},
+	}
+	if load != nil {
+		lines = append(lines, "To make a picture from a photo the person sent (a sticker, avatar or new style of them, an edit), list it in \"images\": Codex can't see this chat, so it gets a copy on their computer to work from.")
+		props["images"] = filesSchema(`Reference images from this chat to base the picture on, by workspace path, e.g. ["/workspace/image_3jk7l_0.jpg"].`)
+	}
+	r.RegisterSerialFrom(GenerateImageToolName, strings.Join(lines, "\n"), map[string]any{
+		"type":       "object",
+		"properties": props,
+		"required":   []string{"prompt"},
 	}, t.run, SourceLocalAgent)
 }
 
 type generateImageTool struct {
 	svc    LocalImageMaker
 	save   SaveFileFunc
+	load   LoadFileFunc
 	userID string
 	chat   agl.ToolChat
 	notify func(agl.ToolNotice)
@@ -99,7 +109,7 @@ type generateImageTool struct {
 }
 
 // imageTask is Codex's instruction for one picture saved at path.
-func imageTask(prompt, aspect, path string) string {
+func imageTask(prompt, aspect, path string, refs bool) string {
 	switch aspect {
 	case "portrait":
 		aspect = "portrait (taller than wide)"
@@ -114,16 +124,26 @@ func imageTask(prompt, aspect, path string) string {
 		"",
 		"Picture: " + prompt,
 		"Shape: " + aspect + ".",
-		"",
+		refNote(refs),
 		"When it is generated, copy the PNG to " + path + " (create the folder if needed) and reply with only that absolute path.",
 	}, "\n")
 }
 
+// refNote asks Codex to work from the handed-over images (listed at the
+// end of the task by agl.Tools.Run).
+func refNote(refs bool) string {
+	if !refs {
+		return ""
+	}
+	return "Reference: the image(s) listed at the end of this task. Open and look at them first, then generate the picture from them with the image generation tool (pass them as input images), keeping the subject recognizable.\n"
+}
+
 func (t *generateImageTool) run(ctx context.Context, raw json.RawMessage) (string, error) {
 	var a struct {
-		Prompt  string `json:"prompt"`
-		Aspect  string `json:"aspect"`
-		Machine string `json:"machine"`
+		Prompt  string   `json:"prompt"`
+		Aspect  string   `json:"aspect"`
+		Machine string   `json:"machine"`
+		Images  []string `json:"images"`
 	}
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return "", fmt.Errorf("invalid arguments: %w", err)
@@ -131,6 +151,10 @@ func (t *generateImageTool) run(ctx context.Context, raw json.RawMessage) (strin
 	a.Prompt = strings.TrimSpace(a.Prompt)
 	if a.Prompt == "" {
 		return "", &agl.ToolError{Msg: `"prompt" is required: describe the picture.`}
+	}
+	refs, err := loadFiles(ctx, t.load, a.Images)
+	if err != nil {
+		return "", err
 	}
 	machines, err := t.svc.Machines(ctx, t.userID)
 	if err != nil {
@@ -147,7 +171,7 @@ func (t *generateImageTool) run(ctx context.Context, raw json.RawMessage) (strin
 	path := "~/Downloads/" + t.now().Format("20060102-150405") + "-image.png"
 	out, err := t.svc.Run(ctx, agl.ToolRun{
 		UserID: t.userID, Chat: t.chat, Agent: pick.Agent, Machine: pick.Machine.ID,
-		Task: imageBrief(pick.Agent)(a.Prompt, a.Aspect, path), Notify: t.notify,
+		Task: imageBrief(pick.Agent)(a.Prompt, a.Aspect, path, len(refs) > 0), Files: refs, Notify: t.notify,
 	})
 	if err != nil {
 		var te *agl.ToolError

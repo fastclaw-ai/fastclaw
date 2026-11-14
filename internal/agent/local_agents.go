@@ -4,7 +4,13 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
+	"os"
+	"path"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -122,10 +128,13 @@ func (a *Agent) mountLocalAgents(ctx context.Context, msg bus.InboundMessage) st
 	if len(machines) == 0 {
 		return ""
 	}
-	tools.RegisterLocalAgents(a.registry, svc, uid, chat, notify)
+	// Same session key the gateway resolves reply media from.
+	sessionID, projectID := msg.ChatID, msg.ProjectID
+	load := func(ctx context.Context, p string) (agl.ToolFile, error) {
+		return a.loadSessionFile(ctx, sessionID, projectID, p)
+	}
+	tools.RegisterLocalAgents(a.registry, svc, uid, chat, notify, load)
 	if fetcher, ok := svc.(tools.LocalFileFetcher); ok {
-		// Same session key the gateway resolves reply media from.
-		sessionID, projectID := msg.ChatID, msg.ProjectID
 		save := func(ctx context.Context, f agl.FetchedFile) (string, error) {
 			url := "data:" + f.ContentType + ";base64," + base64.StdEncoding.EncodeToString(f.Bytes)
 			names := a.WriteSessionAttachments(ctx, sessionID, projectID, []Attachment{{URL: url, Name: f.Name}})
@@ -136,7 +145,7 @@ func (a *Agent) mountLocalAgents(ctx context.Context, msg bus.InboundMessage) st
 		}
 		tools.RegisterSendLocalFile(a.registry, fetcher, save, uid)
 		if maker, ok := svc.(tools.LocalImageMaker); ok && tools.CanGenerateImage(machines) {
-			tools.RegisterGenerateImage(a.registry, maker, save, uid, chat, notify)
+			tools.RegisterGenerateImage(a.registry, maker, save, load, uid, chat, notify)
 		}
 	}
 	return tools.LocalAgentsNote(machines) + a.mountComputerTools(lctx, svc, uid, chat, notify, machines)
@@ -176,4 +185,79 @@ func (a *Agent) mountComputerTools(ctx context.Context, svc tools.LocalAgentRunn
 	}
 	tools.RegisterComputerTools(a.registry, runner, uid, chat, notify, offered, names)
 	return tools.ComputerToolsNote(names, agentless, offered)
+}
+
+// loadSessionFile reads one file of the session workspace for handing
+// over to the person's computer: p is its /workspace path (or relative
+// to it). The workspace store first (attachments and files the sandbox
+// made are there), then the host workspace dir.
+func (a *Agent) loadSessionFile(ctx context.Context, sessionID, projectID, p string) (agl.ToolFile, error) {
+	rel, ok := workspaceRel(p)
+	if !ok {
+		return agl.ToolFile{}, errors.New("not a file in /workspace")
+	}
+	if a.workspaceStore != nil {
+		if rc, err := a.workspaceStore.Get(ctx, a.agentID, projectID, sessionID, rel); err == nil {
+			defer rc.Close()
+			data, err := io.ReadAll(io.LimitReader(rc, agl.MaxFetchBytes+1))
+			if err != nil {
+				return agl.ToolFile{}, err
+			}
+			return sessionFile(rel, data)
+		}
+	}
+	if a.workspacePath != "" {
+		full := filepath.Join(a.workspacePath, filepath.FromSlash(rel))
+		if info, err := os.Stat(full); err == nil && info.Mode().IsRegular() {
+			if info.Size() > agl.MaxFetchBytes {
+				return agl.ToolFile{}, fmt.Errorf("larger than %d MB", agl.MaxFetchBytes>>20)
+			}
+			data, err := os.ReadFile(full)
+			if err != nil {
+				return agl.ToolFile{}, err
+			}
+			return sessionFile(rel, data)
+		}
+	}
+	return agl.ToolFile{}, errors.New("no such file")
+}
+
+func sessionFile(rel string, data []byte) (agl.ToolFile, error) {
+	if len(data) > agl.MaxFetchBytes {
+		return agl.ToolFile{}, fmt.Errorf("larger than %d MB", agl.MaxFetchBytes>>20)
+	}
+	if len(data) == 0 {
+		return agl.ToolFile{}, errors.New("empty file")
+	}
+	return agl.ToolFile{Name: path.Base(rel), Bytes: data}, nil
+}
+
+// workspaceRel turns "/workspace/a/b.png", "workspace/a/b.png" or
+// "a/b.png" into "a/b.png"; false for anything outside the workspace or
+// in a hidden folder.
+func workspaceRel(p string) (string, bool) {
+	p = strings.TrimSpace(strings.ReplaceAll(p, "\\", "/"))
+	if p == "" || strings.ContainsRune(p, 0) {
+		return "", false
+	}
+	switch {
+	case p == "/workspace" || p == "workspace":
+		return "", false
+	case strings.HasPrefix(p, "/workspace/"):
+		p = strings.TrimPrefix(p, "/workspace/")
+	case strings.HasPrefix(p, "workspace/"):
+		p = strings.TrimPrefix(p, "workspace/")
+	case strings.HasPrefix(p, "/"):
+		return "", false
+	}
+	for _, seg := range strings.Split(p, "/") {
+		if seg == ".." || strings.HasPrefix(seg, ".") && seg != "." {
+			return "", false
+		}
+	}
+	rel := path.Clean(p)
+	if rel == "." || rel == "" || strings.HasPrefix(rel, "..") {
+		return "", false
+	}
+	return rel, true
 }

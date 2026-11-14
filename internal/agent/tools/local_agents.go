@@ -26,6 +26,37 @@ type LocalFileFetcher interface {
 // returns the /workspace-relative name.
 type SaveFileFunc func(ctx context.Context, f agl.FetchedFile) (string, error)
 
+// LoadFileFunc reads a file from this turn's session workspace by its
+// /workspace path (a file the person sent, or one made in this chat).
+type LoadFileFunc func(ctx context.Context, path string) (agl.ToolFile, error)
+
+// loadFiles reads the workspace files a tool call names.
+func loadFiles(ctx context.Context, load LoadFileFunc, paths []string) ([]agl.ToolFile, error) {
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	if load == nil {
+		return nil, &agl.ToolError{Msg: "Files can't be handed over from this chat."}
+	}
+	if len(paths) > agl.MaxPushFiles {
+		return nil, &agl.ToolError{Msg: fmt.Sprintf("At most %d files can be handed over with one task.", agl.MaxPushFiles)}
+	}
+	out := make([]agl.ToolFile, 0, len(paths))
+	for _, p := range paths {
+		f, err := load(ctx, p)
+		if err != nil {
+			return nil, &agl.ToolError{Msg: fmt.Sprintf("Could not read %s from the workspace: %v. Use the exact /workspace path of the file.", p, err)}
+		}
+		out = append(out, f)
+	}
+	return out, nil
+}
+
+// filesSchema is the "files" parameter of tools that hand files over.
+func filesSchema(desc string) map[string]any {
+	return map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": desc}
+}
+
 // LocalAgentRunner is what the tools need from internal/agl (*agl.Tools).
 type LocalAgentRunner interface {
 	Machines(ctx context.Context, userID string) ([]agl.LocalMachine, error)
@@ -39,8 +70,11 @@ type LocalAgentRunner interface {
 // belongs to (see Agent.mountLocalAgents).
 //
 // notify is set for a web chat: progress and approvals go to it.
-func RegisterLocalAgents(r *Registry, svc LocalAgentRunner, userID string, chat agl.ToolChat, notify func(agl.ToolNotice)) {
-	t := &localAgentsTool{svc: svc, userID: userID, chat: chat, notify: notify}
+//
+// load reads the files a task hands over ("files"); nil leaves the
+// parameter off.
+func RegisterLocalAgents(r *Registry, svc LocalAgentRunner, userID string, chat agl.ToolChat, notify func(agl.ToolNotice), load LoadFileFunc) {
+	t := &localAgentsTool{svc: svc, userID: userID, chat: chat, notify: notify, load: load}
 	approvals := "the person may be asked in this chat to approve actions (they reply 1/2/3)"
 	if notify != nil {
 		approvals = "the person may be asked in this chat to approve actions (buttons in the chat)"
@@ -52,7 +86,7 @@ func RegisterLocalAgents(r *Registry, svc LocalAgentRunner, userID string, chat 
 		map[string]any{"type": "object", "properties": map[string]any{}},
 		t.list, SourceLocalAgent)
 
-	r.RegisterSerialFrom(RunLocalAgentToolName, strings.Join([]string{
+	desc := strings.Join([]string{
 		"Run a task with a local agent (Claude Code, Codex, …) on the PERSON'S OWN computer, linked to this chat, and get its final answer back.",
 		"Use it when the request needs their computer (code, files or repositories there, commands, builds, tests) OR a capability you lack but one of their local agents has. Before saying you can't do something, check the agents' strengths (local_agents) and dispatch to one that can.",
 		"When computer_* tools are also offered, use those for quick look-ups and a command or two (list or search a folder, read a file, check a value), and this tool for substantial work: writing or fixing code, changes across a project, builds and tests, anything that needs planning, many steps or minutes. Also use it when a computer_* call isn't allowed there or the job turns out bigger than a few steps.",
@@ -60,9 +94,11 @@ func RegisterLocalAgents(r *Registry, svc LocalAgentRunner, userID string, chat 
 		"Pick the agent by its strengths, not just the first one: code/files/analysis → any (claude is a good default).",
 		"Do NOT use it for chit-chat, general knowledge or plain text you can write yourself.",
 		"Write \"task\" as a complete, self-contained instruction for the coding agent (it does not see this chat), in the person's language. Follow-ups in this chat continue the same local session, so you can refer to earlier work.",
+		"The coding agent can't see this chat or /workspace: when the task involves a photo or file the person sent here (or one you made), list it in \"files\". It is copied to their computer first and the task tells the agent where; never ask the person to save it there themselves.",
 		"The run can take minutes; " + approvals + ". Summarize the result for the person in your own words; do not paste huge outputs.",
 		"If it returns an error (computer offline, agent missing, timeout), tell the person plainly what happened and what they can do.",
-	}, "\n"), map[string]any{
+	}, "\n")
+	schema := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"agent":   map[string]any{"type": "string", "description": `Coding agent id on the computer, e.g. "claude" or "codex" (see local_agents).`},
@@ -71,7 +107,11 @@ func RegisterLocalAgents(r *Registry, svc LocalAgentRunner, userID string, chat 
 			"cwd":     map[string]any{"type": "string", "description": `Working directory on the computer, e.g. "~/code/app"; omit for the computer's default.`},
 		},
 		"required": []string{"agent", "task"},
-	}, t.run, SourceLocalAgent)
+	}
+	if load != nil {
+		schema["properties"].(map[string]any)["files"] = filesSchema(`Workspace files to hand to the coding agent, e.g. ["/workspace/image_3jk7l_0.jpg"]: photos or documents the person sent in this chat, or files you made.`)
+	}
+	r.RegisterSerialFrom(RunLocalAgentToolName, desc, schema, t.run, SourceLocalAgent)
 }
 
 // RegisterSendLocalFile mounts send_local_file: fetch a file a coding
@@ -138,6 +178,7 @@ type localAgentsTool struct {
 	userID string
 	chat   agl.ToolChat
 	notify func(agl.ToolNotice)
+	load   LoadFileFunc
 }
 
 func (t *localAgentsTool) list(ctx context.Context, _ json.RawMessage) (string, error) {
@@ -172,15 +213,20 @@ func (t *localAgentsTool) list(ctx context.Context, _ json.RawMessage) (string, 
 
 func (t *localAgentsTool) run(ctx context.Context, raw json.RawMessage) (string, error) {
 	var a struct {
-		Agent   string `json:"agent"`
-		Task    string `json:"task"`
-		Machine string `json:"machine"`
-		Cwd     string `json:"cwd"`
+		Agent   string   `json:"agent"`
+		Task    string   `json:"task"`
+		Machine string   `json:"machine"`
+		Cwd     string   `json:"cwd"`
+		Files   []string `json:"files"`
 	}
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
-	out, err := t.svc.Run(ctx, agl.ToolRun{UserID: t.userID, Chat: t.chat, Agent: a.Agent, Task: a.Task, Machine: a.Machine, Cwd: a.Cwd, Notify: t.notify})
+	files, err := loadFiles(ctx, t.load, a.Files)
+	if err != nil {
+		return "", err
+	}
+	out, err := t.svc.Run(ctx, agl.ToolRun{UserID: t.userID, Chat: t.chat, Agent: a.Agent, Task: a.Task, Machine: a.Machine, Cwd: a.Cwd, Files: files, Notify: t.notify})
 	if err != nil {
 		var te *agl.ToolError
 		if errors.As(err, &te) {
@@ -218,6 +264,7 @@ func LocalAgentsNote(machines []agl.LocalMachine) string {
 	return "The person has linked their own computer(s): " + strings.Join(parts, "; ") +
 		". When a request needs substantial work on their computer (code, projects, repos, builds, multi-step jobs) or something you can't do yourself but a local agent can, use run_local_agent with the agent best suited; for any picture (draw, paint, generate an image) use an image tool (image_gen, or generate_image for Codex on their computer — see their descriptions), never run_local_agent. Answer everything else yourself. Never tell the person you can't do something a local agent here can do." +
 		" When the person asks for Codex, Claude Code or another coding agent by name, that means run_local_agent on their computer (generate_image for a picture) — never run those CLIs with exec." +
+		" Local agents can't see this chat: hand over photos or files the person sent with the \"files\" (run_local_agent) or \"images\" (generate_image) parameter, never ask the person to copy them over." +
 		" When the result is an image or file the person should see, fetch it with send_local_file and put it in your reply (ask for PNG instead of SVG)." +
 		strengthsNote(strengths)
 }

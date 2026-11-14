@@ -58,6 +58,8 @@ type fakeLink struct {
 	toolsList string
 	// toolsCall is the tools.call result (JSON); default: {"ok":true}.
 	toolsCall string
+	// fsWriteErr fails fs.write when set.
+	fsWriteErr error
 }
 
 func newFakeLink() *fakeLink { return &fakeLink{online: true, events: make(chan Event, 64)} }
@@ -76,6 +78,14 @@ func (f *fakeLink) Request(_ context.Context, _ string, method string, params an
 		return json.RawMessage(`{"session_id":"s1"}`), nil
 	case "fs.read":
 		return json.RawMessage(`{"content_base64":"aGk=","size":2}`), nil
+	case "fs.write":
+		f.mu.Lock()
+		werr := f.fsWriteErr
+		f.mu.Unlock()
+		if werr != nil {
+			return nil, werr
+		}
+		return json.RawMessage(`{"size":2}`), nil
 	case "tools.list":
 		f.mu.Lock()
 		tl := f.toolsList

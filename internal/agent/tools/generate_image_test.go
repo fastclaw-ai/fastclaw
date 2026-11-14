@@ -150,7 +150,7 @@ func TestGenerateImageDefersToImageGen(t *testing.T) {
 		if withImageGen {
 			r.Register("image_gen", "cloud images", map[string]any{"type": "object"}, func(context.Context, json.RawMessage) (string, error) { return "", nil })
 		}
-		RegisterGenerateImage(r, &fakeImageMaker{}, nil, "u", agl.ToolChat{}, nil)
+		RegisterGenerateImage(r, &fakeImageMaker{}, nil, nil, "u", agl.ToolChat{}, nil)
 		for _, d := range r.Definitions() {
 			if d.Function.Name == GenerateImageToolName {
 				return d.Function.Description

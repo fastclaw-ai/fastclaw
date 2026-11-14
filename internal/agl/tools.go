@@ -136,6 +136,9 @@ type ToolRun struct {
 	Task    string
 	Machine string // id or name; "" = the first online one with Agent
 	Cwd     string // "" = the machine's default
+	// Files are copied to the machine before the task starts (see push);
+	// the task then names where they are.
+	Files []ToolFile
 	// Notify, when set, receives progress and approval requests instead
 	// of IM messages to Chat (web chat). Approvals are then answered
 	// with Decide, not a 1/2/3 reply.
@@ -326,6 +329,15 @@ func (t *Tools) Run(ctx context.Context, r ToolRun) (string, error) {
 		cwd = m.DefaultCwd
 	}
 
+	task := r.Task
+	if len(r.Files) > 0 {
+		paths, err := t.push(ctx, m, r, r.Files)
+		if err != nil {
+			return "", err
+		}
+		task += filesNote(paths)
+	}
+
 	budget := t.Timeout
 	if dl, ok := ctx.Deadline(); ok {
 		// Leave the turn time to reply after a timeout.
@@ -350,7 +362,7 @@ func (t *Tools) Run(ctx context.Context, r ToolRun) (string, error) {
 	}
 	turnID := newTurnID()
 	if _, err := t.link.Request(runCtx, m.ID, "session.prompt", map[string]any{
-		"session_id": sid, "text": r.Task, "mode": "queue", "turn_id": turnID,
+		"session_id": sid, "text": task, "mode": "queue", "turn_id": turnID,
 	}); err != nil {
 		if errors.Is(err, ErrOffline) {
 			return "", toolErr("The computer %s went offline. Tell the person to check it and try again.", m.Name)

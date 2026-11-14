@@ -64,6 +64,9 @@ type BuiltinCall struct {
 	// Notify replaces IM messages for a web chat, as in ToolRun.
 	Chat   ToolChat
 	Notify func(ToolNotice)
+	// Title, when set, is what the person is asked to approve instead
+	// of agl's own line (set by fastclaw, never by the model).
+	Title string
 }
 
 type builtinEntry struct {
@@ -241,6 +244,9 @@ var builtinApprovalWait = 10 * time.Minute
 // allow and returns its result.
 func (t *Tools) awaitBuiltinApproval(ctx context.Context, c BuiltinCall, m LocalMachine, held heldCall) (json.RawMessage, error) {
 	what := strings.TrimSpace(held.Title)
+	if c.Title != "" {
+		what = c.Title
+	}
 	if what == "" {
 		what = c.Name
 	}
