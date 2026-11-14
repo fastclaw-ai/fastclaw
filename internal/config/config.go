@@ -903,12 +903,13 @@ func (cfg *Config) MergedAgentConfig(entry AgentEntry) ResolvedAgent {
 		}
 	}
 
-	// Chatbot mode: cap tool iterations at a lower default (5) unless
-	// the operator explicitly set a value on the agent entry. Chatbots
-	// are conversational — 20 tool rounds burns tokens and makes the
-	// user wait too long.
+	// Chatbot mode: cap tool iterations at a lower default (20) unless
+	// the operator explicitly set a value on the agent entry. Chat turns
+	// that only answer use a few rounds anyway; the cap has to leave room
+	// for errands, where one browser step (open, snapshot, click, type)
+	// is one round.
 	if resolved.PromptMode == PromptModeChatbot && entry.MaxToolIterations == 0 {
-		const chatbotDefaultIter = 5
+		const chatbotDefaultIter = 20
 		if resolved.MaxToolIterations == 0 || resolved.MaxToolIterations > chatbotDefaultIter {
 			resolved.MaxToolIterations = chatbotDefaultIter
 		}

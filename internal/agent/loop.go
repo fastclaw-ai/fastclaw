@@ -2261,7 +2261,7 @@ func maybeInjectSoftDeadlineWarning(ctx context.Context, turnStart time.Time, me
 const hardToolIterationCeiling = 200
 
 // toolIterationLimit is the turn's tool-round budget: the agent's
-// explicit maxToolIterations when set (chatbot mode defaults to 5),
+// explicit maxToolIterations when set (chatbot mode defaults to 20),
 // otherwise hardToolIterationCeiling.
 func (a *Agent) toolIterationLimit() int {
 	if a.maxToolIterations > 0 {

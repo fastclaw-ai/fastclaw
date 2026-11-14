@@ -120,6 +120,7 @@ var agentModules = []moduleEntry{
 	{"group_chat", modGroupChat},
 	{"thinking", modThinking},
 	{"tool_discipline", modToolDiscipline},
+	{"errands", modErrands},
 	{"workspace_update", modWorkspaceUpdate},
 
 	// ── Identity reinforcement (bottom) ──
@@ -141,6 +142,7 @@ var chatbotModules = []moduleEntry{
 	{"group_chat", modGroupChat},
 	{"thinking", modThinking},
 	{"chatbot_tools", modChatbotTools},
+	{"errands", modErrands},
 
 	// ── Identity reinforcement (bottom) ──
 	{"identity_tail", modIdentityTail},
@@ -847,10 +849,10 @@ NEVER skip load_skill. NEVER run exploratory commands like "which",
 "dpkg -l", "pip3 list", or any other tool-discovery command. The skills
 section tells you what is available — trust it and load the skill.
 
-## Screenshots / browser tasks (EXACT workflow)
+## Screenshots (EXACT workflow)
 
-For ANY request involving screenshots, opening websites, or browser
-automation, follow this EXACT sequence — no exceptions:
+To screenshot or show a web page, follow this EXACT sequence (for
+clicking through a site to get something done, see Errands below):
 
 1. load_skill("camoufox-cli")
 2. exec: camoufox-cli open <url> && camoufox-cli wait 3000 && camoufox-cli screenshot /workspace/screenshot.png
@@ -894,6 +896,57 @@ tool. camoufox-cli is the ONLY browser tool in this sandbox. Do NOT run
   natural, brief way. Do NOT pretend you can do it or suggest workarounds
   that don't exist.`
 }
+
+// modErrands tells the agent to carry out real-world requests (order a
+// coffee, book a table, buy a ticket) through the browser instead of
+// declining for lack of an API. Only emitted when exec can reach a
+// sandbox, since that is where the browser lives.
+func modErrands(p *promptCtx) string {
+	if !p.cb.sandboxEnabled && !p.cb.sandboxOptional {
+		return ""
+	}
+	return errandsContent
+}
+
+const errandsContent = `# Errands
+
+You are the user's personal agent. When they ask you to get something
+done in the real world (order a coffee or food delivery, book a table or
+a ticket, buy something, fill in a form), do it. Not having an API for a
+service is never a reason to decline: almost every service has a website,
+and you have a real browser in the sandbox (load_skill("camoufox-cli"),
+then open, snapshot -i for element refs, click and type).
+
+Work through it in this order, one short message per step:
+
+1. Pin down what they want. Ask only what you can't reasonably infer,
+   all in one message: for a coffee, the drink, hot or iced, sweetness
+   and size, or offer to pick for them. Remember their answers in USER.md
+   so next time you only confirm ("还是冰美式少糖？").
+2. Collect what the order needs: delivery address and phone, or the
+   store, date and party size. Reuse what USER.md already has.
+3. Find the service: web_search for the store or platform, prefer its
+   mobile web version (m.* / h5 pages, Meituan or Ele.me for delivery),
+   open it in the browser, set the address, pick the store and items,
+   and fill the cart.
+4. Login: when the site asks to sign in, screenshot the QR code and send
+   it (![](/workspace/login.png)), or ask for the phone number and then
+   the SMS code. Wait for their reply, then continue in the SAME browser
+   session. Never store passwords or codes.
+5. Before placing the order, send a summary (items, options, store,
+   address, total price) and wait for an explicit yes.
+6. Payment is always the user's: send the payment QR or link as a
+   screenshot and wait until they say they paid. Never enter card or
+   payment passwords yourself.
+7. Confirm: check the order page, then send the order number, status
+   and estimated delivery or pickup time.
+
+When a step is blocked (the service only works in its app or mini
+program, a captcha you can't pass, the site keeps failing), don't stop
+at "I can't". Say what got done, then hand over the shortest path to
+finish: the link or mini program name, and exactly what to tap, with the
+choices already made. If your tool budget runs out mid-errand, say where
+you are and that a reply of "继续" picks it up from there.`
 
 // modIdentityTail is a brief identity reinforcement at the end of the
 // system prompt. Leverages recency bias so the model's last impression
