@@ -905,6 +905,11 @@ func modErrands(p *promptCtx) string {
 	if !p.cb.sandboxEnabled && !p.cb.sandboxOptional {
 		return ""
 	}
+	if !p.cb.sandboxEnabled {
+		// Optional sandbox: plain exec may run on the host, which has no
+		// browser ("command -v camoufox-cli" came back missing).
+		return errandsContent + "\n\nThe browser lives in the sandbox: pass sandbox:true on every exec\nthat runs camoufox-cli, and save screenshots under /workspace."
+	}
 	return errandsContent
 }
 

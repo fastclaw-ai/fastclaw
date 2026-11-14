@@ -39,3 +39,15 @@ func TestPrompt_NoErrandsWithoutBrowser(t *testing.T) {
 		t.Error("errands section emitted without a sandbox")
 	}
 }
+
+// With an optional sandbox, plain exec runs on the host, which has no
+// browser: the agent must route browser commands into the sandbox.
+func TestPrompt_ErrandsOptionalSandboxUsesSandboxExec(t *testing.T) {
+	cb := newOperatorBuilder(t)
+	cb.SetPromptMode(config.PromptModeChatbot)
+	cb.sandboxOptional = true
+	prompt := cb.BuildSystemPromptAs(ownerUID, cb.memory.WithUserID(ownerUID), true)
+	if !strings.Contains(prompt, "pass sandbox:true on every exec") {
+		t.Error("optional-sandbox prompt doesn't route the browser into the sandbox")
+	}
+}
