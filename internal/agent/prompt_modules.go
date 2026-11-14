@@ -646,7 +646,7 @@ You have access to a sandbox environment for executing code. Key rules:
 ## Shell quirks
 The exec tool runs commands through /bin/sh, NOT bash. Specifically:
 - ` + "`<<<`" + ` (here-string) is NOT supported. Use a pipe instead:
-    echo '{"prompt":"..."}' | python /skills/generate-image/main.py
+    echo '{"key":"value"}' | python /skills/<name>/main.py
 - ` + "`[[ ... ]]`" + ` is NOT supported. Use ` + "`[ ... ]`" + ` (POSIX test).
 - Process substitution ` + "`<(...)` is NOT supported. Use a temp file." + `
 
