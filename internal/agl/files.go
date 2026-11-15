@@ -21,7 +21,10 @@ import (
 // MaxFetchBytes caps one fetched file (IM channels cap attachments too).
 const MaxFetchBytes = 20 << 20
 
-const fetchTimeout = 60 * time.Second
+// fetchTimeout bounds one fetch. The whole file comes back in one frame,
+// and from a home connection far from the server (e.g. China to
+// Singapore, ~40 KB/s up) a few MB takes minutes, not seconds.
+const fetchTimeout = 5 * time.Minute
 
 // fetchKinds maps allowed extensions to their content type.
 var fetchKinds = map[string]string{
@@ -100,6 +103,9 @@ func (t *Tools) Fetch(ctx context.Context, r FetchRun) (FetchedFile, error) {
 	if err != nil {
 		if errors.Is(err, ErrOffline) {
 			return FetchedFile{}, toolErr("The computer %s went offline. Tell the person to check it and try again.", m.Name)
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return FetchedFile{}, toolErr("%s is on %s, but bringing it into the chat timed out (the computer's upload is too slow for a file this size). Tell the person it is saved there on their computer; don't say you sent it.", p, m.Name)
 		}
 		return FetchedFile{}, toolErr("Could not read %s on %s: %v", p, m.Name, err)
 	}

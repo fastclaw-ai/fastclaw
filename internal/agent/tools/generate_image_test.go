@@ -95,7 +95,7 @@ func TestGenerateImageMissingFileExplains(t *testing.T) {
 	f := &fakeImageMaker{runOut: "I drew it instead", fetchErr: &agl.ToolError{Msg: "no such file"}}
 	_, err := newImageTool(f).run(context.Background(), json.RawMessage(`{"prompt":"a cat"}`))
 	var te *agl.ToolError
-	if !errors.As(err, &te) || !strings.Contains(te.Msg, "isn't at") || !strings.Contains(te.Msg, "I drew it instead") {
+	if !errors.As(err, &te) || !strings.Contains(te.Msg, "could not be brought into the chat") || !strings.Contains(te.Msg, "I drew it instead") {
 		t.Fatalf("err: %v", err)
 	}
 }

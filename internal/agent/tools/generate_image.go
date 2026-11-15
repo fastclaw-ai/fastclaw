@@ -189,7 +189,7 @@ func (t *generateImageTool) run(ctx context.Context, raw json.RawMessage) (strin
 	if err != nil {
 		var te *agl.ToolError
 		if errors.As(err, &te) {
-			return "", &agl.ToolError{Msg: "Codex finished but the picture isn't at " + path + " (" + te.Msg + "). Codex said: " + clipOut(out)}
+			return "", &agl.ToolError{Msg: "Codex finished, but the picture could not be brought into the chat from " + path + ": " + te.Msg + " Don't tell the person it was sent. Codex said: " + clipOut(out)}
 		}
 		return "", fmt.Errorf("generate_image: %w", err)
 	}

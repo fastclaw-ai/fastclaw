@@ -32,6 +32,7 @@
 package agl
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -40,6 +41,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -74,8 +76,9 @@ const (
 	touchInterval  = time.Minute
 
 	// maxMessageBytes caps one frame from a machine. tool_end events can
-	// carry images (≤4 MB base64'd); anything bigger drops the link.
-	maxMessageBytes = 8 << 20
+	// carry images (≤4 MB base64'd) and an fs.read answer carries a whole
+	// file (≤ MaxFetchBytes, base64'd); anything bigger drops the link.
+	maxMessageBytes = MaxFetchBytes*4/3 + 1<<20
 	maxAgents       = 64
 	maxFieldLen     = 128
 	subscriberBuf   = 1024
@@ -765,6 +768,33 @@ func (c *conn) writeLoop() {
 	}
 }
 
+// readMessageExtending reads one message like ws.ReadMessage, but pushes
+// the read deadline out whenever bytes arrive. A big frame (an fs.read of
+// a few MB) on a slow upload can take longer than readTimeout to arrive in
+// full; the link is alive as long as it keeps moving, so it isn't dropped.
+// The read limit still applies.
+func readMessageExtending(ws *websocket.Conn, extend func()) ([]byte, error) {
+	_, r, err := ws.NextReader()
+	if err != nil {
+		return nil, err
+	}
+	var buf bytes.Buffer
+	chunk := make([]byte, 32<<10)
+	for {
+		n, err := r.Read(chunk)
+		if n > 0 {
+			buf.Write(chunk[:n])
+			extend()
+		}
+		if err == io.EOF {
+			return buf.Bytes(), nil
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+}
+
 func (c *conn) readLoop() {
 	h := c.hub
 	extend := func() { _ = c.ws.SetReadDeadline(time.Now().Add(readTimeout)) }
@@ -780,7 +810,7 @@ func (c *conn) readLoop() {
 	})
 	lastTouch := time.Now()
 	for {
-		_, data, err := c.ws.ReadMessage()
+		data, err := readMessageExtending(c.ws, extend)
 		if err != nil {
 			return
 		}
