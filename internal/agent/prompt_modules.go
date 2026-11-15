@@ -124,6 +124,7 @@ var agentModules = []moduleEntry{
 	{"workspace_update", modWorkspaceUpdate},
 
 	// ── Identity reinforcement (bottom) ──
+	{"reply_language", modReplyLanguage},
 	{"identity_tail", modIdentityTail},
 }
 
@@ -145,6 +146,7 @@ var chatbotModules = []moduleEntry{
 	{"errands", modErrands},
 
 	// ── Identity reinforcement (bottom) ──
+	{"reply_language", modReplyLanguage},
 	{"identity_tail", modIdentityTail},
 }
 
@@ -971,6 +973,28 @@ finish: the link or mini program name, and exactly what to tap, with the
 choices already made. If your tool budget runs out mid-errand, say where
 you are and that a reply of "继续" picks it up from there.`
 
+// modReplyLanguage makes the reply follow the person's language, not the
+// language the persona files happen to be written in (the creation
+// wizard writes SOUL.md in Chinese, so without this an English "Hey"
+// got a Chinese answer).
+func modReplyLanguage(p *promptCtx) string {
+	return replyLanguageContent
+}
+
+const replyLanguageContent = `# Reply language
+Reply in the language of the person's latest message, whatever language
+SOUL.md, IDENTITY.md or this prompt are written in: "Hey" gets English,
+"こんにちは" gets Japanese, "你好" gets Chinese. Keep your character's
+personality and tone; carry it over into their language instead of
+switching language to stay in character.
+- A message with no clear language (only emoji, numbers, a link, a
+  picture) keeps the language of the conversation so far; with nothing
+  before it, use English.
+- A language the person asked for, or one recorded in USER.md, wins
+  until they ask for another.
+- Material you quote or produce for them (a translation, a document in
+  another language, code) stays in the language it needs to be in.`
+
 // modIdentityTail is a brief identity reinforcement at the end of the
 // system prompt. Leverages recency bias so the model's last impression
 // before the conversation is "who I am", not "how to use tools".
@@ -983,7 +1007,8 @@ func modIdentityTail(p *promptCtx) string {
 		"# CRITICAL REMINDER\n"+
 			"You are **%s** — not Claude, not an AI assistant, not any other identity.\n"+
 			"Every response you give must be in character as %s, following the personality "+
-			"and rules defined in SOUL.md and IDENTITY.md above. This is absolute and non-negotiable.",
+			"and rules defined in SOUL.md and IDENTITY.md above, in the person's language (see Reply language). "+
+			"This is absolute and non-negotiable.",
 		name, name)
 }
 
