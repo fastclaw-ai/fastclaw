@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/fastclaw-ai/fastclaw/internal/agent"
 	"github.com/fastclaw-ai/fastclaw/internal/agl"
@@ -262,11 +263,33 @@ type apiError struct {
 }
 
 // chunkTool is one step of the turn: the tool call's id, the tool's name
-// and "running" or "done".
+// and "running" or "done". The "running" step carries the call's
+// arguments and the "done" step its result, each cut to
+// maxToolDetailBytes, so a client can show what the step did.
 type chunkTool struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Status string `json:"status"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Status    string `json:"status"`
+	Arguments string `json:"arguments,omitempty"`
+	Result    string `json:"result,omitempty"`
+	Truncated bool   `json:"truncated,omitempty"`
+}
+
+// maxToolDetailBytes bounds a tool step's arguments or result on the
+// stream: a written file or a long command output would otherwise put
+// its whole body on the wire.
+const maxToolDetailBytes = 4096
+
+// clipToolDetail cuts s to maxToolDetailBytes on a UTF-8 boundary.
+func clipToolDetail(s string) (string, bool) {
+	if len(s) <= maxToolDetailBytes {
+		return s, false
+	}
+	cut := maxToolDetailBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut], true
 }
 
 // chunkExtras is what only some chunks carry: usage and files on the
@@ -695,12 +718,17 @@ func (s *Server) streamResponseFromAgent(w http.ResponseWriter, r *http.Request,
 		case "tool_call", "tool_result":
 			id, _ := evt.Data["id"].(string)
 			name, _ := evt.Data["name"].(string)
-			status := "running"
+			step := &chunkTool{ID: id, Name: name, Status: "running"}
 			if evt.Type == "tool_result" {
-				status = "done"
+				step.Status = "done"
+				result, _ := evt.Data["result"].(string)
+				step.Result, step.Truncated = clipToolDetail(result)
+			} else {
+				args, _ := evt.Data["arguments"].(string)
+				step.Arguments, step.Truncated = clipToolDetail(args)
 			}
 			roundOpen = false
-			s.writeSSEChunk(w, chatID, model, created, "", "", nil, &chunkExtras{Tool: &chunkTool{ID: id, Name: name, Status: status}})
+			s.writeSSEChunk(w, chatID, model, created, "", "", nil, &chunkExtras{Tool: step})
 			flush()
 		}
 	}

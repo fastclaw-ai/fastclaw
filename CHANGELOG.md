@@ -5,6 +5,14 @@ action on upgrade — read those notes before deploying.
 
 ## [Unreleased]
 
+### Added — tool steps on the API stream carry their input and output
+
+On a streamed `/v1/chat/completions` turn, a tool's `running` chunk now
+carries the call's `arguments` (JSON string) and its `done` chunk the
+tool's `result`, each cut to 4 KB (`"truncated": true` when cut), so an
+integration can show what each step did. Clients that read only `id`,
+`name` and `status` are unaffected.
+
 ### Changed — skill layers: chatter > agent > owner > global
 
 The account that owns an agent (`agents.user_id`) now has its personal

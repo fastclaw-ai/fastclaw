@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/fastclaw-ai/fastclaw/internal/agent"
 	"github.com/fastclaw-ai/fastclaw/internal/auth"
@@ -761,7 +762,7 @@ func TestStreamedChatReportsToolSteps(t *testing.T) {
 					Content string `json:"content"`
 				} `json:"delta"`
 			} `json:"choices"`
-			Tool *struct{ ID, Name, Status string } `json:"tool"`
+			Tool *struct{ ID, Name, Status, Arguments, Result string } `json:"tool"`
 		}
 		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &chunk); err != nil {
 			t.Fatal(err)
@@ -769,6 +770,16 @@ func TestStreamedChatReportsToolSteps(t *testing.T) {
 		text.WriteString(chunk.Choices[0].Delta.Content)
 		if chunk.Tool != nil {
 			steps = append(steps, chunk.Tool.ID+" "+chunk.Tool.Name+" "+chunk.Tool.Status+" after "+strconv.Quote(text.String()))
+			switch chunk.Tool.Status {
+			case "running":
+				if chunk.Tool.Arguments != `{"path":"missing.txt"}` {
+					t.Fatalf("running step arguments = %q", chunk.Tool.Arguments)
+				}
+			case "done":
+				if chunk.Tool.Result == "" {
+					t.Fatalf("done step has no result\n%s", rec.Body.String())
+				}
+			}
 		}
 	}
 	want := []string{`call_1 read_file running after "Looking."`, `call_1 read_file done after "Looking."`}
@@ -995,5 +1006,18 @@ func TestChatRefusedOnBillingHold(t *testing.T) {
 	}
 	if strings.Contains(fmt.Sprint(out), "balance 0") {
 		t.Fatal("the billing system's note must not reach API callers")
+	}
+}
+
+// A tool step's detail is cut to maxToolDetailBytes without splitting a
+// UTF-8 character.
+func TestClipToolDetail(t *testing.T) {
+	if got, cut := clipToolDetail("short"); got != "short" || cut {
+		t.Fatalf("short = %q, %v", got, cut)
+	}
+	long := strings.Repeat("界", maxToolDetailBytes) // 3 bytes each
+	got, cut := clipToolDetail(long)
+	if !cut || len(got) > maxToolDetailBytes || !utf8.ValidString(got) {
+		t.Fatalf("clipped to %d bytes, cut=%v, valid=%v", len(got), cut, utf8.ValidString(got))
 	}
 }

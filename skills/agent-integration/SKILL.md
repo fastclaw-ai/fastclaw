@@ -251,9 +251,12 @@ A stream follows the turn as it runs: the agent's text arrives while it is
 written, including what it says between steps, and each tool call is
 reported on a chunk with an empty delta, once when it starts and once when
 it finishes:
-`data: {"choices":[{"delta":{}}],"tool":{"id":"call_1","name":"exec","status":"running"}}`
+`data: {"choices":[{"delta":{}}],"tool":{"id":"call_1","name":"exec","status":"running","arguments":"{\"command\":\"ls\"}"}}`
 (`status` then `done`). `name` is the agent's tool (`exec`, `load_skill`,
 `read_file`, …), so show it as a progress step in your own words. The
+`running` step carries the call's `arguments` (a JSON string) and the
+`done` step its `result` (text), each cut to 4 KB with `"truncated": true`
+when cut; show them only on request, as the agent's raw work. The
 streamed text adds up to the non-streaming reply; separate messages in a
 reply are joined by a blank line.
 
