@@ -552,7 +552,9 @@ func makeReadFile(r *Registry) ToolFunc {
 			// treats the field as unset, matching how
 			// ContextBuilder.loadFile loads identity files for the
 			// system prompt.
-			if r.systemRoot != "" {
+			// Not for a chatter's USER.md / MEMORY.md: no row means
+			// they have none yet (the disk copy is someone else's).
+			if r.systemRoot != "" && !isPerUserSystemFile(name) {
 				if data, err := os.ReadFile(filepath.Join(r.systemRoot, name)); err == nil {
 					return string(data), nil
 				}
@@ -636,7 +638,9 @@ func makeWriteFile(r *Registry) ToolFunc {
 			// builder, skills loader, etc.) which still reads from disk
 			// sees the same content on this pod. Other pods will pick
 			// up the next call via their own store reads.
-			if r.systemRoot != "" {
+			// A chatter's USER.md / MEMORY.md stays in their own row only:
+			// one disk file is shared by every chatter of this agent.
+			if r.systemRoot != "" && !isPerUserSystemFile(name) {
 				disk := filepath.Join(r.systemRoot, name)
 				_ = os.MkdirAll(filepath.Dir(disk), 0o755)
 				_ = os.WriteFile(disk, []byte(args.Content), 0o644)
@@ -755,7 +759,9 @@ func makeEditFile(r *Registry) ToolFunc {
 			// Same disk-mirror invariant as makeWriteFile so this pod's
 			// in-process readers (context builder, skills loader) see the
 			// new content immediately.
-			if r.systemRoot != "" {
+			// A chatter's USER.md / MEMORY.md stays in their own row only:
+			// one disk file is shared by every chatter of this agent.
+			if r.systemRoot != "" && !isPerUserSystemFile(name) {
 				disk := filepath.Join(r.systemRoot, name)
 				_ = os.MkdirAll(filepath.Dir(disk), 0o755)
 				_ = os.WriteFile(disk, []byte(updated), 0o644)

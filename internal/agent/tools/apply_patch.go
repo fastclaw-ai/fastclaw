@@ -510,7 +510,7 @@ func (r *Registry) readForPatch(ctx context.Context, path string) (string, error
 		if data, err := r.readSystemFileForUser(ctx, r.systemFileUserID(name), name); err == nil {
 			return string(data), nil
 		}
-		if r.systemRoot != "" {
+		if r.systemRoot != "" && !isPerUserSystemFile(name) {
 			if data, err := os.ReadFile(filepath.Join(r.systemRoot, name)); err == nil {
 				return string(data), nil
 			}
@@ -551,7 +551,7 @@ func (r *Registry) writeForPatch(ctx context.Context, path, content string) erro
 		// Mirror to disk so this pod's in-process readers (context builder,
 		// skills loader) see the new content immediately. Same invariant as
 		// makeWriteFile.
-		if r.systemRoot != "" {
+		if r.systemRoot != "" && !isPerUserSystemFile(name) {
 			disk := filepath.Join(r.systemRoot, name)
 			_ = os.MkdirAll(filepath.Dir(disk), 0o755)
 			_ = os.WriteFile(disk, []byte(content), 0o644)

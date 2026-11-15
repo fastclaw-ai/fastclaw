@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -264,4 +266,30 @@ func firstN(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// A chatter with no USER.md / MEMORY.md row of their own must never see
+// the agent's on-disk copy: that file is whichever chatter wrote last.
+// Each app user runs in their own user space, so chatterUID == cb.userID
+// there, which used to open the disk fallback.
+func TestChatbotPrompt_NoDiskFallbackForPerChatterFiles(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "USER.md"), []byte("language: Vietnamese (someone else)"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "MEMORY.md"), []byte("someone else's memory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store := newFakeMemoryStore()
+	cb := newChatbotBuilder(store)
+	cb.home = home
+	for _, name := range []string{"USER.md", "MEMORY.md"} {
+		if got := cb.loadFileForUser(name, ownerUID); got != "" {
+			t.Fatalf("%s: read the shared disk copy: %q", name, got)
+		}
+	}
+	prompt := cb.BuildSystemPromptAs(ownerUID, cb.memory, false)
+	if strings.Contains(prompt, "someone else") {
+		t.Fatalf("prompt carries another chatter's file:\n%s", prompt)
+	}
 }

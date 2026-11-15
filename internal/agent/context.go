@@ -308,7 +308,10 @@ func (cb *ContextBuilder) loadFileForUser(name, userID string) string {
 			return strings.TrimSpace(string(data))
 		}
 	}
-	if userID == cb.userID && cb.home != "" {
+	// Never for USER.md / MEMORY.md: the disk copy is whichever chatter
+	// wrote last, so a chatter without their own row would read someone
+	// else's profile.
+	if userID == cb.userID && cb.home != "" && name != "USER.md" && name != "MEMORY.md" {
 		if data, err := os.ReadFile(filepath.Join(cb.home, name)); err == nil && len(data) > 0 {
 			return strings.TrimSpace(string(data))
 		}
