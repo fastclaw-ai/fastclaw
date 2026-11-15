@@ -81,7 +81,7 @@ func RegisterCronTools(r *Registry, st store.Store, userID, agentID string) {
 			},
 			"required": []string{"id"},
 		},
-		makeDeleteCronJob(st, r, agentID),
+		makeDeleteCronJob(st, r, userID, agentID),
 	)
 }
 
@@ -155,6 +155,15 @@ func makeCreateCronJob(st store.Store, r *Registry, userID, agentID string) Tool
 			nextRun = cron.NextOccurrenceIn(args.Schedule, now, loc)
 		}
 
+		// An API turn whose account registered a scheduler: the job lives
+		// in trig and fires to the account's product, which owns the chat
+		// (FastClaw can't deliver into it).
+		if sc, err := apiScheduler(ctx, st, r, userID); err != nil {
+			return "", err
+		} else if sc != nil {
+			return createTrigJob(ctx, sc, r, agentID, args, jobType, nextRun, tzName, loc)
+		}
+
 		job := &store.CronJobRecord{
 			ID:        id,
 			AgentID:   agentID,
@@ -198,6 +207,15 @@ func makeListCronJobs(st store.Store, r *Registry, userID, agentID string) ToolF
 	return func(ctx context.Context, rawArgs json.RawMessage) (string, error) {
 		r := r.forContext(ctx)
 
+		var scheduled []trigJobView
+		if sc, err := apiScheduler(ctx, st, r, userID); err != nil {
+			return "", err
+		} else if sc != nil {
+			if scheduled, err = listTrigJobs(ctx, sc, agentID, r.ChatterUserID()); err != nil {
+				return "", err
+			}
+		}
+
 		jobs, err := st.ListCronJobsByAgent(ctx, agentID)
 		if err != nil {
 			return "", fmt.Errorf("list cron jobs: %w", err)
@@ -217,16 +235,23 @@ func makeListCronJobs(st store.Store, r *Registry, userID, agentID string) ToolF
 			}
 		}
 
-		if len(filtered) == 0 {
+		if len(filtered) == 0 && len(scheduled) == 0 {
 			return "No cron jobs found for this agent.", nil
 		}
 
-		data, _ := json.MarshalIndent(filtered, "", "  ")
+		var data []byte
+		if len(filtered) == 0 {
+			data, _ = json.MarshalIndent(scheduled, "", "  ")
+		} else if len(scheduled) == 0 {
+			data, _ = json.MarshalIndent(filtered, "", "  ")
+		} else {
+			data, _ = json.MarshalIndent(map[string]any{"jobs": scheduled, "older_jobs": filtered}, "", "  ")
+		}
 		return string(data), nil
 	}
 }
 
-func makeDeleteCronJob(st store.Store, r *Registry, agentID string) ToolFunc {
+func makeDeleteCronJob(st store.Store, r *Registry, userID, agentID string) ToolFunc {
 	return func(ctx context.Context, rawArgs json.RawMessage) (string, error) {
 		r := r.forContext(ctx)
 
@@ -236,6 +261,17 @@ func makeDeleteCronJob(st store.Store, r *Registry, agentID string) ToolFunc {
 		}
 		if args.ID == "" {
 			return "", fmt.Errorf("id is required")
+		}
+		if sc, err := apiScheduler(ctx, st, r, userID); err != nil {
+			return "", err
+		} else if sc != nil && validTrigID(args.ID) {
+			deleted, err := sc.Delete(ctx, trigKey(agentID, r.ChatterUserID(), args.ID))
+			if err != nil {
+				return "", fmt.Errorf("delete cron job: %w", err)
+			}
+			if deleted {
+				return fmt.Sprintf("Cron job %s deleted.", args.ID), nil
+			}
 		}
 		// Enforce the same per-chatter tenancy as list_cron_jobs: a job
 		// created by one chatter must not be deletable by another. We

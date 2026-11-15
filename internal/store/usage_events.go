@@ -89,6 +89,9 @@ func (d *DBStore) migrateUsageEvents(ctx context.Context) error {
 		{"billing_hook_url", `ALTER TABLE users ADD COLUMN billing_hook_url TEXT NOT NULL DEFAULT ''`},
 		// Stored as given: the store has no at-rest secret encryption.
 		{"billing_hook_secret", `ALTER TABLE users ADD COLUMN billing_hook_secret TEXT NOT NULL DEFAULT ''`},
+		// The account's scheduler (trig): cron jobs its API turns create.
+		{"scheduler_url", `ALTER TABLE users ADD COLUMN scheduler_url TEXT NOT NULL DEFAULT ''`},
+		{"scheduler_key", `ALTER TABLE users ADD COLUMN scheduler_key TEXT NOT NULL DEFAULT ''`},
 	} {
 		has, err := d.tableHasColumn(ctx, "users", col.name)
 		if err != nil {

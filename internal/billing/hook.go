@@ -249,6 +249,16 @@ func ValidateHookURL(ctx context.Context, raw string) error {
 	return nil
 }
 
+// GuardedDial is guardedDial for other outbound calls to URLs an account
+// registered (its scheduler): the same public-addresses-only rule.
+func GuardedDial(ctx context.Context, network, addr string) (net.Conn, error) {
+	return guardedDial(ctx, network, addr)
+}
+
+// CheckScheme is checkScheme for those calls: https only (http too with
+// EnvAllowPrivate).
+func CheckScheme(raw string) error { return checkScheme(raw) }
+
 // guardedDial resolves the host, refuses non-public addresses (unless
 // EnvAllowPrivate) and dials the address it checked, so DNS can't swap in
 // another between check and connect.

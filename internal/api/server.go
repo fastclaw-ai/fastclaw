@@ -137,6 +137,12 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 		s.authMiddleware(rateLimitMiddleware(s.limiter, getUserID, s.HandleGetBillingHook)))
 	mux.HandleFunc("PUT /v1/billing/hook",
 		s.authMiddleware(rateLimitMiddleware(s.limiter, getUserID, s.HandlePutBillingHook)))
+	// The account's scheduler (docs/scheduler.md): trig keeps the cron
+	// jobs its API turns create and posts to its product when one is due.
+	mux.HandleFunc("GET /v1/scheduler",
+		s.authMiddleware(rateLimitMiddleware(s.limiter, getUserID, s.HandleGetScheduler)))
+	mux.HandleFunc("PUT /v1/scheduler",
+		s.authMiddleware(rateLimitMiddleware(s.limiter, getUserID, s.HandlePutScheduler)))
 
 	// Machines linked through agl ("connect my computer") and the agl
 	// hub the machines dial into. See docs/agl-machines.md.

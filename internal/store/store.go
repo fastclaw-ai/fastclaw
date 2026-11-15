@@ -129,6 +129,10 @@ type Store interface {
 	BillingTarget(ctx context.Context, userID string) (BillingTarget, error)
 	GetBillingHook(ctx context.Context, accountID string) (url, secret string, err error)
 	SetBillingHook(ctx context.Context, accountID, url, secret string) error
+	// GetScheduler / SetScheduler: the account's trig deployment, where
+	// cron jobs created in its API turns are kept ("" when none).
+	GetScheduler(ctx context.Context, accountID string) (url, key string, err error)
+	SetScheduler(ctx context.Context, accountID, url, key string) error
 	// CreateLoginToken / ConsumeLoginToken back single-use console
 	// sign-in links. Consume deletes the token and returns its user;
 	// ErrNotFound when unknown or expired.
