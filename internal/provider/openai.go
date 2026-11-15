@@ -206,9 +206,19 @@ func withReasoningContent(raw json.RawMessage) json.RawMessage {
 // strip. Both `m.ToolCalls` and tool_calls embedded in
 // `m.RawAssistant` are considered, since old sessions only stored
 // them in the raw JSON.
+//
+// It also flags tool messages the API rejects even when every tool_call
+// is answered: a second result for the same tool_call_id ("each
+// tool_use must have a single result"), a result for an id the
+// assistant didn't call, and a result with no assistant tool_calls
+// right before it. Overlapping turns on one session leave these behind
+// (one turn pads a "(stopped …)" result, another appends the real one),
+// and without this every later turn of that chat failed with a 400.
+// Of two results for one id, a real one wins over a stopped pad.
 func findOrphanToolCalls(msgs []Message) (orphanAssistant, orphanTool map[int]bool) {
 	orphanAssistant = map[int]bool{}
 	orphanTool = map[int]bool{}
+	answered := map[int]bool{} // tool messages in a run after tool_calls
 	for i, m := range msgs {
 		if m.Role != "assistant" {
 			continue
@@ -217,18 +227,35 @@ func findOrphanToolCalls(msgs []Message) (orphanAssistant, orphanTool map[int]bo
 		if len(want) == 0 {
 			continue
 		}
-		// Collect IDs from the run of tool messages immediately following.
-		got := map[string]bool{}
+		wantSet := map[string]bool{}
+		for _, id := range want {
+			wantSet[id] = true
+		}
+		// The run of tool messages immediately following: keep one
+		// result per called id, the first real one if there is one.
+		keep := map[string]int{}
 		j := i + 1
-		for j < len(msgs) && msgs[j].Role == "tool" {
-			if id := msgs[j].ToolCallID; id != "" {
-				got[id] = true
+		for ; j < len(msgs) && msgs[j].Role == "tool"; j++ {
+			answered[j] = true
+			id := msgs[j].ToolCallID
+			if !wantSet[id] {
+				orphanTool[j] = true
+				continue
 			}
-			j++
+			k, seen := keep[id]
+			switch {
+			case !seen:
+				keep[id] = j
+			case isStoppedPad(msgs[k]) && !isStoppedPad(msgs[j]):
+				orphanTool[k] = true
+				keep[id] = j
+			default:
+				orphanTool[j] = true
+			}
 		}
 		missing := false
 		for _, id := range want {
-			if !got[id] {
+			if _, ok := keep[id]; !ok {
 				missing = true
 				break
 			}
@@ -240,17 +267,22 @@ func findOrphanToolCalls(msgs []Message) (orphanAssistant, orphanTool map[int]bo
 		// Drop any tool messages that referenced this assistant's
 		// (now-removed) tool_calls so the API doesn't reject them as
 		// dangling tool replies.
-		wantSet := map[string]bool{}
-		for _, id := range want {
-			wantSet[id] = true
-		}
 		for k := i + 1; k < j; k++ {
-			if wantSet[msgs[k].ToolCallID] {
-				orphanTool[k] = true
-			}
+			orphanTool[k] = true
+		}
+	}
+	for i, m := range msgs {
+		if m.Role == "tool" && !answered[i] {
+			orphanTool[i] = true
 		}
 	}
 	return
+}
+
+// isStoppedPad reports whether a tool message is the placeholder the
+// agent loop appends for a tool that never returned.
+func isStoppedPad(m Message) bool {
+	return strings.HasPrefix(m.Content, "(stopped — ")
 }
 
 // assistantToolCallIDs extracts tool_call IDs from a stored assistant
