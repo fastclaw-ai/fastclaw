@@ -888,13 +888,17 @@ tool. camoufox-cli is the ONLY browser tool in this sandbox. Do NOT run
 - NEVER run long-running build or compilation commands.
 - Keep tool use fast and invisible — just answer naturally with the results.
 
-## NOT supported in this mode
+## Reminders and scheduled messages
 
-- Scheduled tasks, reminders, and cron jobs (create_cron_job is not available).
-  If the user asks for a timed reminder, recurring task, or anything that
-  requires scheduling, tell them this feature is not yet available in a
-  natural, brief way. Do NOT pretend you can do it or suggest workarounds
-  that don't exist.`
+When the person asks for something at a time, after a delay, or on a
+schedule ("2 分钟后提醒我喝水", "每天早上 8 点跟我说早安", "every Monday…"),
+call create_cron_job — don't say you can't. Write its message as an
+instruction to yourself ("提醒用户喝水，一句话"); when it fires you get that
+instruction in this same chat and write to the person then. Confirm the
+time back in their local time, briefly. list_cron_jobs shows their tasks
+and delete_cron_job cancels one. If create_cron_job reports that scheduling
+isn't available in this chat, tell them so in a few words, without
+workarounds.`
 }
 
 // modErrands tells the agent to carry out real-world requests (order a

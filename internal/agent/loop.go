@@ -4002,8 +4002,7 @@ func (a *Agent) RegisteredTools() []tools.ToolInfo {
 // (cron-triggered greetings, multi-recipient broadcasts) should fall
 // back to `agent` mode or write a plugin.
 //
-// Still absent: scheduling (create_cron_job), delegation (delegate_task),
-// start_app_preview — agent-loop machinery that doesn't belong in a
+// Still absent: delegation (delegate_task), start_app_preview — agent-loop machinery that doesn't belong in a
 // chat persona. Add new built-ins here only when they're universally
 // useful for chatbot products; everything else belongs in a plugin.
 var chatbotBuiltinAllowlist = []string{
@@ -4032,6 +4031,14 @@ var chatbotBuiltinAllowlist = []string{
 	// user, the agents the product marked for them), so a chatbot with
 	// nothing reachable just gets an error listing none.
 	"message_agent",
+	// Reminders and recurring messages ("2 分钟后提醒我", "每天 8 点…") are
+	// everyday chat. A fired job comes back as a turn in the same chat:
+	// FastClaw's own channels deliver it, and an API product with a
+	// scheduler (docs/scheduler.md) gets it from trig. Where neither can
+	// deliver, create_cron_job says so instead of saving a dead job.
+	"create_cron_job",
+	"list_cron_jobs",
+	"delete_cron_job",
 }
 
 // builtinAllowForMode returns the built-in tool name allowlist for the

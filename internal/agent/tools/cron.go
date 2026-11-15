@@ -162,6 +162,10 @@ func makeCreateCronJob(st store.Store, r *Registry, userID, agentID string) Tool
 			return "", err
 		} else if sc != nil {
 			return createTrigJob(ctx, sc, r, agentID, args, jobType, nextRun, tzName, loc)
+		} else if channel == "api" {
+			// FastClaw can't deliver into an API product's chat; without
+			// the product's scheduler the job would fire into nothing.
+			return "", fmt.Errorf("scheduling isn't available in this chat: the app hasn't set up scheduled tasks. Tell the person you can't set reminders here yet")
 		}
 
 		job := &store.CronJobRecord{

@@ -220,3 +220,19 @@ func TestCronToolsCapJobsPerChatter(t *testing.T) {
 		t.Fatal("job over the cap accepted")
 	}
 }
+
+func TestCronToolsRefuseAPITurnsWithoutAScheduler(t *testing.T) {
+	_, newReg, st := setupTrigCron(t)
+	if err := st.SetScheduler(context.Background(), "acct", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	r := newReg("u_end", "api")
+	args, _ := json.Marshal(createCronJobArgs{Name: "n", Type: "cron", Schedule: "0 9 * * *", Message: "m"})
+	_, err := r.Execute(context.Background(), "create_cron_job", string(args))
+	if err == nil || !strings.Contains(err.Error(), "isn't available in this chat") {
+		t.Fatalf("err = %v", err)
+	}
+	if rows, _ := st.ListCronJobsByAgent(context.Background(), "agt_1"); len(rows) != 0 {
+		t.Fatalf("a job that can't be delivered was saved")
+	}
+}
