@@ -2628,7 +2628,7 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 	var replyParts []string
 	outputLimitRetries := 0
 
-	stop := turnStop{reason: stopReasonCap, limit: a.toolIterationLimit()}
+	stop := turnStop{reason: stopReasonCap, limit: a.toolIterationLimit(), zh: prefersChinese(msg.Text)}
 	loopWarned := false
 	totalFailedCalls := 0
 
@@ -2785,10 +2785,14 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 			return joinReplyParts(replyParts)
 		}
 
-		// Emit assistant content before tool calls if present
+		// Emit assistant content before tool calls if present. On IM
+		// channels it goes out now (a plan, a progress line) instead of
+		// waiting in the final reply until the whole turn ends.
 		if resp.Content != "" {
 			emitEvent(ctx, ChatEvent{Type: "content", Data: map[string]any{"content": resp.Content, "metadata": knowledgeMeta}})
-			replyParts = append(replyParts, resp.Content)
+			if !sendInterim(ctx, scrubLeakedToolCallContent(resp.Content)) {
+				replyParts = append(replyParts, resp.Content)
+			}
 		}
 
 		// Emit tool_call events
@@ -3450,7 +3454,7 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 	softDeadlineFired := false
 	iterBudgetWarned := false
 
-	stop := turnStop{reason: stopReasonCap, limit: a.toolIterationLimit()}
+	stop := turnStop{reason: stopReasonCap, limit: a.toolIterationLimit(), zh: prefersChinese(msg.Text)}
 	loopWarned := false
 	totalFailedCalls := 0
 
@@ -3839,6 +3843,7 @@ const maxFailedToolCallsPerTurn = 10
 type turnStop struct {
 	reason string
 	limit  int
+	zh     bool // the person wrote in Chinese: say it in Chinese
 }
 
 func (t turnStop) nudge() provider.Message {
@@ -3856,11 +3861,17 @@ func (t turnStop) nudge() provider.Message {
 }
 
 func (t turnStop) notice(channel string) string {
+	if channel == "web" {
+		return ""
+	}
 	if t.reason == stopReasonLoop {
-		if channel == "web" {
-			return ""
+		if t.zh {
+			return "\n\n---\n⚠️ 同一步一直得到同样的结果，这一轮先停在这里，上面的内容可能不完整。回复「继续」我接着做。"
 		}
 		return "\n\n---\n⚠️ This turn was stopped because the same step kept returning the same result — the answer above may be incomplete. Reply to continue."
+	}
+	if t.zh {
+		return "\n\n---\n⚠️ 这件事步骤比较多，这一轮先做到这里，上面是目前的进度，标成完成的步骤也不一定都核实过。回复「继续」我接着做。"
 	}
 	return iterationCapNotice(channel, t.limit)
 }
@@ -3872,6 +3883,12 @@ func (t turnStop) metadata() map[string]any {
 }
 
 func (t turnStop) fallback() string {
+	if t.zh {
+		if t.reason == stopReasonLoop {
+			return "同一步一直得到同样的结果，我先停下来了，暂时没能整理出完整的答复。"
+		}
+		return "这件事步骤比较多，这一轮的步数用完了，我还没来得及整理出完整的结果。"
+	}
 	if t.reason == stopReasonLoop {
 		return "I stopped because the same step kept returning the same result and couldn't synthesize a final response. The work above is what I gathered so far."
 	}
