@@ -31,6 +31,10 @@ type toolAdapter struct {
 	description string
 	params      interface{}
 	fn          tools.ToolFunc
+	// guest: a regular chatter's turn. Calls that would read the agent's
+	// skill files or probe our network identity are refused before they
+	// run (tools.GuestRefusal).
+	guest bool
 }
 
 func (t *toolAdapter) Name() string        { return t.name }
@@ -59,6 +63,15 @@ func (t *toolAdapter) Call(ctx context.Context, input map[string]interface{}, tC
 		return &sdktypes.ToolResult{IsError: true, Error: err.Error()}, nil
 	}
 
+	if t.guest {
+		if refusal := tools.GuestRefusal(t.name, argsJSON); refusal != "" {
+			return &sdktypes.ToolResult{
+				IsError: true,
+				Error:   refusal,
+				Content: []sdktypes.ContentBlock{{Type: sdktypes.ContentBlockText, Text: refusal}},
+			}, nil
+		}
+	}
 	result, err := t.fn(ctx, json.RawMessage(argsJSON))
 	if err != nil {
 		errText := result
@@ -117,6 +130,7 @@ func buildSDKRegistry(fcRegistry *tools.Registry) *sdktools.Registry {
 			description: def.Function.Description,
 			params:      def.Function.Parameters,
 			fn:          fn,
+			guest:       !fcRegistry.CallerIsAdmin(),
 		})
 	}
 	return sdkReg

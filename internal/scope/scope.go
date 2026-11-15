@@ -24,6 +24,7 @@ import (
 	"errors"
 
 	"github.com/fastclaw-ai/fastclaw/internal/config"
+	"github.com/fastclaw-ai/fastclaw/internal/redact"
 	"github.com/fastclaw-ai/fastclaw/internal/store"
 )
 
@@ -354,6 +355,7 @@ func providerToConfig(r store.ConfigRecord) config.ProviderConfig {
 	if blob, err := json.Marshal(r.Data); err == nil && len(blob) > 0 {
 		_ = json.Unmarshal(blob, &pc)
 	}
+	redact.Register(pc.APIKey)
 	return pc
 }
 

@@ -3,6 +3,8 @@ package tools
 import (
 	"os"
 	"strings"
+
+	"github.com/fastclaw-ai/fastclaw/internal/redact"
 )
 
 // sensitiveEnvPrefixes are NAME prefixes (case-insensitive) that mark
@@ -109,4 +111,21 @@ func scrubSensitiveEnv(env []string) []string {
 // Go default to bare inheritance of os.Environ().
 func buildSubprocessEnv(skillEnv map[string]string) []string {
 	return mergeEnv(scrubSensitiveEnv(os.Environ()), skillEnv)
+}
+
+func init() {
+	// The daemon's own secret env values are hidden from regular
+	// chatters' turns wherever they turn up (internal/redact).
+	redact.LoadEnv(isSensitiveEnvKey)
+}
+
+// registerSkillSecrets hides a skill's credential values (by env name,
+// the same rule as above), so a script that prints its env doesn't hand
+// the key to the chatter.
+func registerSkillSecrets(env map[string]string) {
+	for k, v := range env {
+		if isSensitiveEnvKey(k) {
+			redact.Register(v)
+		}
+	}
 }

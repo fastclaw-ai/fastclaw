@@ -35,6 +35,7 @@ import (
 	"github.com/fastclaw-ai/fastclaw/internal/cron"
 	"github.com/fastclaw-ai/fastclaw/internal/drain"
 	"github.com/fastclaw-ai/fastclaw/internal/plugin"
+	"github.com/fastclaw-ai/fastclaw/internal/redact"
 	"github.com/fastclaw-ai/fastclaw/internal/rediscoord"
 	coderuntime "github.com/fastclaw-ai/fastclaw/internal/runtime"
 	"github.com/fastclaw-ai/fastclaw/internal/sandbox"
@@ -194,6 +195,7 @@ func buildToolChainFromResolved(resolved config.ResolvedAgent, category string) 
 		Registry:     toolProviderRegistry,
 		GetConfig: func(name string) toolproviders.ProviderConfig {
 			pc := providers[name]
+			redact.Register(pc.APIKey)
 			return toolproviders.ProviderConfig{
 				APIKey:   pc.APIKey,
 				Endpoint: pc.Endpoint,
@@ -747,6 +749,8 @@ func (g *Gateway) IsCloudMode() bool { return true }
 func (g *Gateway) Run() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	// Hide our public egress IP from regular chatters' turns.
+	go redact.DiscoverEgressIP(ctx)
 
 	stopCh := make(chan os.Signal, 1)
 	signal.Notify(stopCh, syscall.SIGINT, syscall.SIGTERM)

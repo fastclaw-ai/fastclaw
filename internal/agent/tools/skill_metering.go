@@ -49,6 +49,7 @@ func resolveSkill(command string, envProvider SkillEnvProvider, skillDirs []stri
 			if env == nil {
 				continue
 			}
+			registerSkillSecrets(env)
 			run = &skillRun{name: name, script: script, env: env}
 		}
 		if name == run.name {

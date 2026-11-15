@@ -27,6 +27,7 @@ import (
 	"github.com/fastclaw-ai/fastclaw/internal/mcp"
 	"github.com/fastclaw-ai/fastclaw/internal/privacy"
 	"github.com/fastclaw-ai/fastclaw/internal/provider"
+	"github.com/fastclaw-ai/fastclaw/internal/redact"
 	coderuntime "github.com/fastclaw-ai/fastclaw/internal/runtime"
 	"github.com/fastclaw-ai/fastclaw/internal/sandbox"
 	"github.com/fastclaw-ai/fastclaw/internal/scope"
@@ -2350,7 +2351,16 @@ func (a *Agent) runToolsWithProgress(ctx context.Context, toolCalls []provider.T
 }
 
 // HandleMessage processes an inbound message through the ReAct loop.
+// A regular chatter's reply passes through redact.Text on the way out.
 func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) string {
+	reply := a.handleMessage(ctx, msg)
+	if !a.isTrustedTurn(msg) {
+		reply = redact.Text(reply)
+	}
+	return reply
+}
+
+func (a *Agent) handleMessage(ctx context.Context, msg bus.InboundMessage) string {
 	// A deploy waits for this turn before the process exits (drain).
 	defer drain.Track()()
 	// Check for slash commands first. Empty reply means "handled but
@@ -2790,7 +2800,11 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 		// waiting in the final reply until the whole turn ends.
 		if resp.Content != "" {
 			emitEvent(ctx, ChatEvent{Type: "content", Data: map[string]any{"content": resp.Content, "metadata": knowledgeMeta}})
-			if !sendInterim(ctx, scrubLeakedToolCallContent(resp.Content)) {
+			interim := scrubLeakedToolCallContent(resp.Content)
+			if !a.registry.CallerIsAdmin() {
+				interim = redact.Text(interim)
+			}
+			if !sendInterim(ctx, interim) {
 				replyParts = append(replyParts, resp.Content)
 			}
 		}
@@ -2915,6 +2929,11 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 			tc := resp.ToolCalls[idx]
 			resultContent, meta := extractToolMeta(r.result)
 			resultContent = capToolResult(resultContent, a.registry.HostWorkDir(), tc.ID)
+			if !a.registry.CallerIsAdmin() {
+				// A regular chatter's turn: secrets and our egress IP never
+				// reach the model, the session or the chatter's browser.
+				resultContent = redact.Text(resultContent)
+			}
 
 			// Hook: AfterToolCall
 			a.hooks.Run(ctx, &HookContext{
@@ -2993,6 +3012,9 @@ func (a *Agent) HandleMessage(ctx context.Context, msg bus.InboundMessage) strin
 				"id":     tc.ID,
 				"name":   r.toolName,
 				"result": resultContent,
+			}
+			if !a.registry.CallerIsAdmin() {
+				evt["result"] = guestToolResultView(r.toolName, resultContent)
 			}
 			if meta != nil {
 				evt["metadata"] = meta
@@ -3617,6 +3639,11 @@ func (a *Agent) HandleMessageStream(ctx context.Context, msg bus.InboundMessage)
 			tc := resp.ToolCalls[idx]
 			resultContent, meta := extractToolMeta(r.result)
 			resultContent = capToolResult(resultContent, a.registry.HostWorkDir(), tc.ID)
+			if !a.registry.CallerIsAdmin() {
+				// A regular chatter's turn: secrets and our egress IP never
+				// reach the model, the session or the chatter's browser.
+				resultContent = redact.Text(resultContent)
+			}
 			a.hooks.Run(ctx, &HookContext{AgentName: a.name, Point: AfterToolCall, ToolName: r.toolName, ToolResult: resultContent, Error: r.err, Channel: msg.Channel, AccountID: msg.AccountID, ChatID: msg.ChatID, UserID: a.ownerUserID, GoalSessionKey: a.registry.GoalSessionKey(), IsPlanMode: isPlanMode(msg.Params), Source: msg.Source})
 
 			if r.err != nil {
