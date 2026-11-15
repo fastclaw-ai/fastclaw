@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -281,8 +282,24 @@ func guardedDial(ctx context.Context, network, addr string) (net.Conn, error) {
 			}
 		}
 	}
+	// Try every checked address, IPv4 first: a host behind Cloudflare also
+	// has IPv6 addresses, which a cluster without IPv6 can't reach.
+	sort.SliceStable(ips, func(i, j int) bool {
+		return ips[i].IP.To4() != nil && ips[j].IP.To4() == nil
+	})
 	d := &net.Dialer{Timeout: HookTimeout, KeepAlive: 30 * time.Second}
-	return d.DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
+	var lastErr error
+	for _, ip := range ips {
+		conn, err := d.DialContext(ctx, network, net.JoinHostPort(ip.IP.String(), port))
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	return nil, lastErr
 }
 
 // isBlockedAddr mirrors web_fetch's SSRF guard: loopback, private,
