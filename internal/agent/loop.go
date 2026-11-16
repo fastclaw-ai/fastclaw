@@ -2386,6 +2386,21 @@ func (a *Agent) handleMessage(ctx context.Context, msg bus.InboundMessage) strin
 		return result.reply
 	}
 
+	// One turn at a time per conversation: wait for the turn already
+	// running on it before loading the history (see session.LockTurn).
+	// Registered first, so it unlocks after every other defer of the
+	// turn has settled the history.
+	{
+		channel, accountID, chatID, _ := sessionTriple(msg, msg.ProjectID)
+		lockedCtx, unlock, err := a.sessions.LockTurn(ctx, channel, accountID, chatID)
+		if err != nil {
+			emitEvent(ctx, ChatEvent{Type: "done"})
+			return ""
+		}
+		ctx = lockedCtx
+		defer unlock()
+	}
+
 	a = a.forkTurn()
 	a.applyTurnModel(ctx)
 
