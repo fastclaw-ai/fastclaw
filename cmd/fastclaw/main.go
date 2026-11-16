@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/fastclaw-ai/fastclaw/internal/connectors"
 	"github.com/fastclaw-ai/fastclaw/internal/daemon"
 	"github.com/fastclaw-ai/fastclaw/internal/gateway"
+	"github.com/fastclaw-ai/fastclaw/internal/memwatch"
 	coderuntime "github.com/fastclaw-ai/fastclaw/internal/runtime"
 	"github.com/fastclaw-ai/fastclaw/internal/sandbox"
 	"github.com/fastclaw-ai/fastclaw/internal/setup"
@@ -204,6 +206,9 @@ func runGateway(port int) error {
 
 	if home, err := config.HomeDir(); err == nil {
 		slog.Info("fastclaw instance", "home", home, "port", port)
+		// Heap profiles on memory spikes (and pprof when configured);
+		// the home dir is the persistent volume in the cloud pod.
+		memwatch.Start(context.Background(), filepath.Join(home, "debug"))
 	}
 
 	agent.InstallBundledSkills()
