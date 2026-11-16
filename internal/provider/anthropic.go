@@ -59,31 +59,15 @@ func toAnthropicMessages(msgs []Message) (string, []anthropicMessage) {
 	var out []anthropicMessage
 
 	// Anthropic rejects any tool_use whose tool_result doesn't appear
-	// in the immediately following message. The agent loop can produce
-	// this shape when loop detection / cap-reached synthesis injects a
-	// system or assistant message between the tool_use and the
-	// padOrphanToolResults pad. Reuse the openai-path scanner to flag
-	// orphan assistant tool_calls, then sweep the WHOLE message list
-	// for any tool replies whose tool_use we just decided to drop —
-	// the openai scanner only checks the immediate tool-run, which
-	// misses pad results that land after intervening non-tool messages.
+	// in the immediately following message. findOrphanToolCalls flags
+	// assistant tool_calls without a full result run right after them,
+	// and every tool message that isn't in such a run (including pads
+	// that landed after intervening messages). It works by position,
+	// not by id: ids can repeat in one history (recovered calls), and
+	// dropping every result that shares an orphan's id also dropped the
+	// real result of a later call with the same id.
 	// Session history stays untouched; this only affects wire build.
 	orphanAssistant, orphanTool := findOrphanToolCalls(msgs)
-	orphanIDs := map[string]bool{}
-	for i, m := range msgs {
-		if orphanAssistant[i] {
-			for _, id := range assistantToolCallIDs(m) {
-				orphanIDs[id] = true
-			}
-		}
-	}
-	if len(orphanIDs) > 0 {
-		for i, m := range msgs {
-			if m.Role == "tool" && orphanIDs[m.ToolCallID] {
-				orphanTool[i] = true
-			}
-		}
-	}
 
 	for i, m := range msgs {
 		if m.Role == "system" {

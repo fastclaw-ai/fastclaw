@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -81,10 +83,11 @@ func scrubLeakedToolCallContent(content string) string {
 //	  <parameter name="timeout" string="false">15</parameter>
 //	</invoke>
 //
-// Returned tool calls have synthetic IDs (`recovered_…`) so the
-// downstream tool_result message can be paired with the original
-// assistant message — IDs the model itself proposed would collide with
-// real OpenAI-style IDs from later turns.
+// Returned tool calls have synthetic IDs (`recovered_<random>_<n>`) so
+// the downstream tool_result message can be paired with the original
+// assistant message. They are unique per recovery: IDs the model itself
+// proposed would collide with real OpenAI-style IDs from later turns,
+// and a fixed `recovered_0` repeated across rounds of one session.
 //
 // The second return is the original content with every matched invoke
 // (and any optional <tool_calls>/<function_calls>/<DSML> wrapper) block
@@ -122,6 +125,7 @@ func recoverToolCallsFromContent(content string) ([]provider.ToolCall, string) {
 		return nil, scrubbed
 	}
 	calls := make([]provider.ToolCall, 0, len(matches))
+	batch := recoveredBatchID()
 	for i, m := range matches {
 		// m: [whole-lo, whole-hi, name-lo, name-hi, body-lo, body-hi]
 		name := normalized[m[2]:m[3]]
@@ -136,7 +140,7 @@ func recoverToolCallsFromContent(content string) ([]provider.ToolCall, string) {
 			continue
 		}
 		calls = append(calls, provider.ToolCall{
-			ID:   fmt.Sprintf("recovered_%d", i),
+			ID:   fmt.Sprintf("recovered_%s_%d", batch, i),
 			Type: "function",
 			Function: provider.FunctionCall{
 				Name:      name,
@@ -158,6 +162,14 @@ func recoverToolCallsFromContent(content string) ([]provider.ToolCall, string) {
 	stripped := stripRE.ReplaceAllString(normalized, "")
 	stripped = strings.TrimSpace(stripped)
 	return calls, stripped
+}
+
+// recoveredBatchID is a short random tag that keeps recovered tool-call
+// IDs unique across rounds of one session.
+func recoveredBatchID() string {
+	var b [6]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
 }
 
 // invokeRE pulls one <invoke name="..."> ... </invoke> block at a time.
