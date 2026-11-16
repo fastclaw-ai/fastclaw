@@ -3,6 +3,7 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/fastclaw-ai/fastclaw/internal/workspace"
@@ -62,5 +63,40 @@ func TestSplitFilesFromReplyUsesExplicitFinalDocument(t *testing.T) {
 	}
 	if len(items) != 1 || items[0].Filename != "final.pdf" || string(items[0].Bytes) != "final" {
 		t.Fatalf("items = %#v, want only final.pdf", items)
+	}
+}
+
+// A bare relative link to a workspace file is a file to send; web links
+// and links to files that don't exist stay in the text.
+func TestSplitFilesFromReplyRelativePath(t *testing.T) {
+	ctx := context.Background()
+	ws := workspace.NewLocalFS(t.TempDir())
+	if err := ws.Put(ctx, "agent", "", "chat", "oil-widget-v1.2.9.scripting", bytes.NewBufferString("pkg"), 3, "application/octet-stream"); err != nil {
+		t.Fatal(err)
+	}
+	reply := "包在这里：[oil-widget-v1.2.9.scripting](oil-widget-v1.2.9.scripting)\n参考 [文档](https://example.com/a.html) 和 [旧版](missing.zip)"
+	text, items := splitFilesFromReply(ctx, ws, "agent", "", "chat", reply)
+	if len(items) != 1 || items[0].Filename != "oil-widget-v1.2.9.scripting" {
+		t.Fatalf("items = %#v", items)
+	}
+	for _, keep := range []string{"[文档](https://example.com/a.html)", "[旧版](missing.zip)"} {
+		if !strings.Contains(text, keep) {
+			t.Errorf("text lost %q: %q", keep, text)
+		}
+	}
+	if strings.Contains(text, "(oil-widget") {
+		t.Errorf("sent file's link left in text: %q", text)
+	}
+}
+
+func TestIsWorkspaceFileRef(t *testing.T) {
+	for ref, want := range map[string]bool{
+		"/workspace/a.pdf": true, "report.pdf": true, "out/data.zip": true,
+		"https://x.com/a.pdf": false, "mailto:a@b.c": false, "#top": false,
+		"/etc/passwd": false, "README": false, "www.example.com": false,
+	} {
+		if got := isWorkspaceFileRef(ref); got != want {
+			t.Errorf("%q: got %v want %v", ref, got, want)
+		}
 	}
 }

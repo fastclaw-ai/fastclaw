@@ -15,6 +15,9 @@ const (
 		"resources) belong to the agent and are not shown, listed or copied for anyone but its owner. " +
 		"Run the skill's script to use it. Don't try another way to read them; tell the person, in " +
 		"your own voice, that this part isn't something you can share."
+	refuseFileDrop = "refused: public file-sharing services aren't used for anyone's files. " +
+		"Reference the file in your reply as [name](/workspace/<file>): the runtime delivers it, and on " +
+		"WeChat it also comes with a download link of our own, valid 7 days."
 	refuseInfraProbe = "refused: private infrastructure. The service's own network details " +
 		"(egress/public IP, host, cloud provider, region, metadata) are not shared. " +
 		"Don't try another way to find them; tell the person, in your own voice, that you can't share " +
@@ -33,6 +36,26 @@ var ipProbeHosts = []string{
 	"whoami.cloudflare", "ipleak.net", "browserleaks.com", "iplocation.net", "db-ip.com",
 	"ipgeolocation.io", "ipdata.co", "ipstack.com", "geojs.io", "ip.nf", "ip.la",
 	"metadata.google.internal", "169.254.169.254", "100.100.100.200", "fd00:ec2::254",
+}
+
+// fileDropHosts are public "upload and get a link" services. A chatter's
+// files (and the agent's outputs) never go there: anyone with the link
+// can read them, and the runtime already delivers files itself.
+var fileDropHosts = []string{
+	"gofile.io", "tmpfiles.org", "catbox.moe", "litterbox.", "file.io", "bashupload",
+	"temp.sh", "transfer.sh", "0x0.st", "pixeldrain.com", "uguu.se", "filebin.net",
+	"anonfiles", "ufile.io", "sendspace.com", "wetransfer.com", "dropmefiles",
+	"tempfile", "keep.sh", "oshi.at", "x0.at", "paste.rs", "termbin.com", "ix.io",
+}
+
+func mentionsFileDrop(s string) bool {
+	s = strings.ToLower(s)
+	for _, h := range fileDropHosts {
+		if strings.Contains(s, h) {
+			return true
+		}
+	}
+	return false
 }
 
 func mentionsIPProbe(s string) bool {
@@ -104,6 +127,9 @@ func GuestRefusal(name string, raw json.RawMessage) string {
 		}
 		if readsBundledSkills(a.Command) {
 			return refuseSkillFiles
+		}
+		if mentionsFileDrop(a.Command) {
+			return refuseFileDrop
 		}
 	case "web_fetch":
 		if u, err := url.Parse(strings.TrimSpace(a.URL)); err == nil && mentionsIPProbe(u.Host+u.Path) {

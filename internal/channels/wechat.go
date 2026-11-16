@@ -28,6 +28,7 @@ import (
 
 	"github.com/fastclaw-ai/fastclaw/internal/bus"
 	"github.com/fastclaw-ai/fastclaw/internal/config"
+	"github.com/fastclaw-ai/fastclaw/internal/share"
 )
 
 // WeChat implements the Channel interface for the iLink (微信) bot
@@ -532,13 +533,40 @@ func (w *WeChat) SendMessage(msg bus.OutboundMessage) error {
 		if len(item.Bytes) == 0 {
 			continue
 		}
-		if err := w.sendMedia(msg.ChatID, item); err != nil {
+		_, itemType := classifyWeChatMedia(item)
+		err := w.sendMedia(msg.ChatID, item)
+		if err != nil {
 			slog.Warn("wechat send media failed",
 				"account", w.accountID, "chat", msg.ChatID,
-				"filename", item.Filename, "error", err)
+				"filename", item.Filename, "bytes", len(item.Bytes), "error", err)
+		}
+		// A file card can't always be saved or opened on the phone (an
+		// unfamiliar extension on iOS), and a failed upload sends nothing.
+		// Either way the person also gets a download link of our own.
+		if err != nil || itemType == wechatItemTypeFile {
+			w.sendShareLink(msg.ChatID, item)
 		}
 	}
 	return nil
+}
+
+// sendShareLink sends a download link for item (see internal/share).
+func (w *WeChat) sendShareLink(chatID string, item bus.MediaItem) {
+	ctx, cancel := context.WithTimeout(context.Background(), wechatMediaSendTimeout)
+	defer cancel()
+	link, err := share.Default().Create(ctx, item.Bytes, item.Filename)
+	if err != nil {
+		slog.Warn("wechat share link failed", "account", w.accountID, "chat", chatID,
+			"filename", item.Filename, "error", err)
+		return
+	}
+	name := item.Filename
+	if name == "" {
+		name = "file"
+	}
+	if err := w.sendTextOnly(chatID, "📎 "+name+"\n"+link); err != nil {
+		slog.Warn("wechat send share link failed", "account", w.accountID, "chat", chatID, "error", err)
+	}
 }
 
 // sendTextOnly is the simple text-message path used by SendMessage when

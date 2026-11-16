@@ -25,6 +25,7 @@ import (
 	"github.com/fastclaw-ai/fastclaw/internal/push"
 	"github.com/fastclaw-ai/fastclaw/internal/runtime"
 	"github.com/fastclaw-ai/fastclaw/internal/session"
+	"github.com/fastclaw-ai/fastclaw/internal/share"
 	"github.com/fastclaw-ai/fastclaw/internal/store"
 	"github.com/fastclaw-ai/fastclaw/internal/taskqueue"
 	"github.com/fastclaw-ai/fastclaw/internal/usage"
@@ -246,6 +247,8 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	mux.HandleFunc("GET /healthz", healthz)
 	mux.HandleFunc("GET /livez", healthz)
+	// Share links (internal/share): public, unguessable, expiring.
+	mux.HandleFunc("GET /f/{token}/{name}", share.ServeDefault)
 	// Not ready while draining: the load balancer stops routing new
 	// requests here; turns already running finish.
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {

@@ -40,6 +40,7 @@ import (
 	coderuntime "github.com/fastclaw-ai/fastclaw/internal/runtime"
 	"github.com/fastclaw-ai/fastclaw/internal/sandbox"
 	"github.com/fastclaw-ai/fastclaw/internal/scope"
+	"github.com/fastclaw-ai/fastclaw/internal/share"
 	"github.com/fastclaw-ai/fastclaw/internal/store"
 	"github.com/fastclaw-ai/fastclaw/internal/taskqueue"
 	"github.com/fastclaw-ai/fastclaw/internal/toolproviders"
@@ -1095,10 +1096,28 @@ func allChannelRows(st store.Store) ([]store.ConfigRecord, error) {
 // the chat body.
 var imgRefRegex = regexp.MustCompile(`!\[([^\]]*)\]\(([^)]+)\)`)
 
-// fileRefRegex intentionally accepts only /workspace links. Normal web links
-// remain in the message, and image syntax has already been removed by
-// splitMediaFromReply before this matcher runs.
-var fileRefRegex = regexp.MustCompile(`\[([^\]]*)\]\((/workspace/[^)]+)\)`)
+// fileRefRegex matches markdown links. isWorkspaceFileRef then keeps
+// only those pointing at a workspace file: /workspace/... or a bare
+// relative path with an extension ("report.pdf", "out/data.zip"). Web
+// links stay in the message, and image syntax has already been removed
+// by splitMediaFromReply before this matcher runs.
+//
+// Bare relative paths used to be ignored, so `[app.scripting](app.scripting)`
+// reached WeChat as text and the file was never sent.
+var fileRefRegex = regexp.MustCompile(`\[([^\]]*)\]\(([^)\s]+)\)`)
+
+func isWorkspaceFileRef(target string) bool {
+	if strings.HasPrefix(target, "/workspace/") {
+		return true
+	}
+	if strings.Contains(target, ":") || strings.HasPrefix(target, "/") ||
+		strings.HasPrefix(target, "#") || strings.HasPrefix(target, "?") ||
+		strings.HasPrefix(target, "//") || strings.HasPrefix(target, "www.") {
+		return false
+	}
+	ext := filepath.Ext(target)
+	return len(ext) >= 2 && len(ext) <= 16
+}
 
 // splitFilesFromReply resolves explicitly linked workspace documents into
 // outbound attachments and removes the raw markdown link from IM text.
@@ -1113,16 +1132,29 @@ func splitFilesFromReply(ctx context.Context, ws workspace.Store, agentID, proje
 	var items []bus.MediaItem
 	var out strings.Builder
 	cursor := 0
+	linked := false
 	for _, m := range matches {
 		path := reply[m[4]:m[5]]
+		if !isWorkspaceFileRef(path) {
+			continue
+		}
 		data, base, err := resolveWorkspaceBytes(ctx, ws, agentID, projectID, sessionID, path)
 		if err != nil {
 			slog.Warn("split file: workspace get failed", "path", path, "error", err)
 			continue
 		}
 		if len(data) > maxAttachmentBytes {
-			slog.Warn("split file: skipping oversize attachment",
-				"agent", agentID, "session", sessionID, "filename", base, "size", len(data), "cap", maxAttachmentBytes)
+			// Too big for the channel: hand over a download link instead.
+			link, lerr := share.Default().Create(ctx, data, base)
+			if lerr != nil {
+				slog.Warn("split file: oversize and no share link",
+					"agent", agentID, "session", sessionID, "filename", base, "size", len(data), "error", lerr)
+				continue
+			}
+			out.WriteString(reply[cursor:m[0]])
+			out.WriteString(base + ": " + link)
+			cursor = m[1]
+			linked = true
 			continue
 		}
 		items = append(items, bus.MediaItem{Filename: base, ContentType: mime.TypeByExtension(filepath.Ext(base)), Bytes: data})
@@ -1132,7 +1164,7 @@ func splitFilesFromReply(ctx context.Context, ws workspace.Store, agentID, proje
 			cursor++
 		}
 	}
-	if len(items) == 0 {
+	if len(items) == 0 && !linked {
 		return reply, nil
 	}
 	out.WriteString(reply[cursor:])
