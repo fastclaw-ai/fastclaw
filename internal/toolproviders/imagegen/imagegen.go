@@ -25,7 +25,14 @@ func RegisterAll(r *toolproviders.Registry) {
 type args struct {
 	Prompt string
 	Size   string
+	// Aspect is "square", "portrait" or "landscape" (the image_gen tool's
+	// shape); each provider maps it to its own size parameter. Size, when
+	// given, wins (provider-specific, for callers that know the provider).
+	Aspect string
 	N      int
+	// Refs are reference images (data: URLs) to edit or base the picture
+	// on. A provider that can't take them returns errNoRefs.
+	Refs []string
 }
 
 func parseArgs(raw map[string]any) (args, error) {
@@ -37,7 +44,20 @@ func parseArgs(raw map[string]any) (args, error) {
 		return a, fmt.Errorf("prompt is required")
 	}
 	if s, ok := raw["size"].(string); ok {
-		a.Size = s
+		a.Size = strings.TrimSpace(s)
+	}
+	if s, ok := raw["aspect"].(string); ok {
+		a.Aspect = strings.TrimSpace(s)
+	}
+	switch v := raw["image_urls"].(type) {
+	case []string:
+		a.Refs = v
+	case []any:
+		for _, u := range v {
+			if s, ok := u.(string); ok && s != "" {
+				a.Refs = append(a.Refs, s)
+			}
+		}
 	}
 	switch v := raw["n"].(type) {
 	case float64:
@@ -52,6 +72,23 @@ func parseArgs(raw map[string]any) (args, error) {
 		a.N = 4
 	}
 	return a, nil
+}
+
+// errNoRefs: this provider (or its configured model) can't take reference
+// images. Retriable, so the chain tries the next provider.
+func errNoRefs(provider string) error {
+	return toolproviders.Retry(fmt.Errorf("%s: reference images aren't supported by this provider's configured model", provider))
+}
+
+// urlImages wraps provider URLs as images (fetched by the image_gen tool).
+func urlImages(urls []string) []toolproviders.Image {
+	out := make([]toolproviders.Image, 0, len(urls))
+	for _, u := range urls {
+		if u != "" {
+			out = append(out, toolproviders.Image{URL: u})
+		}
+	}
+	return out
 }
 
 // renderURLs builds a LLM-visible response from a list of image URLs. Each

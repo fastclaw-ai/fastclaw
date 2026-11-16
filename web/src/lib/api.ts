@@ -1841,6 +1841,36 @@ export async function saveTools(payload: {
   return res.json();
 }
 
+/** Console → Tools: the caller's own tool layer. Keys are never returned
+ *  (apiKeySet says one is saved); `inherited` is what the deployment
+ *  provides per category (its chain only). */
+export interface MyToolsConfig {
+  categories: ToolCategoryCatalog[];
+  toolProviders: Record<string, { apiKeySet: boolean; endpoint?: string; options?: Record<string, string> }>;
+  tools: Record<string, ToolCategorySettings>;
+  inherited: Record<string, { chain: string[] }>;
+}
+
+export async function getMyTools(): Promise<MyToolsConfig> {
+  const res = await apiFetch("/api/my-tools");
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+/** Replaces the caller's own layer. A category left out of `tools` uses
+ *  the deployment's again; an empty apiKey keeps the saved one. */
+export async function saveMyTools(payload: {
+  toolProviders: Record<string, ToolProviderSettings>;
+  tools: Record<string, ToolCategorySettings>;
+}): Promise<{ ok: boolean; error?: string }> {
+  const res = await apiFetch("/api/my-tools", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return res.json();
+}
+
 // Plugins
 export async function getPlugins(): Promise<PluginInfo[]> {
   const res = await apiFetch("/api/plugins");

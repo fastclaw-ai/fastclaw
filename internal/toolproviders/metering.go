@@ -38,7 +38,10 @@ func meterCall(ctx context.Context, category, provider, model string, args map[s
 	ev := billing.Event{Provider: provider, Model: model}
 	switch category {
 	case categoryImageGen:
-		n := countImages(resp.Text)
+		n := len(resp.Images)
+		if n == 0 {
+			n = countImages(resp.Text)
+		}
 		if n == 0 {
 			n = requestedImages(args)
 		}
@@ -46,6 +49,12 @@ func meterCall(ctx context.Context, category, provider, model string, args map[s
 		detail := map[string]any{}
 		if s, _ := args["size"].(string); strings.TrimSpace(s) != "" {
 			detail["size"] = strings.TrimSpace(s)
+		}
+		if s, _ := args["aspect"].(string); strings.TrimSpace(s) != "" {
+			detail["aspect"] = strings.TrimSpace(s)
+		}
+		if refs, _ := args["image_urls"].([]string); len(refs) > 0 {
+			detail["edit"] = true
 		}
 		if q, _ := args["quality"].(string); strings.TrimSpace(q) != "" {
 			detail["quality"] = strings.TrimSpace(q)

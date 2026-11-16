@@ -22,7 +22,7 @@ One row per billable thing, in table `usage_events` (both dialects).
 | kind          | what                                  | quantity                                   | provider / model                       |
 |---------------|---------------------------------------|--------------------------------------------|----------------------------------------|
 | `llm`         | one model call (main loop, sub-agents, compaction, memory, …) | `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_creation_tokens` (images sent to the model are already in `input_tokens`) | provider id / model id |
-| `image`       | `image_gen` tool                      | `units` = images returned, `unit` = `image`; `detail.size`, `detail.quality` when known | image provider (`openai`, `fal`, …) / model |
+| `image`       | `image_gen` tool                      | `units` = images returned, `unit` = `image`; `detail.size`, `detail.quality`, `detail.aspect` when known, `detail.edit` when reference images were used | image provider (`openai`, `fal`, …) / model |
 | `tts`         | `tts` tool                            | `units` = characters synthesized, `unit` = `char` | tts provider / voice model |
 | `search`      | `web_search` tool                     | `units` = 1, `unit` = `call`               | search provider (`brave`, `exa`, …) |
 | `fetch`       | `web_fetch` tool                      | `units` = 1, `unit` = `call`               | fetch provider (`jina`, `firecrawl`, `direct`) |

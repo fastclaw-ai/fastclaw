@@ -57,11 +57,20 @@ func (r *Replicate) Execute(ctx context.Context, req toolproviders.Request) (too
 		"prompt":      a.Prompt,
 		"num_outputs": a.N,
 	}
-	if a.Size != "" {
+	if len(a.Refs) > 0 {
+		return toolproviders.Response{}, errNoRefs("replicate")
+	}
+	switch {
+	case a.Size != "":
 		// Replicate flux models use aspect_ratio (e.g. "1:1"); width/height
-		// were removed from the schema. Accept either and pass through —
-		// the caller's tool description tells the LLM what to send.
+		// were removed from the schema.
 		input["aspect_ratio"] = a.Size
+	case a.Aspect == "portrait":
+		input["aspect_ratio"] = "3:4"
+	case a.Aspect == "landscape":
+		input["aspect_ratio"] = "4:3"
+	case a.Aspect != "":
+		input["aspect_ratio"] = "1:1"
 	}
 	buf, _ := json.Marshal(map[string]any{"input": input})
 
@@ -108,7 +117,7 @@ func (r *Replicate) Execute(ctx context.Context, req toolproviders.Request) (too
 	if len(urls) == 0 {
 		return toolproviders.Response{}, toolproviders.ErrNoResults
 	}
-	return toolproviders.Response{Text: renderURLs(a.Prompt, urls)}, nil
+	return toolproviders.Response{Text: renderURLs(a.Prompt, urls), Images: urlImages(urls)}, nil
 }
 
 // decodeReplicateOutput accepts both the array shape (flux: ["url1", "url2"])

@@ -716,7 +716,8 @@ The sandbox may not have all packages. Install before use:
 ## Visual/Graphics Tasks
 The sandbox is a **headless** environment (no display). For visual tasks:
 - **Drawing/charts/plots**: Use matplotlib with Agg backend.
-- **Image generation/manipulation**: Use PIL/Pillow. Install first: pip install -q pillow
+- **Pictures** (photos, illustrations, posters, stickers, avatars): use the image_gen tool when you have it — never draw them with code.
+- **Image manipulation by code** (crop, resize, collage, annotate): Use PIL/Pillow. Install first: pip install -q pillow
 - **NEVER use turtle, tkinter, pygame or any GUI library** — they will fail.
 - Save the image to **/workspace/** (NOT /tmp/) and reference it by
   path — the runtime takes care of delivering the file to whatever

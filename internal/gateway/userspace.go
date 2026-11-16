@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -672,9 +673,15 @@ func (sp *UserSpace) EnsureAgent(ctx context.Context, st store.Store, mb *bus.Me
 		return fmt.Errorf("EnsureAgent: add agent: %w", err)
 	}
 	// Same per-agent tool chains (web_search, image_gen, …) the eager
-	// load path registers, so an on-demand agent has identical tools.
+	// load path registers, so an on-demand agent has identical tools —
+	// with the owner's tool settings when the owner's config applies (an
+	// app's end user runs the app account's image_gen, like its models).
 	if ag := sp.Agents.AgentByID(rc.ID); ag != nil {
-		registerAgentToolChains(sp.Config, []*agent.Agent{ag})
+		owner := ""
+		if rec.UserID != sp.UserID && applyOwnerOverlays {
+			owner = rec.UserID
+		}
+		registerAgentToolChains(toolConfigFor(ctx, st, sp.Config, owner, rc.ID), []*agent.Agent{ag})
 	}
 	if sp.SandboxPool != nil {
 		if ag := sp.Agents.AgentByID(rc.ID); ag != nil {
@@ -710,6 +717,77 @@ func (sp *UserSpace) EnsureAgent(ctx context.Context, st store.Store, mb *bus.Me
 		slog.Info("agent loaded on demand", "user", sp.UserID, "agent", rc.ID)
 	}
 	return nil
+}
+
+// toolConfigFor is base (system → space user, already merged) with the
+// tool settings of the agent's owner (owner != "": the space user runs an
+// agent whose owner's config applies) and then of the agent itself laid
+// over it, category by category and provider by provider — the same
+// precedence as models: the most specific layer wins. Base is returned
+// as-is when there is nothing to add; it is never modified.
+func toolConfigFor(ctx context.Context, st store.Store, base *config.Config, owner, agentID string) *config.Config {
+	if st == nil || base == nil {
+		return base
+	}
+	type layer struct{ uid, aid string }
+	var layers []layer
+	if owner != "" {
+		layers = append(layers, layer{owner, ""})
+	}
+	if agentID != "" {
+		layers = append(layers, layer{"", agentID})
+		if owner != "" {
+			layers = append(layers, layer{owner, agentID})
+		}
+	}
+	var providers map[string]config.ToolProviderCfg
+	var tools map[string]config.ToolCategoryCfg
+	for _, l := range layers {
+		var p map[string]config.ToolProviderCfg
+		if readToolRow(ctx, st, NSToolProviders, l.uid, l.aid, &p) && len(p) > 0 {
+			if providers == nil {
+				providers = maps.Clone(base.ToolProviders)
+				if providers == nil {
+					providers = map[string]config.ToolProviderCfg{}
+				}
+			}
+			maps.Copy(providers, p)
+		}
+		var t map[string]config.ToolCategoryCfg
+		if readToolRow(ctx, st, NSToolCategories, l.uid, l.aid, &t) && len(t) > 0 {
+			if tools == nil {
+				tools = maps.Clone(base.Tools)
+				if tools == nil {
+					tools = map[string]config.ToolCategoryCfg{}
+				}
+			}
+			maps.Copy(tools, t)
+		}
+	}
+	if providers == nil && tools == nil {
+		return base
+	}
+	cp := *base
+	if providers != nil {
+		cp.ToolProviders = providers
+	}
+	if tools != nil {
+		cp.Tools = tools
+	}
+	return &cp
+}
+
+// readToolRow reads one layer's own row of a tool namespace (not merged).
+func readToolRow(ctx context.Context, st store.Store, ns, uid, aid string, dst any) bool {
+	rec, err := st.GetConfigByName(ctx, store.KindSetting, uid, aid, ns)
+	if err != nil || rec == nil || len(rec.Data) == 0 {
+		return false
+	}
+	blob, err := json.Marshal(rec.Data)
+	if err != nil {
+		return false
+	}
+	return json.Unmarshal(blob, dst) == nil
 }
 
 // loadUserSpace builds a UserSpace by:
@@ -935,7 +1013,9 @@ func loadUserSpace(ctx context.Context, userID string, mb *bus.MessageBus, st st
 		agentMgr.ClearDefaultAgent()
 	}
 
-	registerAgentToolChains(cfg, agentMgr.All())
+	for _, ag := range agentMgr.All() {
+		registerAgentToolChains(toolConfigFor(ctx, st, cfg, "", ag.Name()), []*agent.Agent{ag})
+	}
 
 	pool := attachSandboxToAgents(systemSandboxPool, userID, resolved, agentMgr)
 

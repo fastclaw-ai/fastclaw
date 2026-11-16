@@ -5,6 +5,30 @@ action on upgrade — read those notes before deploying.
 
 ## [Unreleased]
 
+### Added — tool settings per account (Console → Tools)
+
+Console → Tools now has every tool category System → Tools has (web
+search, page reading, image generation, speech). A user's own providers
+and chain for a category win over the deployment's, category by category
+and provider by provider; categories they don't set keep the system's.
+`GET/PUT /api/my-tools` read and replace only the caller's own layer:
+keys are never returned (`apiKeySet`), an empty `apiKey` keeps the saved
+one, and an endpoint must be public https unless it is the deployment's
+own address for that provider. Agents now resolve tools system → space
+user → **the agent's owner** (when the owner's config applies, as for
+models) → the agent: an app account's image_gen reaches its end users.
+
+### Changed — image_gen stores pictures in the chat's workspace
+
+image_gen saves each picture to `/workspace/picture-….png` and returns
+`putInReply` (`![](/workspace/…)`) instead of provider URLs or inline
+base64, so a picture costs the model a short path rather than megabytes
+of context, and API replies return it in `files`. New parameters:
+`aspect` (`square` / `portrait` / `landscape`, mapped per provider) and
+`images` (reference pictures by workspace path — fal with an image-to-
+image model or the `edit_model` option, OpenAI gpt-image via
+/images/edits). Metering counts the pictures actually returned.
+
 ### Added — tool steps on the API stream carry their input and output
 
 On a streamed `/v1/chat/completions` turn, a tool's `running` chunk now

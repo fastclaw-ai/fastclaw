@@ -63,6 +63,17 @@ type ProviderConfig struct {
 type Response struct {
 	Text string
 	Raw  any
+	// Images (image_gen): the pictures themselves, so the tool can store
+	// them in the chat's workspace and hand the model a short path
+	// instead of a URL or base64 data.
+	Images []Image
+}
+
+// Image is one generated picture: its bytes, or a URL to fetch them from.
+type Image struct {
+	URL         string
+	Data        []byte
+	ContentType string
 }
 
 // Registry holds all registered Provider implementations, keyed by
@@ -219,7 +230,9 @@ func parseRef(ref string) (name, model string) {
 	return ref, ""
 }
 
-func isEmpty(r Response) bool { return strings.TrimSpace(r.Text) == "" && r.Raw == nil }
+func isEmpty(r Response) bool {
+	return strings.TrimSpace(r.Text) == "" && r.Raw == nil && len(r.Images) == 0
+}
 
 // ---------- Error classification ----------
 

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1050,8 +1051,19 @@ func (a *Agent) RegisterWebSearchChain(chain *toolproviders.Chain) {
 }
 
 // RegisterImageGenChain exposes the image_gen tool to this agent.
+// The pictures are stored in the calling chat's workspace.
 func (a *Agent) RegisterImageGenChain(chain *toolproviders.Chain) {
-	tools.RegisterImageGenChain(a.registry, chain)
+	tools.RegisterImageGenChain(a.registry, chain, &tools.ImageFiles{
+		Save: func(ctx context.Context, sessionID, projectID, name string, data []byte, contentType string) (string, error) {
+			url := "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(data)
+			names := a.WriteSessionAttachments(ctx, sessionID, projectID, []Attachment{{URL: url, Name: name}})
+			if len(names) == 0 {
+				return "", errors.New("workspace write failed")
+			}
+			return names[0], nil
+		},
+		Load: a.loadSessionFile,
+	})
 }
 
 // RegisterWebFetchChain swaps the agent's web_fetch backend for a

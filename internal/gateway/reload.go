@@ -22,6 +22,22 @@ func (g *Gateway) InvalidateUser(userID string) {
 	slog.Info("user space invalidated; will reload on next access", "user", userID)
 }
 
+// InvalidateAccount drops the account's own space and those of its app's
+// end users (app_user spaces run the account's agents with the account's
+// settings), after the account changes settings they inherit (tools).
+func (g *Gateway) InvalidateAccount(userID string) {
+	if g.users == nil || userID == "" {
+		return
+	}
+	for _, sp := range g.users.all() {
+		if sp.UserID == userID || sp.AppOwnerUserID == userID {
+			g.users.invalidate(sp.UserID)
+		}
+	}
+	g.users.invalidate(userID)
+	slog.Info("account invalidated with its end users' spaces", "user", userID)
+}
+
 // InvalidateAgent drops every cached UserSpace that currently holds the
 // given agent — owner's space (always preloaded by loadUserSpace) plus
 // any foreign space that lazy-attached via EnsureAgent (super_admin

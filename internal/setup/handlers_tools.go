@@ -65,7 +65,9 @@ var builtinCatalog = []categoryCatalog{
 		Providers: []providerCatalog{
 			{Name: "openai", Label: "OpenAI", NeedsKey: true, Models: []string{"gpt-image-1", "dall-e-3"}},
 			{Name: "replicate", Label: "Replicate", NeedsKey: true, Models: []string{"flux-schnell", "flux-dev", "flux-pro", "sdxl", "ideogram"}},
-			{Name: "fal", Label: "Fal", NeedsKey: true, Models: []string{"flux-dev", "flux-schnell", "flux-pro"}},
+			// fal takes any model path too (fal-ai/…); option edit_model
+			// names the image-to-image model used with reference images.
+			{Name: "fal", Label: "Fal", NeedsKey: true, Models: []string{"flux-dev", "flux-schnell", "flux-pro", "fal-ai/bytedance/seedream/v4/text-to-image", "fal-ai/qwen-image"}},
 			// "none" is a sentinel: when picked, image_gen is not exposed
 			// to the model at all. The model falls back to its own native
 			// image-generation capability if it has one.
@@ -96,6 +98,27 @@ func (s *Server) handleGetTools(w http.ResponseWriter, r *http.Request) {
 		cfg = &config.Config{}
 	}
 
+	// Return providers as a keyed object (easier for the UI to merge-edit).
+	// apiKey is returned in full to the admin — the UI decides whether to
+	// mask it — but cloud callers see 403 below, so this is local-only.
+	providers := map[string]config.ToolProviderCfg{}
+	for name, pc := range cfg.ToolProviders {
+		providers[name] = pc
+	}
+	tools := map[string]config.ToolCategoryCfg{}
+	for name, cc := range cfg.Tools {
+		tools[name] = cc
+	}
+	jsonResponse(w, http.StatusOK, map[string]any{
+		"categories":    toolCatalog(),
+		"toolProviders": providers,
+		"tools":         tools,
+	})
+}
+
+// toolCatalog is builtinCatalog limited to the providers this binary runs,
+// plus plugin-registered ones.
+func toolCatalog() []categoryCatalog {
 	reg := gateway.ToolProviderRegistry()
 	cats := make([]categoryCatalog, 0, len(builtinCatalog))
 	for _, c := range builtinCatalog {
@@ -128,23 +151,7 @@ func (s *Server) handleGetTools(w http.ResponseWriter, r *http.Request) {
 		cc.Providers = filtered
 		cats = append(cats, cc)
 	}
-
-	// Return providers as a keyed object (easier for the UI to merge-edit).
-	// apiKey is returned in full to the admin — the UI decides whether to
-	// mask it — but cloud callers see 403 below, so this is local-only.
-	providers := map[string]config.ToolProviderCfg{}
-	for name, pc := range cfg.ToolProviders {
-		providers[name] = pc
-	}
-	tools := map[string]config.ToolCategoryCfg{}
-	for name, cc := range cfg.Tools {
-		tools[name] = cc
-	}
-	jsonResponse(w, http.StatusOK, map[string]any{
-		"categories":    cats,
-		"toolProviders": providers,
-		"tools":         tools,
-	})
+	return cats
 }
 
 // handleSaveTools atomically updates the toolProviders and tools sections of

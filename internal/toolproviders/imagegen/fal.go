@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/fastclaw-ai/fastclaw/internal/toolproviders"
@@ -20,9 +21,9 @@ func (Fal) Category() string { return Category }
 func (Fal) Name() string     { return "fal" }
 
 var falModelRoutes = map[string]string{
-	"flux-dev":   "fal-ai/flux/dev",
+	"flux-dev":     "fal-ai/flux/dev",
 	"flux-schnell": "fal-ai/flux/schnell",
-	"flux-pro":   "fal-ai/flux-pro",
+	"flux-pro":     "fal-ai/flux-pro",
 }
 
 func (f *Fal) Execute(ctx context.Context, req toolproviders.Request) (toolproviders.Response, error) {
@@ -42,16 +43,33 @@ func (f *Fal) Execute(ctx context.Context, req toolproviders.Request) (toolprovi
 		// Let callers pass a raw model path too (e.g. "fal/fal-ai/flux/dev").
 		path = modelKey
 	}
+	if len(a.Refs) > 0 {
+		// Editing needs an image-to-image model: the "edit_model" option
+		// (e.g. fal-ai/bytedance/seedream/v4/edit), or the model itself
+		// when it already is one.
+		switch {
+		case req.Config.Options["edit_model"] != "":
+			path = req.Config.Options["edit_model"]
+		case !strings.Contains(path, "edit"):
+			return toolproviders.Response{}, errNoRefs("fal")
+		}
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 
 	body := map[string]any{
-		"prompt":       a.Prompt,
-		"num_images":   a.N,
+		"prompt":     a.Prompt,
+		"num_images": a.N,
 	}
-	if a.Size != "" {
+	switch {
+	case a.Size != "":
 		body["image_size"] = a.Size
+	case a.Aspect != "":
+		body["image_size"] = falImageSize(a.Aspect)
+	}
+	if len(a.Refs) > 0 {
+		body["image_urls"] = a.Refs
 	}
 	buf, _ := json.Marshal(body)
 	url := "https://fal.run/" + path
@@ -87,5 +105,17 @@ func (f *Fal) Execute(ctx context.Context, req toolproviders.Request) (toolprovi
 	if len(urls) == 0 {
 		return toolproviders.Response{}, toolproviders.ErrNoResults
 	}
-	return toolproviders.Response{Text: renderURLs(a.Prompt, urls)}, nil
+	return toolproviders.Response{Text: renderURLs(a.Prompt, urls), Images: urlImages(urls)}, nil
+}
+
+// falImageSize maps the tool's shape to fal's image_size presets.
+func falImageSize(aspect string) string {
+	switch aspect {
+	case "portrait":
+		return "portrait_4_3"
+	case "landscape":
+		return "landscape_4_3"
+	default:
+		return "square_hd"
+	}
 }

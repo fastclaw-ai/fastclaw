@@ -322,6 +322,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("GET /api/chat/subscribe", auth(s.handleChatSubscribe))
 	// The caller's own connected third-party accounts (handlers_connectors.go).
 	s.registerConnectorRoutes(mux, auth)
+	s.registerMyToolsRoutes(mux, auth)
 	s.registerMCPServerRoutes(mux, auth)
 
 	// Agents
