@@ -13,6 +13,10 @@ import (
 // or tool calls whose arguments may be cut off.
 const maxOutputLimitRetries = 2
 
+// maxEmptyReplyRetries is how many times a reply with no text and no
+// tool calls is asked for again before the turn fails.
+const maxEmptyReplyRetries = 2
+
 // cutOffAtOutputLimit reports whether resp stopped at the output limit and
 // can't be used as is. A cut-off answer with text and no tool calls is kept:
 // the user still gets most of it.

@@ -2664,6 +2664,7 @@ func (a *Agent) handleMessage(ctx context.Context, msg bus.InboundMessage) strin
 	// splits on it (AllowSplit=true) or collapses to newlines otherwise.
 	var replyParts []string
 	outputLimitRetries := 0
+	emptyRetries := 0
 
 	stop := turnStop{reason: stopReasonCap, limit: a.toolIterationLimit(), zh: prefersChinese(msg.Text)}
 	loopWarned := false
@@ -2784,7 +2785,21 @@ func (a *Agent) handleMessage(ctx context.Context, msg bus.InboundMessage) strin
 		}
 
 		if !resp.HasToolCalls() {
+			// A reply with neither text nor tool calls is usually a
+			// provider hiccup (seen in bursts on DeepSeek): ask again
+			// before failing the turn.
+			if strings.TrimSpace(resp.Content) == "" && !resp.Truncated && emptyRetries < maxEmptyReplyRetries {
+				emptyRetries++
+				slog.Warn("model returned an empty reply — retrying",
+					"agent", a.name, "model", a.model, "thinking_bytes", len(resp.Thinking),
+					"output_tokens", resp.Usage.OutputTokens, "retry", emptyRetries)
+				i-- // the empty reply doesn't use up a tool round
+				continue
+			}
 			if strings.TrimSpace(resp.Content) == "" {
+				slog.Error("model returned an empty reply after retries",
+					"agent", a.name, "model", a.model, "truncated", resp.Truncated,
+					"thinking_bytes", len(resp.Thinking))
 				emptyMsg := "model returned an empty response"
 				if resp.Truncated {
 					emptyMsg = "the model's reply was cut off at its output limit before it produced anything usable"
