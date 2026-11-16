@@ -487,6 +487,21 @@ func (sl *SkillsLoader) SkillEnvVars(skillName string) map[string]string {
 	// agent just to keep the same defaults).
 	var entry config.SkillEntryCfg
 	var found bool
+	// A creator skill (uploaded for the agent by the person who made it)
+	// gets the keys its creator set for this agent, and nothing else: not
+	// the deployment's, whatever its name.
+	if sl.IsCreatorSkill(skillName) {
+		if agentMap, ok := sl.globalCfg.AgentEntries[sl.agentID]; ok && sl.agentID != "" {
+			if e, ok := agentMap[skillName]; ok && len(e.Env) > 0 {
+				env := make(map[string]string, len(e.Env))
+				for k, v := range e.Env {
+					env[k] = v
+				}
+				return env
+			}
+		}
+		return nil
+	}
 	if sl.agentID != "" {
 		if agentMap, ok := sl.globalCfg.AgentEntries[sl.agentID]; ok {
 			if e, ok := agentMap[skillName]; ok && (e.APIKey != "" || len(e.Env) > 0) {
@@ -530,6 +545,24 @@ func (sl *SkillsLoader) SkillEnvVars(skillName string) map[string]string {
 	}
 	return env
 }
+
+// CreatorSkillMarker marks a skill in an agent's own layer that the
+// agent's creator uploaded (setup handlers_creator_skills.go). Such a
+// skill is given only the keys its creator set.
+const CreatorSkillMarker = ".fastclaw-creator"
+
+// IsCreatorSkill reports whether the agent's own copy of name, the one its
+// sandbox runs, is a creator skill.
+func (sl *SkillsLoader) IsCreatorSkill(name string) bool {
+	if name == "" || strings.ContainsAny(name, "/\\") || name == "." || name == ".." || sl.agentDir == "" {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(sl.agentDir, "skills", name, CreatorSkillMarker))
+	return err == nil
+}
+
+// ManagedSkillsDir is the deployment's managed skills folder.
+func ManagedSkillsDir() string { return fastclawManagedDir() }
 
 // AllSkillDirs returns all skill directories in precedence order.
 func (sl *SkillsLoader) AllSkillDirs() []string {

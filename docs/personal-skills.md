@@ -73,3 +73,27 @@ belong in the owner (product) layer.
 When `load_skill` loads a personal skill, `{baseDir}` becomes
 `skills/<name>`, which `read_file` routes to the person's own folder. It
 also lists the skill's other files.
+
+## Creator skills
+
+A product can let the person who made an agent add skills to it. These
+are agent-layer skills (every chatter of the agent gets them, and their
+scripts run in the chatter's sandbox), uploaded through routes only the
+agent's owner (the product) may call. The product checks that the caller
+is the agent's creator.
+
+| Route | |
+|---|---|
+| `POST /api/agents/{id}/skills/upload` | multipart `file`, checked like a personal skill. `{skill, replaced, envSpec?}`. `name_taken` (409) for a name the owner (product), the deployment or a bundled skill has, or an agent skill the creator didn't upload. 20 per agent. |
+| `GET /api/agents/{id}/skills/{name}/env` | `{envSpec, env}`, every value masked |
+| `PUT /api/agents/{id}/skills/{name}/env` | `{env: {NAME: value}}` replaces the skill's keys; a masked value keeps the stored one. Names are `[A-Z_][A-Z0-9_]*`, not `PATH`, `HOME`, `LD_*`, `PYTHON*`, `NODE_*` and similar. |
+
+`GET /api/agents/{id}/skills` marks them `creator: true`, and `DELETE
+/api/agents/{id}/skills/{name}` also drops their keys.
+
+A creator skill carries `.fastclaw-creator` in its folder. Its scripts
+get exactly the keys its creator set (the agent's `skills.entries` row),
+never the deployment's or the product's, whatever its name. Keys reach the
+script's process only (`skill_keyed.go`), but someone with root in the
+same sandbox who rewrites the script first could still read them: give a
+skill keys with spending limits.

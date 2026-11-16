@@ -118,6 +118,11 @@ func (s *Server) handleListAgentSkills(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, http.StatusOK, []any{})
 		return
 	}
+	for _, e := range out {
+		if name, _ := e["name"].(string); isCreatorSkill(skillsDir, name) {
+			e["creator"] = true
+		}
+	}
 	jsonResponse(w, http.StatusOK, out)
 }
 
@@ -194,11 +199,18 @@ func (s *Server) handleDeleteAgentSkill(w http.ResponseWriter, r *http.Request) 
 	if s.requireAgentOwner(w, r, id) == nil {
 		return
 	}
+	// A path segment, never "." or "..": RemoveAll below would take the
+	// agent's whole home with it.
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\") {
+		jsonResponse(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid skill name"})
+		return
+	}
 	homePath, err := config.AgentHomeDir(id)
 	if err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
+	creator := isCreatorSkill(filepath.Join(homePath, "skills"), name)
 	skillPath := filepath.Join(homePath, "skills", name)
 	if err := os.RemoveAll(skillPath); err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
@@ -210,6 +222,9 @@ func (s *Server) handleDeleteAgentSkill(w http.ResponseWriter, r *http.Request) 
 			slog.Warn("failed to remove agent skill from object store",
 				"agent", id, "skill", name, "error", derr)
 		}
+	}
+	if creator {
+		s.dropCreatorSkillEnv(r, id, name)
 	}
 	// Hot-reload the agent so the removed skill drops out of its context.
 	if ag := s.resolveAgent(r, id); ag != nil {
