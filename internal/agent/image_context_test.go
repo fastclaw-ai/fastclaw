@@ -14,7 +14,7 @@ func inlineImage(url string) provider.ContentPart {
 	}
 }
 
-func TestModelMessagesWithRecentImagesKeepsOnlyLatestImageTurn(t *testing.T) {
+func TestModelMessagesWithRecentImagesKeepsOnlyCurrentTurnImages(t *testing.T) {
 	messages := []provider.Message{
 		{
 			Role: "user",
@@ -31,8 +31,6 @@ func TestModelMessagesWithRecentImagesKeepsOnlyLatestImageTurn(t *testing.T) {
 				inlineImage("data:image/png;base64,NEW"),
 			},
 		},
-		{Role: "assistant", Content: "new reply"},
-		{Role: "user", Content: "look again"},
 	}
 	original := append([]provider.ContentPart(nil), messages[0].ContentParts...)
 
@@ -40,18 +38,20 @@ func TestModelMessagesWithRecentImagesKeepsOnlyLatestImageTurn(t *testing.T) {
 	if messageHasInlineImage(got[0]) {
 		t.Fatal("older image turn still contains an inline image")
 	}
-	if len(got[0].ContentParts) != 1 || got[0].ContentParts[0].Text == "" {
-		t.Fatalf("older image turn lost its text breadcrumb: %#v", got[0])
+	if len(got[0].ContentParts) != 2 || got[0].ContentParts[0].Text == "" || got[0].ContentParts[1].Text != earlierImageOmittedText {
+		t.Fatalf("older image turn should keep its breadcrumb plus a placeholder: %#v", got[0])
 	}
 	if !messageHasInlineImage(got[2]) {
-		t.Fatal("latest image turn was stripped")
+		t.Fatal("current turn's image was stripped")
 	}
 	if !reflect.DeepEqual(messages[0].ContentParts, original) {
 		t.Fatal("input history was mutated")
 	}
 }
 
-func TestModelMessagesWithRecentImagesKeepsImageForTextFollowUp(t *testing.T) {
+// A later question doesn't carry an earlier picture along: it becomes a
+// placeholder (one 1 MB picture used to ride on every following turn).
+func TestModelMessagesWithRecentImagesDropsImageOnTextFollowUp(t *testing.T) {
 	messages := []provider.Message{
 		{Role: "user", ContentParts: []provider.ContentPart{inlineImage("data:image/png;base64,ONE")}},
 		{Role: "assistant", Content: "description"},
@@ -59,8 +59,25 @@ func TestModelMessagesWithRecentImagesKeepsImageForTextFollowUp(t *testing.T) {
 	}
 
 	got := modelMessagesWithRecentImages(messages)
-	if !messageHasInlineImage(got[0]) {
-		t.Fatal("the most recent image must remain available to a text-only follow-up")
+	if messageHasInlineImage(got[0]) || got[0].Content != earlierImageOmittedText {
+		t.Fatalf("earlier image should be a placeholder: %#v", got[0])
+	}
+}
+
+// A burst sent together (picture, picture, "continue") is one turn: its
+// pictures all go out, even with no reply between them.
+func TestModelMessagesWithRecentImagesKeepsBurstImages(t *testing.T) {
+	messages := []provider.Message{
+		{Role: "user", Content: "hi"},
+		{Role: "assistant", Content: "hello"},
+		{Role: "user", ContentParts: []provider.ContentPart{inlineImage("data:image/png;base64,A")}},
+		{Role: "user", ContentParts: []provider.ContentPart{inlineImage("data:image/png;base64,B")}},
+		{Role: "user", Content: "继续"},
+	}
+
+	got := modelMessagesWithRecentImages(messages)
+	if !messageHasInlineImage(got[2]) || !messageHasInlineImage(got[3]) {
+		t.Fatal("pictures of the current burst were stripped")
 	}
 }
 
