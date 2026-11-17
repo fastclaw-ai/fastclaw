@@ -345,6 +345,9 @@ func thinkingBlockFor(m Message) map[string]interface{} {
 
 func (p *AnthropicProvider) buildRequest(ctx context.Context, messages []Message, tools []Tool, model string, maxTokens int, temperature float64, stream bool) (*http.Request, error) {
 	system, anthropicMsgs := toAnthropicMessages(messages)
+	if isDeepSeekAnthropic(p.apiBase, model) {
+		anthropicMsgs = withEmptyThinking(anthropicMsgs)
+	}
 
 	if maxTokens <= 0 {
 		maxTokens = 4096
@@ -803,4 +806,49 @@ func (p *AnthropicProvider) parseSSE(body io.Reader) (*Response, error) {
 	}
 
 	return result, nil
+}
+
+// isDeepSeekAnthropic reports whether requests go to DeepSeek's
+// Anthropic-compatible endpoint (or a DeepSeek model behind another base).
+func isDeepSeekAnthropic(apiBase, model string) bool {
+	return strings.Contains(strings.ToLower(apiBase), "deepseek") ||
+		strings.Contains(strings.ToLower(model), "deepseek")
+}
+
+// withEmptyThinking gives every assistant message that has no thinking
+// block an empty one. DeepSeek's thinking mode answers 400 "The
+// `content[].thinking` in the thinking mode must be passed back to the
+// API" when a replayed assistant step has none, which happens whenever
+// the model skipped thinking for a step (often a tool call). An empty
+// block satisfies it. Never for real Anthropic: its thinking blocks
+// need a signature.
+func withEmptyThinking(msgs []anthropicMessage) []anthropicMessage {
+	empty := map[string]interface{}{"type": "thinking", "thinking": ""}
+	for i, m := range msgs {
+		if m.Role != "assistant" || len(m.Content) == 0 {
+			continue
+		}
+		var blocks []interface{}
+		if err := json.Unmarshal(m.Content, &blocks); err != nil {
+			var text string
+			if err := json.Unmarshal(m.Content, &text); err != nil {
+				continue
+			}
+			blocks = []interface{}{map[string]interface{}{"type": "text", "text": text}}
+		}
+		has := false
+		for _, b := range blocks {
+			if mp, ok := b.(map[string]interface{}); ok && mp["type"] == "thinking" {
+				has = true
+				break
+			}
+		}
+		if has {
+			continue
+		}
+		if raw, err := json.Marshal(append([]interface{}{empty}, blocks...)); err == nil {
+			msgs[i].Content = raw
+		}
+	}
+	return msgs
 }
