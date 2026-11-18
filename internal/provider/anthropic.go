@@ -55,6 +55,7 @@ type anthropicRequest struct {
 // toAnthropicMessages converts provider Messages to Anthropic wire format.
 // Extracts the system message and returns the rest.
 func toAnthropicMessages(msgs []Message) (string, []anthropicMessage) {
+	msgs = withoutRolelessMessages(msgs)
 	var system string
 	var out []anthropicMessage
 

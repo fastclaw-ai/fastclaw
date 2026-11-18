@@ -110,6 +110,7 @@ func toAPIMessages(msgs []Message, model string) []json.RawMessage {
 // toAPIMessagesEcho is toAPIMessages with the reasoning_content echo
 // decided by the caller.
 func toAPIMessagesEcho(msgs []Message, echoReasoning bool) []json.RawMessage {
+	msgs = withoutRolelessMessages(msgs)
 	orphanAssistant, orphanTool := findOrphanToolCalls(msgs)
 	out := make([]json.RawMessage, 0, len(msgs))
 	for i, m := range msgs {
@@ -122,12 +123,13 @@ func toAPIMessagesEcho(msgs []Message, echoReasoning bool) []json.RawMessage {
 		// unless the cached message has orphan tool_calls, in which
 		// case rebuild it without them.
 		if m.Role == "assistant" && len(m.RawAssistant) > 0 && !orphanAssistant[i] {
-			raw := m.RawAssistant
-			if echoReasoning {
-				raw = withReasoningContent(raw)
+			if raw := replayAssistant(m.RawAssistant); raw != nil {
+				if echoReasoning {
+					raw = withReasoningContent(raw)
+				}
+				out = append(out, raw)
+				continue
 			}
-			out = append(out, raw)
-			continue
 		}
 
 		am := apiMessage{
@@ -153,6 +155,39 @@ func toAPIMessagesEcho(msgs []Message, echoReasoning bool) []json.RawMessage {
 		out = append(out, raw)
 	}
 	return out
+}
+
+// Drop roleless history entries before checking adjacent tool calls and results.
+func withoutRolelessMessages(msgs []Message) []Message {
+	for i, m := range msgs {
+		if strings.TrimSpace(m.Role) != "" {
+			continue
+		}
+		out := make([]Message, 0, len(msgs)-1)
+		out = append(out, msgs[:i]...)
+		for _, remaining := range msgs[i+1:] {
+			if strings.TrimSpace(remaining.Role) != "" {
+				out = append(out, remaining)
+			}
+		}
+		return out
+	}
+	return msgs
+}
+
+// The stored message identifies this as an assistant turn. Preserve its raw
+// fields, including any legacy tool calls stored only in the cached payload.
+func replayAssistant(raw json.RawMessage) json.RawMessage {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil || obj == nil {
+		return nil
+	}
+	if string(obj["role"]) == `"assistant"` {
+		return raw
+	}
+	obj["role"] = json.RawMessage(`"assistant"`)
+	repaired, _ := json.Marshal(obj)
+	return repaired
 }
 
 // needsReasoningEcho reports whether the upstream is (likely) a thinking-
