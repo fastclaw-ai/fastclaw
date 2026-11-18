@@ -5,9 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/url"
 	"regexp"
-	"strings"
 
 	"github.com/fastclaw-ai/fastclaw/internal/config"
 	"github.com/fastclaw-ai/fastclaw/internal/scope"
@@ -68,6 +66,14 @@ func View(c Config) Config {
 var idPattern = regexp.MustCompile(`^[a-zA-Z0-9-]{1,60}$`)
 
 func Save(ctx context.Context, st store.Store, uid string, c Config) error {
+	return save(ctx, st, uid, c, false)
+}
+
+func SaveVerified(ctx context.Context, st store.Store, uid string, c Config) error {
+	return save(ctx, st, uid, c, true)
+}
+
+func save(ctx context.Context, st store.Store, uid string, c Config, verify bool) error {
 	c.Providers = append([]Provider{}, c.Providers...)
 	old, err := Load(ctx, st, uid)
 	if err != nil {
@@ -84,34 +90,17 @@ func Save(ctx context.Context, st store.Store, uid string, c Config) error {
 			return errors.New("invalid provider")
 		}
 		seen[p.ID] = true
-		u, e := url.Parse(p.APIBase)
-		if e != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || len(p.APIBase) > 2048 {
-			return errors.New("invalid HTTPS API URL")
+		if err := prepareProvider(p, old); err != nil {
+			return err
 		}
-		if p.APIType != "openai-completions" && p.APIType != "anthropic-messages" {
-			return errors.New("unsupported API type")
-		}
-		if p.APIKey == "" {
-			for _, o := range old.Providers {
-				if o.ID == p.ID && o.APIBase == p.APIBase && o.APIType == p.APIType {
-					p.APIKey = o.APIKey
-				}
-			}
-		}
-		if strings.TrimSpace(p.APIKey) == "" || len(p.APIKey) > 8192 || strings.ContainsAny(p.APIKey, "\r\n") {
-			return errors.New("API key required")
-		}
-		if len(p.Models) == 0 || len(p.Models) > 100 {
-			return errors.New("models required")
-		}
-		models := map[string]bool{}
-		for _, m := range p.Models {
-			if strings.TrimSpace(m) != m || m == "" || len(m) > 200 || strings.ContainsAny(m, "\r\n") || models[m] {
-				return errors.New("invalid model ID")
-			}
-			models[m] = true
-			if c.DefaultModel == p.ID+"/"+m {
+		for _, model := range p.Models {
+			if c.DefaultModel == p.ID+"/"+model {
 				selected = true
+			}
+		}
+		if verify && !providerUnchanged(*p, old) {
+			if err := requireVerified(ctx, st, uid, *p); err != nil {
+				return err
 			}
 		}
 		p.HasKey = false
@@ -149,7 +138,7 @@ func Apply(ctx context.Context, st store.Store, uid string, rc *config.ResolvedA
 	for _, p := range c.Providers {
 		for _, m := range p.Models {
 			if c.DefaultModel == p.ID+"/"+m {
-				key := "byok-" + p.ID
+				key := providerKey(p.ID)
 				rc.Providers = map[string]config.ProviderConfig{}
 				rc.Providers[key] = config.ProviderConfig{APIKey: p.APIKey, APIBase: p.APIBase, APIType: p.APIType, BYOK: true}
 				rc.Model = key + "/" + m
@@ -158,4 +147,8 @@ func Apply(ctx context.Context, st store.Store, uid string, rc *config.ResolvedA
 		}
 	}
 	return errors.New("saved BYOK model is unavailable")
+}
+
+func providerKey(id string) string {
+	return "byok-" + id
 }

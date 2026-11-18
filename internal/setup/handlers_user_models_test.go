@@ -2,7 +2,9 @@ package setup
 
 import (
 	"context"
+	"encoding/json"
 	"github.com/fastclaw-ai/fastclaw/internal/auth"
+	"github.com/fastclaw-ai/fastclaw/internal/usermodels"
 	"github.com/fastclaw-ai/fastclaw/internal/users"
 	"net/http/httptest"
 	"strings"
@@ -21,6 +23,17 @@ func TestEndUserModels(t *testing.T) {
 		return w
 	}
 	body := `{"providers":[{"id":"mine","name":"Mine","apiType":"openai-completions","apiBase":"https://api.example.com/v1","apiKey":"test-secret","models":["m"]}],"defaultModel":"mine/m"}`
+	if w := call("alice", "PUT", body); w.Code != 400 {
+		t.Fatalf("saved untested provider: %d %s", w.Code, w.Body)
+	}
+	var seeded usermodels.Config
+	if err := json.Unmarshal([]byte(body), &seeded); err != nil {
+		t.Fatal(err)
+	}
+	if err := usermodels.Save(context.Background(), s.dataStore, "alice", seeded); err != nil {
+		t.Fatal(err)
+	}
+	body = strings.Replace(body, `"apiKey":"test-secret",`, "", 1)
 	if w := call("alice", "PUT", body); w.Code != 200 || strings.Contains(w.Body.String(), "test-secret") {
 		t.Fatalf("save: %d %s", w.Code, w.Body)
 	}

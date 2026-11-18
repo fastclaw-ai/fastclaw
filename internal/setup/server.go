@@ -326,6 +326,7 @@ func (s *Server) Run(ctx context.Context) error {
 	s.registerMCPServerRoutes(mux, auth)
 	mux.HandleFunc("GET /api/my-models", auth(s.handleUserModels))
 	mux.HandleFunc("PUT /api/my-models", auth(s.handleUserModels))
+	mux.HandleFunc("POST /api/my-models/test", auth(s.handleTestUserModel))
 
 	// Agents
 	mux.HandleFunc("GET /api/agents", auth(s.handleListAgents))
