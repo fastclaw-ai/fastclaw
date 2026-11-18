@@ -107,7 +107,7 @@ func renderURLs(prompt string, urls []string) string {
 }
 
 // renderB64 emits base64 images inline. Used when the provider returns raw
-// bytes (e.g. gpt-image-1 with response_format=b64_json).
+// base64 image bytes.
 func renderB64(prompt string, b64s []string) string {
 	if len(b64s) == 0 {
 		return ""
