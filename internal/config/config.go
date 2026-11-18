@@ -338,6 +338,7 @@ type ModelEntry struct {
 // the JSON shape inside agents.config and as the resolved per-(scope, name)
 // view assembled by the providers resolver.
 type ProviderConfig struct {
+	BYOK     bool         `json:"-"` // runtime only; never accepted from provider JSON
 	APIKey   string       `json:"apiKey"`
 	APIBase  string       `json:"apiBase"`
 	APIType  string       `json:"apiType,omitempty"`

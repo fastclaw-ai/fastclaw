@@ -9,6 +9,7 @@ import (
 	"github.com/fastclaw-ai/fastclaw/internal/bus"
 	"github.com/fastclaw-ai/fastclaw/internal/scope"
 	"github.com/fastclaw-ai/fastclaw/internal/store"
+	"github.com/fastclaw-ai/fastclaw/internal/usermodels"
 	"github.com/fastclaw-ai/fastclaw/internal/users"
 )
 
@@ -146,5 +147,34 @@ func TestAppUserSpaceOwnsAppAgents(t *testing.T) {
 	}
 	if err := sp.EnsureOwnedAgent(ctx, st, mb, nil, "agt_foreign"); err == nil {
 		t.Fatal("end-user space must not own agents of other accounts")
+	}
+}
+
+func TestAppUserBYOKOverridesOwnerAndAgent(t *testing.T) {
+	st := newOnDemandStore(t)
+	ctx := context.Background()
+	mustUser(t, st, "app", users.RoleUser, "")
+	mustUser(t, st, "alice", users.RoleAppUser, "app")
+	mustUser(t, st, "bob", users.RoleAppUser, "app")
+	mustAgent(t, st, "agt_app", "app")
+	if err := scope.SaveSetting(ctx, st, "", "agt_app", "agents.defaults", map[string]interface{}{"model": "system/owner"}); err != nil {
+		t.Fatal(err)
+	}
+	c := usermodels.Config{Providers: []usermodels.Provider{{ID: "mine", Name: "Mine", APIBase: "https://api.example.com/v1", APIType: "openai-completions", APIKey: "test-key", Models: []string{"m"}}}, DefaultModel: "mine/m"}
+	if err := usermodels.Save(ctx, st, "alice", c); err != nil {
+		t.Fatal(err)
+	}
+	mb := bus.New()
+	for _, tc := range []struct{ uid, want string }{{"alice", "byok-mine/m"}, {"bob", "system/owner"}} {
+		sp, err := loadUserSpace(ctx, tc.uid, mb, st, nil, nil, nil, nil, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = sp.EnsureOwnedAgent(ctx, st, mb, nil, "agt_app"); err != nil {
+			t.Fatal(err)
+		}
+		if got := sp.Agents.AgentByID("agt_app").Model(); got != tc.want {
+			t.Fatalf("%s model=%s want=%s", tc.uid, got, tc.want)
+		}
 	}
 }

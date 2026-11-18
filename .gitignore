@@ -75,3 +75,11 @@ fastclaw-patched
 # Python bytecode from skill scripts
 __pycache__/
 *.pyc
+
+# Local credentials and database files
+.env
+.env.*
+*.db
+*.db-shm
+*.db-wal
+npm-debug.log

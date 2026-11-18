@@ -27,6 +27,7 @@ import (
 	"github.com/fastclaw-ai/fastclaw/internal/skills"
 	"github.com/fastclaw-ai/fastclaw/internal/store"
 	"github.com/fastclaw-ai/fastclaw/internal/usage"
+	"github.com/fastclaw-ai/fastclaw/internal/usermodels"
 	"github.com/fastclaw-ai/fastclaw/internal/users"
 	"github.com/fastclaw-ai/fastclaw/internal/workspace"
 )
@@ -623,6 +624,9 @@ func (sp *UserSpace) EnsureAgent(ctx context.Context, st store.Store, mb *bus.Me
 			}
 		}
 	}
+	if err := usermodels.Apply(ctx, st, sp.UserID, &rc); err != nil {
+		return err
+	}
 	ensureAgentHome(rc)
 	if ws != nil {
 		if err := skills.HydrateSkillsDown(ctx, ws, rc.ID, filepath.Join(rc.Home, "skills")); err != nil {
@@ -951,6 +955,9 @@ func loadUserSpace(ctx context.Context, userID string, mb *bus.MessageBus, st st
 				}
 				rc.Providers[k] = v
 			}
+		}
+		if err := usermodels.Apply(ctx, st, userID, rc); err != nil {
+			return nil, err
 		}
 		ensureAgentHome(*rc)
 		if ws != nil {

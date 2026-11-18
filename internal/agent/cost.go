@@ -123,3 +123,8 @@ func detachCollector(ctx context.Context) context.Context {
 func (a *Agent) meterBackground(ctx context.Context, model string, u provider.Usage, durationMs int64) {
 	a.meterTokens(ctx, meterSessionFrom(ctx), model, u, durationMs)
 }
+
+func agentUsesBYOK(model string, providers map[string]config.ProviderConfig) bool {
+	prefix, _ := provider.SplitProviderModel(model)
+	return providers[prefix].BYOK
+}

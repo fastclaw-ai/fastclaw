@@ -8,3 +8,15 @@ internal/setup/web/
 .git/
 *.tar.gz
 *.zip
+
+# Keep local credentials and databases out of the build context
+.env
+.env.*
+**/.env
+**/.env.*
+node_modules
+**/node_modules
+*.db
+**/*.db
+**/*.db-shm
+**/*.db-wal

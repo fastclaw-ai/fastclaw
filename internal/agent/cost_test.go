@@ -6,8 +6,10 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/fastclaw-ai/fastclaw/internal/billing"
 	"github.com/fastclaw-ai/fastclaw/internal/config"
 	"github.com/fastclaw-ai/fastclaw/internal/provider"
+	"github.com/fastclaw-ai/fastclaw/internal/store"
 	"github.com/fastclaw-ai/fastclaw/internal/usage"
 )
 
@@ -139,5 +141,31 @@ func TestModelPriceAdminBeatsDefault(t *testing.T) {
 	}
 	if _, ok := a.modelPrice("main/free-text"); ok {
 		t.Fatal("blank price with no default must be unknown")
+	}
+}
+
+type byokEventStore struct{ events []*store.MeteredEvent }
+
+func (s *byokEventStore) InsertMeteredEvent(_ context.Context, e *store.MeteredEvent) error {
+	s.events = append(s.events, e)
+	return nil
+}
+func (s *byokEventStore) BillingTarget(context.Context, string) (store.BillingTarget, error) {
+	return store.BillingTarget{}, nil
+}
+func TestBYOKEventAttribution(t *testing.T) {
+	st := &byokEventStore{}
+	a := &Agent{ownerUserID: "alice", agentID: "agt", billing: billing.NewService(st), providers: map[string]config.ProviderConfig{"mine": {BYOK: true}, "system": {}}}
+	cost := 1.0
+	a.meterLLMEvent(context.Background(), "s", "mine", "m", provider.Usage{InputTokens: 10}, &cost)
+	a.meterLLMEvent(context.Background(), "s", "system", "m", provider.Usage{InputTokens: 10}, &cost)
+	if len(st.events) != 2 {
+		t.Fatal("missing events")
+	}
+	if st.events[0].Detail["byok"] != true || st.events[0].CostUSD == nil || *st.events[0].CostUSD != 0 {
+		t.Fatalf("BYOK event: %+v", st.events[0])
+	}
+	if st.events[1].Detail["byok"] != nil || *st.events[1].CostUSD != 1 {
+		t.Fatal("system call exempted")
 	}
 }

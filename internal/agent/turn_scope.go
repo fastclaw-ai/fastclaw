@@ -60,7 +60,7 @@ func (a *Agent) ResolveTurnModel(model string) (provider.Provider, bool) {
 		if cur, _ := provider.SplitProviderModel(a.model); cur == prefix && a.provider != nil {
 			return a.provider, true
 		}
-		return provider.NewProvider(pc.APIKey, pc.APIBase, pc.APIType), true
+		return provider.FromConfig(pc), true
 	}
 	if cur, _ := provider.SplitProviderModel(a.model); cur == prefix && a.provider != nil {
 		return a.provider, true

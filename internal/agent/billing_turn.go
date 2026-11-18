@@ -90,6 +90,11 @@ func (a *Agent) meterLLMEvent(ctx context.Context, sessionKey, prov, model strin
 		CacheReadTokens: int64(u.CacheReadTokens), CacheCreationTokens: int64(u.CacheCreationTokens),
 		CostUSD: cost, Detail: map[string]any{},
 	}
+	if pc, ok := a.providers[prov]; ok && pc.BYOK {
+		ev.Detail["byok"] = true
+		zero := 0.0
+		ev.CostUSD = &zero
+	}
 	if t := billing.TurnFrom(ctx); t != nil {
 		t.Record(ctx, ev)
 		return

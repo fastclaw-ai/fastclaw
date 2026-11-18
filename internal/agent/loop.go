@@ -313,7 +313,7 @@ func NewAgentWithFullCfg(rc config.ResolvedAgent, prov provider.Provider, mb *bu
 	// Set up skills learner if configured
 	if fullCfg.SkillsLearner.Enabled {
 		model := fullCfg.SkillsLearner.Model
-		if model == "" {
+		if model == "" || agentUsesBYOK(rc.Model, rc.Providers) {
 			model = rc.Model
 		}
 		learnerLoader := NewSkillsLoaderWithGlobal(homeDir, rc.Home, "", rc.Skills, fullCfg.Skills)
@@ -3349,7 +3349,7 @@ func (a *Agent) runPostTurn(ctx context.Context, msg bus.InboundMessage, message
 		"will_fire", willFire)
 	if willFire {
 		model := a.memoryCfg.AutoPersist.Model
-		if model == "" {
+		if model == "" || agentUsesBYOK(a.model, a.providers) {
 			model = a.model
 		}
 		slog.Info("auto-persist firing", "agent", a.name, "chatter", chatterUID, "model", model, "chatter_turns", chatterTurns, "messages", len(messages))
