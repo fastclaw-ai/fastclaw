@@ -21,6 +21,7 @@ const Category = "web_search"
 func RegisterAll(r *toolproviders.Registry) {
 	r.Register(&Brave{})
 	r.Register(&Exa{})
+	r.Register(&Keenable{})
 	r.Register(&SearxNG{})
 	r.Register(&None{})
 }
