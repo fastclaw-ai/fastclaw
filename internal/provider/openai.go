@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -490,12 +491,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 				// tool_calls) followed by tool replies, and OpenAI
 				// 400s with "Messages with role 'tool' must be a
 				// response to a preceding message with 'tool_calls'".
-				var tcs []ToolCall
-				for i := 0; i < len(toolCalls); i++ {
-					if tc, ok := toolCalls[i]; ok {
-						tcs = append(tcs, *tc)
-					}
-				}
+				tcs := orderedToolCalls(toolCalls)
 				reasoning := reasoningBuilder.String()
 				rawMsg := apiMessage{
 					Role:             "assistant",
@@ -748,11 +744,7 @@ func (p *OpenAIProvider) parseSSE(reader io.Reader) (*Response, error) {
 		Usage:     usage,
 		Truncated: truncated,
 	}
-	for i := 0; i < len(toolCalls); i++ {
-		if tc, ok := toolCalls[i]; ok {
-			result.ToolCalls = append(result.ToolCalls, *tc)
-		}
-	}
+	result.ToolCalls = orderedToolCalls(toolCalls)
 
 	// Same leaked-XML recovery the Anthropic provider does — DeepSeek-flash
 	// served via api.deepseek.com (openai-chat compat, not the anthropic
@@ -803,6 +795,29 @@ func openaiUsageToProvider(u *sseUsage) Usage {
 		if out.InputTokens < 0 {
 			out.InputTokens = 0
 		}
+	}
+	return out
+}
+
+// orderedToolCalls returns streamed tool calls sorted by their delta
+// index. The index is not guaranteed to start at 0 or be contiguous:
+// OpenAI-compatible relays in front of Claude reuse the Anthropic
+// content-block index, so after a thinking block the first tool call
+// arrives as index 1. Walking 0..len-1 dropped the last call — and a
+// lone call entirely, which surfaced as "model returned an empty
+// response".
+func orderedToolCalls(m map[int]*ToolCall) []ToolCall {
+	if len(m) == 0 {
+		return nil
+	}
+	keys := make([]int, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Ints(keys)
+	out := make([]ToolCall, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, *m[k])
 	}
 	return out
 }
