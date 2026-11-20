@@ -18,8 +18,9 @@ import (
 )
 
 // OpenAI generates via POST /v1/images/generations. Model (the suffix in
-// "openai/<model>") defaults to "gpt-image-1" which returns base64; older
-// dall-e-3 returns a URL. Both paths are handled transparently.
+// "openai/<model>") defaults to the current GPT Image Flare model. GPT Image
+// responses are base64; a custom legacy DALL-E model can still return a URL.
+// Both paths are handled transparently.
 type OpenAI struct{}
 
 func (OpenAI) Category() string { return Category }
@@ -35,7 +36,7 @@ func (o *OpenAI) Execute(ctx context.Context, req toolproviders.Request) (toolpr
 	}
 	model := req.Config.Model
 	if model == "" {
-		model = "gpt-image-1"
+		model = "gpt-image-2.6-flare"
 	}
 	size := a.Size
 	if size == "" {
