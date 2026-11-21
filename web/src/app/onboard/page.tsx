@@ -54,6 +54,7 @@ const STEPS = [
 const PROVIDER_LABELS: Record<string, string> = {
   openai: "OpenAI",
   openrouter: "OpenRouter",
+  requesty: "Requesty",
   anthropic: "Anthropic",
   deepseek: "DeepSeek",
   ollama: "Ollama",
@@ -90,6 +91,12 @@ const PROVIDERS: Record<
     apiType: "openai-chat",
     authType: "bearer-token",
     models: ["google/gemini-3-flash-preview"],
+  },
+  requesty: {
+    apiBase: "https://router.requesty.ai/v1",
+    apiType: "openai-chat",
+    authType: "bearer-token",
+    models: ["openai/gpt-4o-mini"],
   },
   anthropic: {
     apiBase: "https://api.anthropic.com",
@@ -639,6 +646,7 @@ function ProviderStep(props: {
               <SelectContent>
                 <SelectItem value="openai">OpenAI</SelectItem>
                 <SelectItem value="openrouter">OpenRouter</SelectItem>
+                <SelectItem value="requesty">Requesty</SelectItem>
                 <SelectItem value="anthropic">Anthropic</SelectItem>
                 <SelectItem value="deepseek">DeepSeek</SelectItem>
                 <SelectItem value="ollama">Ollama</SelectItem>
