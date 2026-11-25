@@ -5,6 +5,16 @@ action on upgrade — read those notes before deploying.
 
 ## [Unreleased]
 
+### Fixed — knowledge file names in Chinese and other scripts
+
+Uploading a knowledge file named in Chinese (or any non-Latin script)
+no longer turns the name into dashes (`客户手册.md` was stored as
+`----.md`). Letters and digits from every script are kept; long names
+are cut on a character boundary and keep their extension. Files
+uploaded before this fix keep their dashed names: delete and re-upload
+them (re-uploading without deleting matches the old copy by content and
+keeps its name).
+
 ### Added — tool settings per account (Console → Tools)
 
 Console → Tools now has every tool category System → Tools has (web

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/fastclaw-ai/fastclaw/internal/auth"
@@ -226,17 +227,22 @@ func (s *Server) handleDeleteAgentKnowledgeFile(w http.ResponseWriter, r *http.R
 	jsonResponse(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+const maxKnowledgeFilenameBytes = 120
+
+// sanitizeKnowledgeFilename keeps letters and digits from any script
+// (CJK filenames must survive), plus . - _ space and common brackets;
+// everything else — path separators, control chars, punctuation that
+// could confuse URLs or shells — becomes '-'. Truncation is rune-safe
+// and preserves the extension.
 func sanitizeKnowledgeFilename(name string) string {
+	name = strings.ReplaceAll(name, `\`, "/")
 	name = strings.TrimSpace(filepath.Base(name))
 	name = strings.Map(func(r rune) rune {
 		switch {
-		case r >= 'a' && r <= 'z':
+		case unicode.IsLetter(r), unicode.IsDigit(r), unicode.IsMark(r):
 			return r
-		case r >= 'A' && r <= 'Z':
-			return r
-		case r >= '0' && r <= '9':
-			return r
-		case r == '.', r == '-', r == '_', r == ' ':
+		case r == '.', r == '-', r == '_', r == ' ', r == '(', r == ')',
+			r == '（', r == '）', r == '【', r == '】':
 			return r
 		default:
 			return '-'
@@ -246,8 +252,17 @@ func sanitizeKnowledgeFilename(name string) string {
 	if name == "" || name == "." || name == ".." {
 		return ""
 	}
-	if len(name) > 120 {
-		name = name[:120]
+	if len(name) > maxKnowledgeFilenameBytes {
+		ext := filepath.Ext(name)
+		if len(ext) > 16 {
+			ext = ""
+		}
+		stem := strings.TrimSuffix(name, ext)
+		keep := maxKnowledgeFilenameBytes - len(ext)
+		for keep > 0 && !utf8.RuneStart(stem[keep]) {
+			keep--
+		}
+		name = strings.TrimRight(stem[:keep], ". ") + ext
 	}
 	return name
 }
