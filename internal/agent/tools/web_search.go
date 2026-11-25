@@ -33,7 +33,7 @@ func RegisterWebSearchChain(r *Registry, chain *toolproviders.Chain) {
 	if !chain.Available() {
 		return
 	}
-	r.Register("web_search", "Search the web and return results with titles, URLs, and snippets. Backed by a configurable provider chain (e.g. exa, brave, searxng) with automatic fallback.", map[string]interface{}{
+	r.Register("web_search", "Search the web and return results with titles, URLs, and snippets. Backed by a configurable provider chain (e.g. exa, brave, brightdata, searxng) with automatic fallback.", map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
 			"query": map[string]interface{}{
