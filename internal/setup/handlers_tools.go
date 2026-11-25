@@ -63,7 +63,7 @@ var builtinCatalog = []categoryCatalog{
 		Name:  "image_gen",
 		Label: "Image Generation",
 		Providers: []providerCatalog{
-			{Name: "openai", Label: "OpenAI", NeedsKey: true, Models: []string{"gpt-image-1", "dall-e-3"}},
+			{Name: "openai", Label: "OpenAI", NeedsKey: true, Models: []string{"gpt-image-2.6-flare", "gpt-image-2.6-sunburst"}},
 			{Name: "replicate", Label: "Replicate", NeedsKey: true, Models: []string{"flux-schnell", "flux-dev", "flux-pro", "sdxl", "ideogram"}},
 			// fal takes any model path too (fal-ai/…); option edit_model
 			// names the image-to-image model used with reference images.
