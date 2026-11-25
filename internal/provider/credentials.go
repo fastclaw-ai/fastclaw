@@ -157,6 +157,7 @@ var knownEnvVars = map[string][]string{
 	"openai":     {"OPENAI_API_KEY"},
 	"anthropic":  {"ANTHROPIC_API_KEY"},
 	"openrouter": {"OPENROUTER_API_KEY"},
+	"requesty":   {"REQUESTY_API_KEY"},
 	"google":     {"GOOGLE_API_KEY", "GEMINI_API_KEY"},
 	"mistral":    {"MISTRAL_API_KEY"},
 	"cohere":     {"COHERE_API_KEY"},
