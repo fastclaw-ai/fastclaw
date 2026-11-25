@@ -38,6 +38,10 @@ var builtinCatalog = []categoryCatalog{
 		Providers: []providerCatalog{
 			{Name: "exa", Label: "Exa", NeedsKey: true, Models: []string{"auto", "neural", "keyword"}},
 			{Name: "brave", Label: "Brave Search", NeedsKey: true, Models: []string{"web"}},
+			// Keenable works without a key (CredentialFree, like Jina Reader
+			// below); the key field is shown so admins can paste one to raise
+			// rate limits, and blank is treated as valid.
+			{Name: "keenable", Label: "Keenable (key optional)", NeedsKey: true, Models: []string{"default"}},
 			{Name: "searxng", Label: "SearxNG (self-hosted)", NeedsURL: true, Models: []string{"default"}},
 			// "none" is a sentinel: when picked, web_search is not exposed
 			// to the model at all. There's no external backend — the model
