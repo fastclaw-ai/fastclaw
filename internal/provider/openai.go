@@ -654,7 +654,11 @@ func shouldRetryWithoutTemperature(status int, body string) bool {
 		return false
 	}
 	lower := strings.ToLower(body)
-	return strings.Contains(lower, "temperature") && strings.Contains(lower, "only the default")
+	onlyOneAllowed :=
+		strings.Contains(lower, "only 1 is allowed") ||
+			strings.Contains(lower, "only 1.0 is allowed")
+	return strings.Contains(lower, "temperature") &&
+		(strings.Contains(lower, "only the default") || onlyOneAllowed)
 }
 
 func (p *OpenAIProvider) parseSSE(reader io.Reader) (*Response, error) {
