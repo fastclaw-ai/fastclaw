@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"time"
 )
 
@@ -49,7 +48,7 @@ const hostCommandWaitDelay = 5 * time.Second
 // Registry.HostWorkDir); it is created if missing. "" keeps the daemon's
 // own cwd, which is never what a chatter's command should write into.
 func runHostCommand(execCtx context.Context, command, dir string, env []string, timeout time.Duration) (string, error) {
-	cmd := exec.CommandContext(execCtx, "sh", "-c", command)
+	cmd := hostShellCommand(execCtx, command)
 	cmd.Env = env
 	if dir != "" {
 		if err := os.MkdirAll(dir, 0o755); err == nil {
